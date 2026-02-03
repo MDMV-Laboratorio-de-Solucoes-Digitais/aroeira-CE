@@ -63,7 +63,7 @@ export async function handleOAuthCallback(
   callbackUrl: string,
 ): Promise<OAuthCallbackResponse> {
   return invoke<OAuthCallbackResponse>("handle_oauth_callback", {
-    callbackUrl,
+    callback_url: callbackUrl,
   });
 }
 

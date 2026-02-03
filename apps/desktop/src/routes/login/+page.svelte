@@ -97,7 +97,11 @@
     // This handles cold start scenarios where the app was closed
     if (!oauthLoading) {
       const savedProvider = localStorage.getItem("oauth_pending_provider");
-      oauthLoading = (savedProvider as OAuthProvider) || null;
+      // Validate provider to ensure UI state is correct
+      oauthLoading =
+        savedProvider === "google" || savedProvider === "github"
+          ? (savedProvider as OAuthProvider)
+          : null;
     }
     error = "";
 

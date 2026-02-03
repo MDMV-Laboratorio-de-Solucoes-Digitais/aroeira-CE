@@ -2483,6 +2483,7 @@ dependencies = [
  "hex",
  "hmac",
  "jsonwebtoken",
+ "keyring",
  "libc",
  "oauth2",
  "percent-encoding",

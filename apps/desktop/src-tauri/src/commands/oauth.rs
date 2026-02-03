@@ -10,7 +10,7 @@
 //! - Sessions expire after 10 minutes
 //! - Tokens stored in OS secure storage (not in this module)
 
-use domain::modules::auth::oauth::{AuthProvider, OAuthPkceSession, OAuthService, OAuthUser};
+use domain::modules::auth::oauth::{AuthProvider, OAuthError, OAuthPkceSession, OAuthService, OAuthUser};
 use infra::services::oauth::{OAuthConfig, OAuthServiceImpl};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -171,9 +171,11 @@ pub async fn handle_oauth_callback(
             );
             tracing::error!("OAuth code exchange error details: {e}");
 
-            // Restore session to allow retry (in case of transient network errors)
-            // This allows the user to click "Try Again" or re-trigger the callback
-            oauth_state.session_store.store(session);
+            // Only restore session for potentially transient failures (network/server errors)
+            // Don't restore if session was invalid/expired (SessionNotFound) or config error
+            if matches!(e, OAuthError::TokenRequestFailed(_) | OAuthError::UserInfoFailed(_)) {
+                oauth_state.session_store.store(session);
+            }
 
             return Err("Authentication failed. Please try again.".to_string());
         }

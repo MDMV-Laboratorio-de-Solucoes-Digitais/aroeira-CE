@@ -17,6 +17,7 @@ use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge, PkceCodeVerifier,
     RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
+use sha2::{Digest, Sha256};
 use tracing::{debug, error, warn};
 
 /// Configuration for OAuth2 providers.
@@ -345,10 +346,10 @@ impl OAuthService for OAuthServiceImpl {
                     // GitHub requires Accept: application/json
                     token_request
                         .request_async(&|mut req: oauth2::HttpRequest| async move {
-                            if let Ok(header_val) = "application/json".parse() {
-                                // "accept" implements IntoHeaderName
-                                req.headers_mut().insert("accept", header_val);
-                            }
+                            req.headers_mut().insert(
+                                oauth2::http::header::ACCEPT,
+                                oauth2::http::HeaderValue::from_static("application/json"),
+                            );
                             async_http_client(req).await
                         })
                         .await
@@ -392,12 +393,17 @@ impl OAuthService for OAuthServiceImpl {
             let service_name = "aroeira-oauth";
             let user_key = format!("{}:{}", user.provider, user.provider_user_id);
             
+            // Hash user key for logging to avoid PII leak
+            let mut hasher = Sha256::new();
+            hasher.update(user_key.as_bytes());
+            let user_key_hash = hex::encode(hasher.finalize());
+            
             match keyring::Entry::new(service_name, &user_key) {
                 Ok(entry) => {
                     if let Err(e) = entry.set_password(access_token) {
-                        warn!("Failed to securely store OAuth token for {}: {}", user_key, e);
+                        warn!("Failed to securely store OAuth token for {}: {}", user_key_hash, e);
                     } else {
-                        debug!("Securely stored OAuth token for {}", user_key);
+                        debug!("Securely stored OAuth token for {}", user_key_hash);
                     }
                 }
                 Err(e) => {
