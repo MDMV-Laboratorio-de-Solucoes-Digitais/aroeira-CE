@@ -25,6 +25,9 @@ hmac = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 secrecy = { workspace = true }
+oauth2 = { workspace = true }
+reqwest = { workspace = true }
+url = { workspace = true }
 
 # Async Runtime
 tokio = { workspace = true }
