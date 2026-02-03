@@ -134,27 +134,42 @@ pub async fn handle_oauth_callback(
     oauth_state: State<'_, OAuthState>,
 ) -> Result<OAuthCallbackResponse, String> {
     // Parse callback URL
-    let (code, state) = parse_oauth_callback_url(&callback_url)?;
+    let (code, state) = parse_oauth_callback_url(&callback_url).inspect_err(|_| {
+        tracing::warn!(
+            target: "audit",
+            outcome = "failure",
+            reason = "invalid_callback",
+            "OAuth authentication failed: invalid callback URL"
+        );
+    })?;
 
     // Retrieve and consume session (CSRF protection)
-    let session = oauth_state
-        .session_store
-        .take(&state)
-        .ok_or("Invalid or expired OAuth session. Please try again.")?;
+    let session = oauth_state.session_store.take(&state).ok_or_else(|| {
+        tracing::warn!(
+            target: "audit",
+            outcome = "failure",
+            reason = "session_not_found",
+            "OAuth authentication failed: invalid or expired session"
+        );
+        "Invalid or expired OAuth session. Please try again.".to_string()
+    })?;
 
     // Exchange code for user info
     let user = oauth_state
         .oauth_service
         .exchange_code(&session, code)
         .await
-        .map_err(|e| {
+        .inspect_err(|e| {
             tracing::warn!(
+                target: "audit",
                 provider = %session.provider,
-                "OAuth code exchange failed"
+                outcome = "failure",
+                reason = "code_exchange_failed",
+                "OAuth authentication failed: code exchange error"
             );
             tracing::error!("OAuth code exchange error details: {e}");
-            "Authentication failed. Please try again.".to_string()
-        })?;
+        })
+        .map_err(|_| "Authentication failed. Please try again.".to_string())?;
 
     // Log successful OAuth login (audit trail) with essential context
     // Note: email is hashed/redacted for privacy in logs
