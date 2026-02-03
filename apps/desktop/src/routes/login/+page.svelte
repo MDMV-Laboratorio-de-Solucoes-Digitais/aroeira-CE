@@ -26,6 +26,30 @@
     return `***@${domain}`;
   }
 
+  // Helper function to sanitize error messages for audit logging
+  // Removes potentially sensitive data like URLs, tokens, or OAuth parameters
+  function sanitizeErrorForAudit(err: unknown): string {
+    const errorStr = String(err);
+    // Map specific errors to generic categories without leaking details
+    if (errorStr.includes("callback") || errorStr.includes("aroeira://")) {
+      return "callback_processing_error";
+    }
+    if (errorStr.includes("token") || errorStr.includes("exchange")) {
+      return "token_exchange_error";
+    }
+    if (errorStr.includes("network") || errorStr.includes("fetch")) {
+      return "network_error";
+    }
+    if (errorStr.includes("expired") || errorStr.includes("invalid")) {
+      return "session_invalid_or_expired";
+    }
+    if (errorStr.includes("denied") || errorStr.includes("cancelled")) {
+      return "user_denied_or_cancelled";
+    }
+    // Generic fallback - never log raw error content
+    return "authentication_error";
+  }
+
   let isLogin = $state(true);
   let loading = $state(false);
   let oauthLoading = $state<OAuthProvider | null>(null);
@@ -78,7 +102,9 @@
       localStorage.removeItem("oauth_pending_provider");
       await goto(resolve("/dashboard"), { replaceState: true });
     } catch (err: unknown) {
-      logAuditEvent("oauth_login", false, { error: String(err) });
+      logAuditEvent("oauth_login", false, {
+        error: sanitizeErrorForAudit(err),
+      });
       error = handleError(err, "OAuth authentication");
     } finally {
       oauthLoading = null;
@@ -201,7 +227,10 @@
       // The browser will open and redirect back via deep link
       // The callback is handled by processOAuthCallback
     } catch (err: unknown) {
-      logAuditEvent("oauth_start", false, { provider, error: String(err) });
+      logAuditEvent("oauth_start", false, {
+        provider,
+        error: sanitizeErrorForAudit(err),
+      });
       error = handleError(err, `${provider} authentication`);
       oauthLoading = null;
       localStorage.removeItem("oauth_pending_provider");
