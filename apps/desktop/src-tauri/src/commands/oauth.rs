@@ -19,6 +19,7 @@ use infra::utils::hash_password;
 use parking_lot::Mutex;
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::State;
@@ -119,9 +120,9 @@ pub async fn start_oauth_flow(
     // Persist session for cold start recovery (deep link opens closed app)
     // One-time use: deleted after successful `take` on callback.
     // Use underscore separator instead of colon (secure_storage doesn't allow colons in keys)
-    // Encode state with base64url to ensure it's safe for storage keys
-    let state_key = URL_SAFE_NO_PAD.encode(state_param.as_bytes());
-    let storage_key = format!("oauth_pkce_session_{}", state_key);
+    // Hash state with SHA256 to ensure it's safe for storage keys and doesn't leak CSRF token
+    let state_hash = hex::encode(Sha256::digest(state_param.as_bytes()));
+    let storage_key = format!("oauth_pkce_session_{}", state_hash);
     let session_json = serde_json::to_string(&session).map_err(|e| {
         tracing::error!("Failed to serialize OAuth PKCE session: {e}");
         "Failed to start authentication. Please try again.".to_string()
@@ -182,8 +183,8 @@ pub async fn handle_oauth_callback(
             // Warm start: session found in memory.
             // We should still clean up any persisted session that might exist (e.g. from start_oauth_flow)
             // to avoid leaving stale data in secure storage.
-            let state_key = URL_SAFE_NO_PAD.encode(state_param.as_bytes());
-            let storage_key = format!("oauth_pkce_session_{}", state_key);
+            let state_hash = hex::encode(Sha256::digest(state_param.as_bytes()));
+            let storage_key = format!("oauth_pkce_session_{}", state_hash);
             if let Err(e) = state.secure_storage.delete(&storage_key).await {
                 tracing::warn!(
                     target: "security",
@@ -225,10 +226,23 @@ pub async fn handle_oauth_callback(
                 );
             }
 
-            serde_json::from_str::<OAuthPkceSession>(&session_json).map_err(|e| {
-                tracing::error!("Failed to deserialize persisted OAuth session: {e}");
-                "Invalid or expired OAuth session. Please try again.".to_string()
-            })?
+            let recovered =
+                serde_json::from_str::<OAuthPkceSession>(&session_json).map_err(|e| {
+                    tracing::error!("Failed to deserialize persisted OAuth session: {e}");
+                    "Invalid or expired OAuth session. Please try again.".to_string()
+                })?;
+
+            if !recovered.is_valid() || recovered.is_expired() {
+                tracing::warn!(
+                    target: "audit",
+                    outcome = "failure",
+                    reason = "session_invalid_or_expired",
+                    "OAuth authentication failed: invalid or expired session"
+                );
+                return Err("Invalid or expired OAuth session. Please try again.".to_string());
+            }
+
+            recovered
         }
     };
 
@@ -267,7 +281,9 @@ pub async fn handle_oauth_callback(
     // 2. Create user if not exists
     // 3. Create session (JWT)
 
-    let user_id = match state.user_repo.find_by_email(&user.email).await {
+    let normalized_email = user.email.trim().to_ascii_lowercase();
+
+    let user_id = match state.user_repo.find_by_email(&normalized_email).await {
         Ok(Some(mut u)) => {
             if user.email_verified && !u.email_verified {
                 // SECURITY CRITICAL: When verifying an existing unverified account via OAuth,
@@ -324,7 +340,7 @@ pub async fn handle_oauth_callback(
 
             let new_user = domain::modules::auth::User {
                 id: Uuid::new_v4(),
-                email: user.email.clone(),
+                email: normalized_email.clone(),
                 password_hash,
                 email_verified: user.email_verified, // Use provider verification status
                 verification_token: None,
@@ -339,7 +355,7 @@ pub async fn handle_oauth_callback(
                     tracing::warn!(
                         "User creation from OAuth failed (may be concurrent insert): {e}"
                     );
-                    match state.user_repo.find_by_email(&user.email).await {
+                    match state.user_repo.find_by_email(&normalized_email).await {
                         Ok(Some(existing)) => existing.id,
                         _ => {
                             tracing::error!(
