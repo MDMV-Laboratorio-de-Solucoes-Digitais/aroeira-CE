@@ -28,6 +28,7 @@ secrecy = { workspace = true }
 oauth2 = { workspace = true, features = ["reqwest"] }
 reqwest = { workspace = true }
 url = { workspace = true }
+once_cell = { workspace = true }
 
 # Async Runtime
 tokio = { workspace = true }

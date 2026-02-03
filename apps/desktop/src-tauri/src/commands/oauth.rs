@@ -10,14 +10,18 @@
 //! - Sessions expire after 10 minutes
 //! - Tokens stored in OS secure storage (not in this module)
 
-use domain::modules::auth::oauth::{AuthProvider, OAuthError, OAuthPkceSession, OAuthService, OAuthUser};
+use crate::commands::auth::{get_device_id, handle_successful_login, hash_email_for_logging};
+use crate::state::AppState;
+use domain::modules::auth::oauth::{AuthProvider, OAuthPkceSession, OAuthService, OAuthUser};
 use infra::services::oauth::{OAuthConfig, OAuthServiceImpl};
 use parking_lot::Mutex;
+use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::State;
 use url::Url;
+use uuid::Uuid;
 
 /// OAuth state managed by Tauri.
 ///
@@ -118,7 +122,9 @@ pub async fn start_oauth_flow(
 /// 1. Parses the callback URL to extract code and state
 /// 2. Verifies the state matches a pending session (CSRF protection)
 /// 3. Exchanges the code for tokens and user info
-/// 4. Returns the authenticated user information
+/// 4. Creates/Updates local user record
+/// 5. Establishes an authenticated session (JWT)
+/// 6. Returns the authenticated user information
 ///
 /// # Arguments
 ///
@@ -132,9 +138,10 @@ pub async fn start_oauth_flow(
 pub async fn handle_oauth_callback(
     callback_url: String,
     oauth_state: State<'_, OAuthState>,
+    state: State<'_, AppState>,
 ) -> Result<OAuthCallbackResponse, String> {
     // Parse callback URL
-    let (code, state) = parse_oauth_callback_url(&callback_url).inspect_err(|_| {
+    let (code, state_param) = parse_oauth_callback_url(&callback_url).inspect_err(|_| {
         tracing::warn!(
             target: "audit",
             outcome = "failure",
@@ -144,7 +151,7 @@ pub async fn handle_oauth_callback(
     })?;
 
     // Retrieve and consume session (CSRF protection)
-    let session = oauth_state.session_store.take(&state).ok_or_else(|| {
+    let session = oauth_state.session_store.take(&state_param).ok_or_else(|| {
         tracing::warn!(
             target: "audit",
             outcome = "failure",
@@ -171,19 +178,61 @@ pub async fn handle_oauth_callback(
             );
             tracing::error!("OAuth code exchange error details: {e}");
 
-            // Only restore session for potentially transient failures (network/server errors)
-            // Don't restore if session was invalid/expired (SessionNotFound) or config error
-            if matches!(e, OAuthError::TokenRequestFailed(_) | OAuthError::UserInfoFailed(_)) {
-                oauth_state.session_store.store(session);
-            }
+            // Security: Do NOT restore session on failure.
+            // OAuth2 state/code should be one-time use to prevent replay attacks.
+            // Users must restart the flow if it fails.
 
             return Err("Authentication failed. Please try again.".to_string());
         }
     };
 
+    // Application-Level Authentication
+    // 1. Look up user by email
+    // 2. Create user if not exists
+    // 3. Create session (JWT)
+    
+    let user_id = match state.user_repo.find_by_email(&user.email).await {
+        Ok(Some(u)) => u.id,
+        Ok(None) => {
+            // Create new user for OAuth
+            let new_user = domain::modules::auth::User {
+                id: Uuid::new_v4(),
+                email: user.email.clone(),
+                password_hash: "oauth_provider".to_string(), // Unusable password
+                email_verified: true, // Trusted from provider
+                verification_token: None,
+                verification_token_expires_at: None,
+            };
+            
+            state.user_repo.save(&new_user).await
+                .map_err(|e| {
+                    tracing::error!("Failed to create user from OAuth: {e}");
+                    "Authentication failed".to_string()
+                })?
+                .id
+        },
+        Err(e) => {
+             tracing::error!("Database error finding user: {e}");
+             return Err("Authentication failed".to_string());
+        }
+    };
+
+    // Get device ID for session binding
+    let device_id = get_device_id()?;
+
+    // Generate email hash for consistent rate limit clearing
+    let email_hash = hash_email_for_logging(
+        &user.email,
+        state.rate_limit_key.expose_secret().as_bytes(),
+    )
+    .map_err(|_| "Internal security error".to_string())?;
+
+    // Create session (JWT), store it, and clear rate limits
+    handle_successful_login(user_id, &email_hash, &device_id, &state).await?;
+
     // Log successful OAuth login (audit trail) with essential context
     // Note: email and provider_user_id are hashed/redacted for privacy in logs
-    let email_domain = user.email.split('@').nth(1).unwrap_or("unknown");
+    let email_domain = user.email.rsplit_once('@').map_or("unknown", |(_, domain)| domain);
     
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
@@ -227,10 +276,23 @@ impl OAuthSessionStore {
     ///
     /// Automatically cleans up expired sessions during this operation.
     pub fn store(&self, session: OAuthPkceSession) {
+        const MAX_SESSIONS: usize = 512;
         let mut sessions = self.sessions.lock();
 
         // Clean up expired sessions
         sessions.retain(|_, s| !s.is_expired());
+
+        // Enforce a hard cap to prevent memory growth (DoS prevention)
+        if sessions.len() >= MAX_SESSIONS {
+            // Remove oldest session
+            if let Some((oldest_state, _)) = sessions
+                .iter()
+                .min_by_key(|(_, s)| s.created_at)
+                .map(|(k, v)| (k.clone(), v.created_at))
+            {
+                sessions.remove(&oldest_state);
+            }
+        }
 
         // Store new session
         sessions.insert(session.state.clone(), session);

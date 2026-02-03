@@ -119,7 +119,7 @@ pub(crate) fn generate_request_id() -> String {
 /// Helper function to get a unique device identifier
 /// Uses the secure device identifier module for cryptographically-secure, persistent device IDs
 /// Returns an error instead of falling back to prevent rate limit bypass
-fn get_device_id() -> Result<String, String> {
+pub(crate) fn get_device_id() -> Result<String, String> {
     get_secure_device_id().map_err(|e| {
         error!(
             error = %e,
@@ -221,7 +221,7 @@ fn generate_verification_token() -> String {
 }
 
 /// Helper function to generate a HMAC-SHA256 hash of an email using a secret key
-fn hash_email_for_logging(email: &str, key: &[u8]) -> Result<String, String> {
+pub(crate) fn hash_email_for_logging(email: &str, key: &[u8]) -> Result<String, String> {
     type HmacSha256 = Hmac<Sha256>;
 
     // Validate key length for security - HMAC-SHA256 should have a reasonable minimum length
@@ -522,7 +522,7 @@ fn validate_login_inputs(email: &str, password: &SecretBox<str>) -> Result<Strin
 /// Handles successful login by creating JWT, storing it securely, and clearing rate limit attempts.
 ///
 /// Returns `Ok(())` on success, or `Err(error_message)` on failure.
-async fn handle_successful_login(
+pub(crate) async fn handle_successful_login(
     user_id: Uuid,
     email_hash: &str,
     device_id: &str,

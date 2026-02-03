@@ -17,8 +17,18 @@ use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge, PkceCodeVerifier,
     RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
+use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
 use tracing::{debug, error, warn};
+
+// Static HTTP client for async_http_client callback (connection pooling)
+static ASYNC_HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("Failed to build static reqwest client")
+});
 
 /// Configuration for OAuth2 providers.
 ///
@@ -58,6 +68,7 @@ impl OAuthConfig {
 /// - Fetches user info from provider APIs
 pub struct OAuthServiceImpl {
     config: OAuthConfig,
+    client: reqwest::Client,
 }
 
 impl OAuthServiceImpl {
@@ -80,7 +91,15 @@ impl OAuthServiceImpl {
     /// Creates a new OAuth service with the given configuration.
     #[must_use]
     pub fn new(config: OAuthConfig) -> Self {
-        Self { config }
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|e| {
+                warn!("Failed to build custom reqwest client: {}, using default", e);
+                reqwest::Client::new()
+            });
+            
+        Self { config, client }
     }
 
     /// Gets client ID and URLs for a provider.
@@ -133,12 +152,7 @@ impl OAuthServiceImpl {
 
     /// Fetches user info from Google's userinfo endpoint.
     async fn fetch_google_user(&self, access_token: &str) -> Result<OAuthUser, OAuthError> {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
-            
-        let response = client
+        let response = self.client
             .get(Self::GOOGLE_USERINFO_URL)
             .bearer_auth(access_token)
             .send()
@@ -168,13 +182,8 @@ impl OAuthServiceImpl {
 
     /// Fetches user info from GitHub's API.
     async fn fetch_github_user(&self, access_token: &str) -> Result<OAuthUser, OAuthError> {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
-
         // Fetch user profile
-        let user_response = client
+        let user_response = self.client
             .get(Self::GITHUB_USER_URL)
             .header("User-Agent", "Aroeira-Desktop")
             .header("Accept", "application/vnd.github+json")
@@ -213,12 +222,7 @@ impl OAuthServiceImpl {
 
     /// Fetches primary email from GitHub's emails endpoint.
     async fn fetch_github_primary_email(&self, access_token: &str) -> Result<String, OAuthError> {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
-            
-        let response = client
+        let response = self.client
             .get(Self::GITHUB_EMAILS_URL)
             .header("User-Agent", "Aroeira-Desktop")
             .header("Accept", "application/vnd.github+json")
@@ -459,10 +463,8 @@ struct GitHubEmail {
 async fn async_http_client(
     request: oauth2::HttpRequest,
 ) -> Result<oauth2::HttpResponse, reqwest::Error> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?;
+    // Use static client for connection pooling
+    let client = &*ASYNC_HTTP_CLIENT;
 
     let mut request_builder = client
         .request(request.method().clone(), request.uri().to_string())
