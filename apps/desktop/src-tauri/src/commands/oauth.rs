@@ -198,7 +198,15 @@ pub async fn handle_oauth_callback(
                 })?;
 
             // Consume-once: delete regardless of parse outcome to prevent replay attempts.
-            let _ = state.secure_storage.delete(&storage_key).await;
+            // Log failures but don't block auth flow - session expiry provides secondary protection.
+            if let Err(e) = state.secure_storage.delete(&storage_key).await {
+                tracing::warn!(
+                    target: "security",
+                    storage_key = %storage_key,
+                    "Failed to delete persisted OAuth session from secure storage: {e}. \
+                     Session will expire naturally but cleanup is incomplete."
+                );
+            }
 
             serde_json::from_str::<OAuthPkceSession>(&session_json).map_err(|e| {
                 tracing::error!("Failed to deserialize persisted OAuth session: {e}");
@@ -208,8 +216,16 @@ pub async fn handle_oauth_callback(
     };
 
     // Also clean up persisted session if it was found in memory (consumed via in-memory store)
+    // Log failures but don't block auth flow - session expiry provides secondary protection.
     let storage_key = format!("oauth_pkce_session_{}", state_param);
-    let _ = state.secure_storage.delete(&storage_key).await;
+    if let Err(e) = state.secure_storage.delete(&storage_key).await {
+        tracing::warn!(
+            target: "security",
+            storage_key = %storage_key,
+            "Failed to delete persisted OAuth session from secure storage: {e}. \
+             Session will expire naturally but cleanup is incomplete."
+        );
+    }
 
     // Exchange code for user info
     let user = match oauth_state
