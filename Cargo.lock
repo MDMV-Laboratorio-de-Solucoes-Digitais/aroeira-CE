@@ -155,6 +155,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
  "window-vibrancy 0.7.1",
 ]
