@@ -91,7 +91,7 @@
       u.hostname === "auth" &&
       (u.pathname === "/callback" || u.pathname === "/callback/");
     const hostlessOk =
-      (u.hostname === "" || u.hostname === "localhost") &&
+      u.hostname === "" &&
       (u.pathname === "/auth/callback" || u.pathname === "/auth/callback/");
 
     if (!schemeOk || (!canonicalOk && !hostlessOk)) return;
