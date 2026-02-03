@@ -14,6 +14,7 @@
   import {
     startOAuthFlow,
     handleOAuthCallback,
+    isOAuthAvailable,
     type OAuthProvider,
   } from "$lib/oauth";
   import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
@@ -448,7 +449,7 @@
           </Button>
         </form>
 
-        {#if isLogin}
+        {#if isLogin && isOAuthAvailable()}
           <!-- OAuth Divider -->
           <div class="relative my-4">
             <div class="absolute inset-0 flex items-center">
