@@ -440,11 +440,9 @@ impl OAuthService for OAuthServiceImpl {
             AuthProvider::GitHub => self.fetch_github_user(access_token).await,
         }?;
 
-        // Securely store the token in the OS keyring
-        // Key format: "provider:user_id"
-        // This satisfies the compliance requirement for secure token storage
-        // IMPORTANT: If secure storage fails, we must fail the entire authentication flow
-        // to comply with the security requirement that tokens MUST be stored securely
+        // Securely store the token in the OS keyring (best effort).
+        // NOTE: The app session (JWT) is stored via tauri secure storage; provider token storage
+        // should not hard-fail the entire login on platforms where keyring is unavailable.
         #[cfg(not(test))]
         {
             let service_name = "aroeira-oauth";
@@ -455,20 +453,17 @@ impl OAuthService for OAuthServiceImpl {
             hasher.update(user_key.as_bytes());
             let user_key_hash = hex::encode(hasher.finalize());
 
-            let entry = keyring::Entry::new(service_name, &user_key_hash).map_err(|e| {
-                error!("Failed to create keyring entry for OAuth token: {}", e);
-                OAuthError::CodeExchangeFailed("Failed to access secure storage".to_string())
-            })?;
-
-            entry.set_password(access_token).map_err(|e| {
-                error!(
-                    "Failed to securely store OAuth token for {}: {}",
-                    user_key_hash, e
-                );
-                OAuthError::CodeExchangeFailed("Failed to store token securely".to_string())
-            })?;
-
-            debug!("Securely stored OAuth token for {}", user_key_hash);
+            match keyring::Entry::new(service_name, &user_key_hash)
+                .and_then(|entry| entry.set_password(access_token))
+            {
+                Ok(()) => debug!("Securely stored OAuth token for {}", user_key_hash),
+                Err(e) => {
+                    warn!(
+                        "OAuth token not stored in OS keyring (continuing without it): {}",
+                        e
+                    );
+                }
+            }
         }
 
         Ok(user)
