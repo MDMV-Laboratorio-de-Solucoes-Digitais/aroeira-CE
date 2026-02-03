@@ -15,6 +15,13 @@ async fn generate_url_for_google_includes_required_params() {
         google_client_id: Some("test-google-client-id".to_string()),
         github_client_id: None,
         redirect_uri: "aroeira://auth/callback".to_string(),
+        google_auth_url: None,
+        google_token_url: None,
+        google_userinfo_url: None,
+        github_auth_url: None,
+        github_token_url: None,
+        github_user_url: None,
+        github_emails_url: None,
     });
 
     let (url, session) = service
@@ -70,6 +77,13 @@ async fn generate_url_for_github_includes_required_params() {
         google_client_id: None,
         github_client_id: Some("test-github-client-id".to_string()),
         redirect_uri: "aroeira://auth/callback".to_string(),
+        google_auth_url: None,
+        google_token_url: None,
+        google_userinfo_url: None,
+        github_auth_url: None,
+        github_token_url: None,
+        github_user_url: None,
+        github_emails_url: None,
     });
 
     let (url, session) = service
@@ -104,6 +118,13 @@ async fn generate_url_fails_when_google_not_configured() {
         google_client_id: None, // Google not configured!
         github_client_id: None,
         redirect_uri: "aroeira://auth/callback".to_string(),
+        google_auth_url: None,
+        google_token_url: None,
+        google_userinfo_url: None,
+        github_auth_url: None,
+        github_token_url: None,
+        github_user_url: None,
+        github_emails_url: None,
     });
 
     let result = service
@@ -124,6 +145,13 @@ async fn generate_url_fails_when_github_not_configured() {
         google_client_id: None,
         github_client_id: None, // GitHub not configured!
         redirect_uri: "aroeira://auth/callback".to_string(),
+        google_auth_url: None,
+        google_token_url: None,
+        google_userinfo_url: None,
+        github_auth_url: None,
+        github_token_url: None,
+        github_user_url: None,
+        github_emails_url: None,
     });
 
     let result = service
@@ -144,6 +172,13 @@ async fn session_state_matches_url_state_param() {
         google_client_id: Some("client-id".to_string()),
         github_client_id: None,
         redirect_uri: "aroeira://auth/callback".to_string(),
+        google_auth_url: None,
+        google_token_url: None,
+        google_userinfo_url: None,
+        github_auth_url: None,
+        github_token_url: None,
+        github_user_url: None,
+        github_emails_url: None,
     });
 
     let (url, session) = service
@@ -164,6 +199,13 @@ async fn pkce_verifier_in_session_is_valid_length() {
         google_client_id: Some("client-id".to_string()),
         github_client_id: None,
         redirect_uri: "aroeira://auth/callback".to_string(),
+        google_auth_url: None,
+        google_token_url: None,
+        google_userinfo_url: None,
+        github_auth_url: None,
+        github_token_url: None,
+        github_user_url: None,
+        github_emails_url: None,
     });
 
     let (_, session) = service
@@ -189,6 +231,13 @@ async fn each_url_generation_produces_unique_state() {
         google_client_id: Some("client-id".to_string()),
         github_client_id: None,
         redirect_uri: "aroeira://auth/callback".to_string(),
+        google_auth_url: None,
+        google_token_url: None,
+        google_userinfo_url: None,
+        github_auth_url: None,
+        github_token_url: None,
+        github_user_url: None,
+        github_emails_url: None,
     });
 
     let (_, session1) = service
@@ -217,6 +266,13 @@ async fn redirect_uri_is_properly_encoded_in_url() {
         google_client_id: Some("client-id".to_string()),
         github_client_id: None,
         redirect_uri: "aroeira://auth/callback".to_string(),
+        google_auth_url: None,
+        google_token_url: None,
+        google_userinfo_url: None,
+        github_auth_url: None,
+        github_token_url: None,
+        github_user_url: None,
+        github_emails_url: None,
     });
 
     let (url, _) = service
@@ -250,6 +306,13 @@ async fn exchange_code_fails_on_expired_session() {
         google_client_id: Some("client-id".to_string()),
         github_client_id: None,
         redirect_uri: "aroeira://auth/callback".to_string(),
+        google_auth_url: None,
+        google_token_url: None,
+        google_userinfo_url: None,
+        github_auth_url: None,
+        github_token_url: None,
+        github_user_url: None,
+        github_emails_url: None,
     });
 
     // Create an expired session
@@ -280,6 +343,13 @@ async fn exchange_code_fails_on_invalid_session() {
         google_client_id: Some("client-id".to_string()),
         github_client_id: None,
         redirect_uri: "aroeira://auth/callback".to_string(),
+        google_auth_url: None,
+        google_token_url: None,
+        google_userinfo_url: None,
+        github_auth_url: None,
+        github_token_url: None,
+        github_user_url: None,
+        github_emails_url: None,
     });
 
     // Create an invalid session (verifier too short)
@@ -294,4 +364,159 @@ async fn exchange_code_fails_on_invalid_session() {
         .await;
 
     assert!(result.is_err(), "Should fail on invalid session");
+}
+
+#[tokio::test]
+async fn exchange_code_success_google() {
+    use wiremock::{MockServer, Mock, ResponseTemplate};
+    use wiremock::matchers::{method, path};
+    use domain::modules::auth::oauth::OAuthPkceSession;
+    
+    // Start mock server
+    let mock_server = MockServer::start().await;
+    
+    // Config with mock URLs
+    let config = OAuthConfig {
+        google_client_id: Some("client-id".to_string()),
+        github_client_id: None,
+        redirect_uri: "aroeira://auth/callback".to_string(),
+        google_auth_url: Some(format!("{}/auth", mock_server.uri())),
+        google_token_url: Some(format!("{}/token", mock_server.uri())),
+        google_userinfo_url: Some(format!("{}/userinfo", mock_server.uri())),
+        github_auth_url: None,
+        github_token_url: None,
+        github_user_url: None,
+        github_emails_url: None,
+    };
+    
+    let service = OAuthServiceImpl::new(config);
+
+    // Mock Token Endpoint
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "mock-access-token",
+            "token_type": "Bearer",
+            "expires_in": 3600
+        })))
+        .mount(&mock_server)
+        .await;
+
+    // Mock UserInfo Endpoint
+    Mock::given(method("GET"))
+        .and(path("/userinfo"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "sub": "google-user-123",
+            "email": "test@example.com",
+            "name": "Test User",
+            "picture": "https://example.com/avatar.jpg",
+            "email_verified": true
+        })))
+        .mount(&mock_server)
+        .await;
+
+    // Create valid session
+    let session = OAuthPkceSession::new(
+        "test-state".to_string(),
+        "a".repeat(43),
+        AuthProvider::Google,
+    );
+    
+    // Execute exchange
+    let user = service
+        .exchange_code(&session, "auth-code".to_string())
+        .await
+        .expect("Should exchange code successfully");
+
+    assert_eq!(user.provider, AuthProvider::Google);
+    assert_eq!(user.provider_user_id, "google-user-123");
+    assert_eq!(user.email, "test@example.com");
+    assert!(user.email_verified);
+}
+
+#[tokio::test]
+async fn exchange_code_success_github() {
+    use wiremock::{MockServer, Mock, ResponseTemplate};
+    use wiremock::matchers::{method, path};
+    use domain::modules::auth::oauth::OAuthPkceSession;
+    
+    // Start mock server
+    let mock_server = MockServer::start().await;
+    
+    // Config with mock URLs
+    let config = OAuthConfig {
+        google_client_id: None,
+        github_client_id: Some("client-id".to_string()),
+        redirect_uri: "aroeira://auth/callback".to_string(),
+        google_auth_url: None,
+        google_token_url: None,
+        google_userinfo_url: None,
+        github_auth_url: Some(format!("{}/auth", mock_server.uri())),
+        github_token_url: Some(format!("{}/token", mock_server.uri())),
+        github_user_url: Some(format!("{}/user", mock_server.uri())),
+        github_emails_url: Some(format!("{}/user/emails", mock_server.uri())),
+    };
+    
+    let service = OAuthServiceImpl::new(config);
+
+    // Mock Token Endpoint
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "mock-access-token",
+            "token_type": "bearer",
+            "scope": "read:user,user:email"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    // Mock User Profile
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": 12345,
+            "login": "github-user",
+            "name": "GitHub User",
+            "avatar_url": "https://example.com/avatar.jpg"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    // Mock User Emails
+    Mock::given(method("GET"))
+        .and(path("/user/emails"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {
+                "email": "old@example.com",
+                "primary": false,
+                "verified": true,
+                "visibility": "public"
+            },
+            {
+                "email": "test@example.com",
+                "primary": true,
+                "verified": true,
+                "visibility": "public"
+            }
+        ])))
+        .mount(&mock_server)
+        .await;
+
+    // Create valid session
+    let session = OAuthPkceSession::new(
+        "test-state".to_string(),
+        "a".repeat(43),
+        AuthProvider::GitHub,
+    );
+    
+    // Execute exchange
+    let user = service
+        .exchange_code(&session, "auth-code".to_string())
+        .await
+        .expect("Should exchange code successfully");
+
+    assert_eq!(user.provider, AuthProvider::GitHub);
+    assert_eq!(user.provider_user_id, "12345");
+    assert_eq!(user.email, "test@example.com");
+    assert!(user.email_verified);
 }

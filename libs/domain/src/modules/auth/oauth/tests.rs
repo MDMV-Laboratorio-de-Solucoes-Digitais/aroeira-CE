@@ -231,6 +231,7 @@ fn oauth_user_creation_with_all_fields() {
         email: "test@example.com".to_string(),
         name: Some("Test User".to_string()),
         avatar_url: Some("https://example.com/avatar.png".to_string()),
+        email_verified: true,
     };
 
     assert_eq!(user.provider, AuthProvider::Google);
@@ -248,6 +249,7 @@ fn oauth_user_creation_with_minimal_fields() {
         email: "user@github.com".to_string(),
         name: None,
         avatar_url: None,
+        email_verified: true,
     };
 
     assert_eq!(user.provider, AuthProvider::GitHub);
@@ -263,6 +265,7 @@ fn oauth_user_serialization_includes_required_fields() {
         email: "test@example.com".to_string(),
         name: Some("Test User".to_string()),
         avatar_url: None,
+        email_verified: true,
     };
 
     let json = serde_json::to_string(&user).unwrap();
@@ -282,7 +285,8 @@ fn oauth_user_deserialization_works() {
         "provider_user_id": "gh-123",
         "email": "dev@github.com",
         "name": "Dev User",
-        "avatar_url": "https://avatars.github.com/u/123"
+        "avatar_url": "https://avatars.github.com/u/123",
+        "email_verified": true
     }"#;
 
     let user: OAuthUser = serde_json::from_str(json).unwrap();
@@ -295,6 +299,7 @@ fn oauth_user_deserialization_works() {
         user.avatar_url,
         Some("https://avatars.github.com/u/123".to_string())
     );
+    assert!(user.email_verified);
 }
 
 // ===========================================
@@ -331,6 +336,7 @@ proptest! {
             email: email.clone(),
             name: None,
             avatar_url: None,
+            email_verified: true,
         };
 
         let json = serde_json::to_string(&user).unwrap();
@@ -381,6 +387,7 @@ proptest! {
             email: "test@test.com".to_string(),
             name: name.clone(),
             avatar_url: None,
+            email_verified: true,
         };
 
         let json = serde_json::to_string(&user).unwrap();

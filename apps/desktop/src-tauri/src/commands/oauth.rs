@@ -10,6 +10,8 @@
 //! - Sessions expire after 10 minutes
 //! - Tokens stored in OS secure storage (not in this module)
 
+use infra::utils::hash_password;
+use secrecy::SecretBox;
 use crate::commands::auth::{get_device_id, handle_successful_login, hash_email_for_logging};
 use crate::state::AppState;
 use domain::modules::auth::oauth::{AuthProvider, OAuthPkceSession, OAuthService, OAuthUser};
@@ -192,15 +194,36 @@ pub async fn handle_oauth_callback(
     // 3. Create session (JWT)
     
     let user_id = match state.user_repo.find_by_email(&user.email).await {
-        Ok(Some(u)) => u.id,
+        Ok(Some(mut u)) => {
+            if user.email_verified && !u.email_verified {
+                u.email_verified = true;
+                u.verification_token = None;
+                u.verification_token_expires_at = None;
+
+                state.user_repo.save(&u).await.map_err(|e| {
+                    tracing::error!("Failed to update user verification from OAuth: {e}");
+                    "Authentication failed".to_string()
+                })?;
+            }
+            u.id
+        }
         Ok(None) => {
             // Create new user for OAuth
+
+            // Generate a random high-entropy password that will never be shown to the user
+            // This ensures the account cannot be accessed via password login unless explicitly reset
+            let oauth_random_password = format!("oauth:{}:{}", session.provider, Uuid::new_v4());
+            
+            // Use infra's hash_password which handles security config correctly
+            let password_hash = hash_password(&oauth_random_password).map_err(|e| {
+                tracing::error!("Failed to hash generated OAuth password: {e}");
+                "Authentication failed".to_string()
+            })?;
+
             let new_user = domain::modules::auth::User {
                 id: Uuid::new_v4(),
                 email: user.email.clone(),
-                // Valid bcrypt hash format, but not a usable password for the user.
-                // Prevents downstream code from choking on an invalid hash string.
-                password_hash: "$2b$12$C6UzMDM.H6dfI/f/IKcEeO7s9mYb1QO8QK9u7rY6gk9m7Qw1fQy4m".to_string(),
+                password_hash,
                 email_verified: user.email_verified, // Use provider verification status
                 verification_token: None,
                 verification_token_expires_at: None,
@@ -243,6 +266,7 @@ pub async fn handle_oauth_callback(
 
     tracing::info!(
         target: "audit",
+        user_id = %user_id,
         provider = %session.provider,
         provider_user_id_hash = %hashed_user_id,
         email_domain = %email_domain,
@@ -367,7 +391,17 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
         );
         return Err(GENERIC_ERROR.to_string());
     }
-    if url.host_str() != Some(OAUTH_CALLBACK_HOST) || url.path() != OAUTH_CALLBACK_PATH {
+
+    // Handle both canonical (with host) and hostless (deep link) formats
+    // canonical: aroeira://auth/callback
+    // hostless: aroeira:///auth/callback (appears as path "/auth/callback" with no host)
+    let is_canonical = url.host_str() == Some(OAUTH_CALLBACK_HOST) && url.path() == OAUTH_CALLBACK_PATH;
+    let is_hostless = url.host_str().is_none() && url.path() == format!("/{}{}", OAUTH_CALLBACK_HOST, OAUTH_CALLBACK_PATH);
+    
+    // Note: OAUTH_CALLBACK_HOST is "auth" and OAUTH_CALLBACK_PATH is "/callback"
+    // So hostless path check is against "/auth/callback"
+
+    if !is_canonical && !is_hostless {
         tracing::warn!(
             expected_host = OAUTH_CALLBACK_HOST,
             expected_path = OAUTH_CALLBACK_PATH,

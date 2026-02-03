@@ -18,6 +18,7 @@ use oauth2::{
     RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
 use once_cell::sync::Lazy;
+#[cfg(not(test))]
 use sha2::{Digest, Sha256};
 use tracing::{debug, error, warn};
 
@@ -45,6 +46,16 @@ pub struct OAuthConfig {
     pub github_client_id: Option<String>,
     /// Redirect URI for OAuth callbacks (e.g., "aroeira://auth/callback")
     pub redirect_uri: String,
+
+    // Test overrides
+    pub google_auth_url: Option<String>,
+    pub google_token_url: Option<String>,
+    pub google_userinfo_url: Option<String>,
+    
+    pub github_auth_url: Option<String>,
+    pub github_token_url: Option<String>,
+    pub github_user_url: Option<String>,
+    pub github_emails_url: Option<String>,
 }
 
 impl OAuthConfig {
@@ -59,6 +70,13 @@ impl OAuthConfig {
             google_client_id: std::env::var("GOOGLE_CLIENT_ID").ok(),
             github_client_id: std::env::var("GITHUB_CLIENT_ID").ok(),
             redirect_uri,
+            google_auth_url: None,
+            google_token_url: None,
+            google_userinfo_url: None,
+            github_auth_url: None,
+            github_token_url: None,
+            github_user_url: None,
+            github_emails_url: None,
         }
     }
 }
@@ -100,7 +118,7 @@ impl OAuthServiceImpl {
     fn get_provider_config(
         &self,
         provider: AuthProvider,
-    ) -> Result<(&str, &'static str, &'static str), OAuthError> {
+    ) -> Result<(&str, &str, &str), OAuthError> {
         match provider {
             AuthProvider::Google => {
                 let client_id = self
@@ -110,8 +128,8 @@ impl OAuthServiceImpl {
                     .ok_or_else(|| OAuthError::ProviderNotConfigured("Google".to_string()))?;
                 Ok((
                     client_id.as_str(),
-                    Self::GOOGLE_AUTH_URL,
-                    Self::GOOGLE_TOKEN_URL,
+                    self.config.google_auth_url.as_deref().unwrap_or(Self::GOOGLE_AUTH_URL),
+                    self.config.google_token_url.as_deref().unwrap_or(Self::GOOGLE_TOKEN_URL),
                 ))
             }
             AuthProvider::GitHub => {
@@ -122,8 +140,8 @@ impl OAuthServiceImpl {
                     .ok_or_else(|| OAuthError::ProviderNotConfigured("GitHub".to_string()))?;
                 Ok((
                     client_id.as_str(),
-                    Self::GITHUB_AUTH_URL,
-                    Self::GITHUB_TOKEN_URL,
+                    self.config.github_auth_url.as_deref().unwrap_or(Self::GITHUB_AUTH_URL),
+                    self.config.github_token_url.as_deref().unwrap_or(Self::GITHUB_TOKEN_URL),
                 ))
             }
         }
@@ -146,8 +164,9 @@ impl OAuthServiceImpl {
 
     /// Fetches user info from Google's userinfo endpoint.
     async fn fetch_google_user(&self, access_token: &str) -> Result<OAuthUser, OAuthError> {
+        let url = self.config.google_userinfo_url.as_deref().unwrap_or(Self::GOOGLE_USERINFO_URL);
         let response = ASYNC_HTTP_CLIENT
-            .get(Self::GOOGLE_USERINFO_URL)
+            .get(url)
             .bearer_auth(access_token)
             .send()
             .await
@@ -183,8 +202,9 @@ impl OAuthServiceImpl {
     /// Fetches user info from GitHub's API.
     async fn fetch_github_user(&self, access_token: &str) -> Result<OAuthUser, OAuthError> {
         // Fetch user profile
+        let url = self.config.github_user_url.as_deref().unwrap_or(Self::GITHUB_USER_URL);
         let user_response = ASYNC_HTTP_CLIENT
-            .get(Self::GITHUB_USER_URL)
+            .get(url)
             .header("User-Agent", "Aroeira-Desktop")
             .header("Accept", "application/vnd.github+json")
             .bearer_auth(access_token)
@@ -219,8 +239,9 @@ impl OAuthServiceImpl {
 
     /// Fetches primary email from GitHub's emails endpoint.
     async fn fetch_github_primary_email(&self, access_token: &str) -> Result<(String, bool), OAuthError> {
+        let url = self.config.github_emails_url.as_deref().unwrap_or(Self::GITHUB_EMAILS_URL);
         let response = ASYNC_HTTP_CLIENT
-            .get(Self::GITHUB_EMAILS_URL)
+            .get(url)
             .header("User-Agent", "Aroeira-Desktop")
             .header("Accept", "application/vnd.github+json")
             .bearer_auth(access_token)

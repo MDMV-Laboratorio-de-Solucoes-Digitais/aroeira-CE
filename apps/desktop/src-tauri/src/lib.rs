@@ -425,6 +425,13 @@ async fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
         google_client_id: config.google_client_id,
         github_client_id: config.github_client_id,
         redirect_uri: crate::constants::OAUTH_REDIRECT_URI.to_string(),
+        google_auth_url: None,
+        google_token_url: None,
+        google_userinfo_url: None,
+        github_auth_url: None,
+        github_token_url: None,
+        github_user_url: None,
+        github_emails_url: None,
     };
     app.manage(crate::commands::oauth::OAuthState::new(oauth_config));
 
