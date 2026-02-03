@@ -155,29 +155,43 @@ pub async fn handle_oauth_callback(
     })?;
 
     // Exchange code for user info
-    let user = oauth_state
+    let user = match oauth_state
         .oauth_service
         .exchange_code(&session, code)
         .await
-        .inspect_err(|e| {
+    {
+        Ok(user) => user,
+        Err(e) => {
+            // Log failure with context
             tracing::warn!(
                 target: "audit",
-                provider = %session.provider,
                 outcome = "failure",
                 reason = "code_exchange_failed",
                 "OAuth authentication failed: code exchange error"
             );
             tracing::error!("OAuth code exchange error details: {e}");
-        })
-        .map_err(|_| "Authentication failed. Please try again.".to_string())?;
+
+            // Restore session to allow retry (in case of transient network errors)
+            // This allows the user to click "Try Again" or re-trigger the callback
+            oauth_state.session_store.store(session);
+
+            return Err("Authentication failed. Please try again.".to_string());
+        }
+    };
 
     // Log successful OAuth login (audit trail) with essential context
-    // Note: email is hashed/redacted for privacy in logs
+    // Note: email and provider_user_id are hashed/redacted for privacy in logs
     let email_domain = user.email.split('@').nth(1).unwrap_or("unknown");
+    
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(user.provider_user_id.as_bytes());
+    let hashed_user_id = hex::encode(hasher.finalize());
+
     tracing::info!(
         target: "audit",
         provider = %session.provider,
-        provider_user_id = %user.provider_user_id,
+        provider_user_id_hash = %hashed_user_id,
         email_domain = %email_domain,
         outcome = "success",
         "OAuth authentication completed"
@@ -229,8 +243,11 @@ impl OAuthSessionStore {
     pub fn take(&self, state: &str) -> Option<OAuthPkceSession> {
         let mut sessions = self.sessions.lock();
 
-        // Remove and return, checking expiration
-        sessions.remove(state).filter(|s| !s.is_expired())
+        // Proactively clean up expired sessions to prevent memory leaks
+        sessions.retain(|_, s| !s.is_expired());
+
+        // Remove and return (expiration already checked by retain)
+        sessions.remove(state)
     }
 }
 
@@ -272,7 +289,7 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
 
     let url = Url::parse(callback_url).map_err(|e| {
         tracing::warn!("OAuth callback URL parse error: {e}");
-        GENERIC_ERROR
+        GENERIC_ERROR.to_string()
     })?;
 
     // Enforce expected deep-link callback origin using constants
@@ -306,26 +323,20 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
         return Err("Authentication was denied or failed. Please try again.".to_string());
     }
 
-    // Extract code and state, rejecting empty values
-    let code = url
-        .query_pairs()
-        .find(|(k, _)| k == "code")
-        .map(|(_, v)| v.to_string())
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| {
-            tracing::warn!("OAuth callback: missing or empty code parameter");
-            GENERIC_ERROR.to_string()
-        })?;
+    // Helper to extract query parameters
+    let get_query_param = |key: &str| -> Result<String, String> {
+        url.query_pairs()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.to_string())
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| {
+                tracing::warn!("OAuth callback: missing or empty {} parameter", key);
+                GENERIC_ERROR.to_string()
+            })
+    };
 
-    let state = url
-        .query_pairs()
-        .find(|(k, _)| k == "state")
-        .map(|(_, v)| v.to_string())
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| {
-            tracing::warn!("OAuth callback: missing or empty state parameter");
-            GENERIC_ERROR.to_string()
-        })?;
+    let code = get_query_param("code")?;
+    let state = get_query_param("state")?;
 
     Ok((code, state))
 }

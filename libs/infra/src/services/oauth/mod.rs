@@ -132,7 +132,11 @@ impl OAuthServiceImpl {
 
     /// Fetches user info from Google's userinfo endpoint.
     async fn fetch_google_user(&self, access_token: &str) -> Result<OAuthUser, OAuthError> {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
+            
         let response = client
             .get(Self::GOOGLE_USERINFO_URL)
             .bearer_auth(access_token)
@@ -163,7 +167,10 @@ impl OAuthServiceImpl {
 
     /// Fetches user info from GitHub's API.
     async fn fetch_github_user(&self, access_token: &str) -> Result<OAuthUser, OAuthError> {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
 
         // Fetch user profile
         let user_response = client
@@ -205,7 +212,11 @@ impl OAuthServiceImpl {
 
     /// Fetches primary email from GitHub's emails endpoint.
     async fn fetch_github_primary_email(&self, access_token: &str) -> Result<String, OAuthError> {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
+            
         let response = client
             .get(Self::GITHUB_EMAILS_URL)
             .header("User-Agent", "Aroeira-Desktop")
@@ -322,21 +333,47 @@ impl OAuthService for OAuthServiceImpl {
         // Create PKCE verifier from session
         let pkce_verifier = PkceCodeVerifier::new(session.pkce_verifier.clone());
 
-        // Create HTTP client for token exchange
-        let http_client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|e| OAuthError::TokenRequestFailed(e.to_string()))?;
-
-        // Exchange code for token
-        let token_result = client
+        // Prepare token exchange request
+        let token_request = client
             .exchange_code(AuthorizationCode::new(code))
-            .set_pkce_verifier(pkce_verifier)
-            .request_async(&http_client)
+            .set_pkce_verifier(pkce_verifier);
+
+        // Perform token exchange with timeout and provider-specific adjustments
+        let exchange_future = async {
+            match session.provider {
+                AuthProvider::GitHub => {
+                    // GitHub requires Accept: application/json
+                    token_request
+                        .request_async(&|mut req: oauth2::HttpRequest| async move {
+                            if let Ok(header_val) = "application/json".parse() {
+                                // "accept" implements IntoHeaderName
+                                req.headers_mut().insert("accept", header_val);
+                            }
+                            async_http_client(req).await
+                        })
+                        .await
+                }
+                // Other providers (Google) work with default client
+                _ => {
+                    token_request
+                        .request_async(&async_http_client)
+                        .await
+                }
+            }
+        };
+
+        // Execute with timeout
+        let token_result = tokio::time::timeout(std::time::Duration::from_secs(30), exchange_future)
             .await
-            .map_err(|e| {
-                error!("Token exchange failed: {:?}", e);
-                OAuthError::TokenRequestFailed(e.to_string())
+            .map_err(|_| OAuthError::TokenRequestFailed("Token exchange timed out".to_string()))?
+            .map_err(|_e| {
+                // Sanitize error logging: avoid logging full error which might contain sensitive data
+                // Just log that it failed and the provider
+                error!("Token exchange failed for provider {:?}", session.provider);
+                
+                // Return a generic error description, or specific if safe (e.g. "access_denied")
+                // For now, keep it generic to be safe
+                OAuthError::TokenRequestFailed("Provider rejected token request".to_string())
             })?;
 
         let access_token = token_result.access_token().secret();
@@ -384,6 +421,42 @@ struct GitHubEmail {
     primary: bool,
     /// Whether the email is verified
     verified: bool,
+}
+
+/// Custom async HTTP client for oauth2 crate with timeout and proper configuration.
+///
+/// This replaces `oauth2::reqwest::async_http_client` which doesn't have a timeout by default.
+async fn async_http_client(
+    request: oauth2::HttpRequest,
+) -> Result<oauth2::HttpResponse, reqwest::Error> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+
+    let mut request_builder = client
+        .request(request.method().clone(), request.uri().to_string())
+        .body(request.body().clone());
+
+    for (name, value) in request.headers() {
+        request_builder = request_builder.header(name, value);
+    }
+
+    let response = request_builder
+        .send()
+        .await?;
+
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = response
+        .bytes()
+        .await?
+        .to_vec();
+
+    let mut resp = oauth2::HttpResponse::new(body);
+    *resp.status_mut() = status;
+    *resp.headers_mut() = headers;
+    Ok(resp)
 }
 
 #[cfg(test)]

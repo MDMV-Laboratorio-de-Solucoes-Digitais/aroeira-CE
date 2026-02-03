@@ -78,10 +78,20 @@
    * Process an OAuth callback URL from deep linking.
    * This handles the aroeira://auth/callback URLs.
    */
-  async function processOAuthCallback(url: string): Promise<void> {
-    if (!url.startsWith("aroeira://auth/callback")) {
+  async function processOAuthCallback(rawUrl: string): Promise<void> {
+    let u: URL;
+    try {
+      u = new URL(rawUrl);
+    } catch {
       return;
     }
+
+    const isCallback =
+      u.protocol.toLowerCase() === "aroeira:" &&
+      u.hostname === "auth" &&
+      (u.pathname === "/callback" || u.pathname === "/callback/");
+
+    if (!isCallback) return;
 
     // Restore loading state from localStorage if not already set
     // This handles cold start scenarios where the app was closed
@@ -92,7 +102,7 @@
     error = "";
 
     try {
-      const user = await handleOAuthCallback(url);
+      const user = await handleOAuthCallback(rawUrl);
       logAuditEvent("oauth_login", true, {
         provider: user.provider,
         email: redactEmail(user.email),

@@ -25,7 +25,7 @@ hmac = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 secrecy = { workspace = true }
-oauth2 = { workspace = true }
+oauth2 = { workspace = true, features = ["reqwest"] }
 reqwest = { workspace = true }
 url = { workspace = true }
 
