@@ -436,10 +436,10 @@ async fn exchange_code_success_google() {
 
 #[tokio::test]
 async fn exchange_code_success_github() {
-    use wiremock::{MockServer, Mock, ResponseTemplate};
     use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
     use domain::modules::auth::oauth::OAuthPkceSession;
-    
+
     // Start mock server
     let mock_server = MockServer::start().await;
     
@@ -456,7 +456,7 @@ async fn exchange_code_success_github() {
         github_user_url: Some(format!("{}/user", mock_server.uri())),
         github_emails_url: Some(format!("{}/user/emails", mock_server.uri())),
     };
-    
+
     let service = OAuthServiceImpl::new(config);
 
     // Mock Token Endpoint
