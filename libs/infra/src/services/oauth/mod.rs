@@ -422,13 +422,15 @@ impl OAuthService for OAuthServiceImpl {
                 .map_err(|_| {
                     OAuthError::TokenRequestFailed("Token exchange timed out".to_string())
                 })?
-                .map_err(|_e| {
-                    // Sanitize error logging: avoid logging full error which might contain sensitive data
-                    // Just log that it failed and the provider
+                .map_err(|e| {
+                    // The `oauth2` crate's error types are designed not to leak secrets.
+                    // Logging the error at a debug level provides valuable diagnostic information.
+                    debug!(
+                        "Token exchange failed for provider {:?}: {:?}",
+                        session.provider, e
+                    );
                     error!("Token exchange failed for provider {:?}", session.provider);
-
-                    // Return a generic error description, or specific if safe (e.g. "access_denied")
-                    // For now, keep it generic to be safe
+                    // Return a generic error to the client.
                     OAuthError::TokenRequestFailed("Provider rejected token request".to_string())
                 })?;
 
@@ -453,8 +455,14 @@ impl OAuthService for OAuthServiceImpl {
             hasher.update(user_key.as_bytes());
             let user_key_hash = hex::encode(hasher.finalize());
 
+            // Create token payload containing both access and refresh tokens
+            let token_payload = serde_json::json!({
+                "access_token": access_token,
+                "refresh_token": token_result.refresh_token().map(|t| t.secret()),
+            });
+
             match keyring::Entry::new(service_name, &user_key_hash)
-                .and_then(|entry| entry.set_password(access_token))
+                .and_then(|entry| entry.set_password(&token_payload.to_string()))
             {
                 Ok(()) => debug!("Securely stored OAuth token for {}", user_key_hash),
                 Err(e) => {
