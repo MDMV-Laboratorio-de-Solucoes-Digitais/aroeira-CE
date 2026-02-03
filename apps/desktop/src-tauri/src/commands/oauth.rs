@@ -11,7 +11,6 @@
 //! - Tokens stored in OS secure storage (not in this module)
 
 use infra::utils::hash_password;
-use secrecy::SecretBox;
 use crate::commands::auth::{get_device_id, handle_successful_login, hash_email_for_logging};
 use crate::state::AppState;
 use domain::modules::auth::oauth::{AuthProvider, OAuthPkceSession, OAuthService, OAuthUser};
