@@ -62,25 +62,8 @@ export async function startOAuthFlow(provider: OAuthProvider): Promise<string> {
 export async function handleOAuthCallback(
   callbackUrl: string,
 ): Promise<OAuthCallbackResponse> {
-  let u: URL;
-  try {
-    u = new URL(callbackUrl);
-  } catch {
-    throw new Error("Invalid OAuth callback URL");
-  }
-
-  const schemeOk = u.protocol.toLowerCase() === "aroeira:";
-  const canonicalOk =
-    u.hostname === "auth" &&
-    (u.pathname === "/callback" || u.pathname === "/callback/");
-  const hostlessOk =
-    u.hostname === "" &&
-    (u.pathname === "/auth/callback" || u.pathname === "/auth/callback/");
-
-  if (!schemeOk || (!canonicalOk && !hostlessOk)) {
-    throw new Error("Invalid OAuth callback URL");
-  }
-
+  // The backend performs robust validation of the callback URL.
+  // Rely on it as the single source of truth to avoid logic duplication.
   return invoke<OAuthCallbackResponse>("handle_oauth_callback", {
     callback_url: callbackUrl,
   });
