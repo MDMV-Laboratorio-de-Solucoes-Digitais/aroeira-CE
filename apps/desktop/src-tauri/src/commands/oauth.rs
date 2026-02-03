@@ -297,15 +297,10 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
 
     // Check for error response from OAuth provider
     if let Some((_, error_code)) = url.query_pairs().find(|(k, _)| k == "error") {
-        // Log error details for debugging but return generic message
-        let error_desc = url
-            .query_pairs()
-            .find(|(k, _)| k == "error_description")
-            .map(|(_, v)| v.to_string())
-            .unwrap_or_else(|| "No description".to_string());
+        // Log only the error code (standard OAuth error codes like "access_denied")
+        // Do NOT log error_description as it may contain sensitive user-specific details
         tracing::info!(
             error_code = %error_code,
-            error_description = %error_desc,
             "OAuth provider returned error"
         );
         return Err("Authentication was denied or failed. Please try again.".to_string());
