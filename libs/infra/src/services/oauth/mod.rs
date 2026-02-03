@@ -18,7 +18,6 @@ use oauth2::{
     RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
 use once_cell::sync::Lazy;
-#[cfg(not(test))]
 use sha2::{Digest, Sha256};
 use tracing::{debug, error, warn};
 
@@ -81,6 +80,32 @@ impl OAuthConfig {
     }
 }
 
+/// Trait for securely storing OAuth tokens.
+pub trait TokenStorage: Send + Sync {
+    fn store(&self, service: &str, user_key: &str, secret: &str) -> Result<(), String>;
+}
+
+/// Default implementation using OS keyring.
+pub struct KeyringTokenStorage;
+
+impl TokenStorage for KeyringTokenStorage {
+    fn store(&self, service: &str, user_key: &str, secret: &str) -> Result<(), String> {
+        #[cfg(not(test))]
+        {
+            let entry = keyring::Entry::new(service, user_key).map_err(|e| e.to_string())?;
+            entry.set_password(secret).map_err(|e| e.to_string())?;
+            Ok(())
+        }
+        #[cfg(test)]
+        {
+            // In tests, just return Ok or store in memory if needed (for now no-op is fine for default)
+            // But ideally we use a mock in tests.
+            let _ = (service, user_key, secret);
+            Ok(())
+        }
+    }
+}
+
 /// OAuth2 service implementation using PKCE flow.
 ///
 /// This implementation:
@@ -89,6 +114,7 @@ impl OAuthConfig {
 /// - Fetches user info from provider APIs
 pub struct OAuthServiceImpl {
     config: OAuthConfig,
+    token_storage: Box<dyn TokenStorage>,
 }
 
 impl OAuthServiceImpl {
@@ -111,7 +137,19 @@ impl OAuthServiceImpl {
     /// Creates a new OAuth service with the given configuration.
     #[must_use]
     pub fn new(config: OAuthConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            token_storage: Box::new(KeyringTokenStorage),
+        }
+    }
+
+    /// Creates a new OAuth service with injected storage (for testing).
+    #[cfg(test)]
+    pub fn new_with_storage(config: OAuthConfig, storage: Box<dyn TokenStorage>) -> Self {
+        Self {
+            config,
+            token_storage: storage,
+        }
     }
 
     /// Gets client ID and URLs for a provider.
@@ -446,7 +484,6 @@ impl OAuthService for OAuthServiceImpl {
         // Securely store the token in the OS keyring (best effort).
         // NOTE: The app session (JWT) is stored via tauri secure storage; provider token storage
         // should not hard-fail the entire login on platforms where keyring is unavailable.
-        #[cfg(not(test))]
         {
             let service_name = "aroeira-oauth";
             let user_key = format!("{}:{}", user.provider, user.provider_user_id);
@@ -462,8 +499,9 @@ impl OAuthService for OAuthServiceImpl {
                 "refresh_token": token_result.refresh_token().map(|t| t.secret()),
             });
 
-            match keyring::Entry::new(service_name, &user_key_hash)
-                .and_then(|entry| entry.set_password(&token_payload.to_string()))
+            match self
+                .token_storage
+                .store(service_name, &user_key_hash, &token_payload.to_string())
             {
                 Ok(()) => debug!("Securely stored OAuth token for {}", user_key_hash),
                 Err(e) => {
@@ -532,6 +570,11 @@ async fn async_http_client(
         .body(request.body().clone());
 
     for (name, value) in request.headers() {
+        // Skip Content-Length as reqwest calculates it automatically from the body.
+        // Forwarding it can cause mismatches (e.g. if compression is involved) or errors.
+        if name.as_str().eq_ignore_ascii_case("content-length") {
+            continue;
+        }
         request_builder = request_builder.header(name, value);
     }
 
