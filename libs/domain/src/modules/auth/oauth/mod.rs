@@ -97,7 +97,7 @@ pub enum OAuthError {
 ///
 /// - `code_verifier` must be 43-128 characters
 /// - Must use only unreserved URI characters: [A-Z] / [a-z] / [0-9] / "-" / "." / "_" / "~"
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthPkceSession {
     /// Random state value for CSRF protection
     pub state: String,
