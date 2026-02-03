@@ -1,8 +1,387 @@
-//! OAuth2 Service Implementation - TDD RED PHASE
+//! OAuth2 Service Implementation - TDD GREEN PHASE
 //!
-//! This module will implement the `OAuthService` trait from the domain layer.
-//! Currently contains only test definitions - implementation follows in GREEN phase.
+//! This module implements the `OAuthService` trait from the domain layer
+//! using the `oauth2` crate for PKCE-based authentication flows.
+//!
+//! # Security Notes
+//!
+//! - Uses PKCE (RFC 7636) for all flows - no client secrets
+//! - State parameter provides CSRF protection
+//! - Tokens are not stored here - caller is responsible for secure storage
 
-// Tests are defined but will fail to compile until types are implemented
+use async_trait::async_trait;
+use domain::modules::auth::oauth::{
+    AuthProvider, OAuthError, OAuthPkceSession, OAuthService, OAuthUser,
+};
+use oauth2::{
+    AuthUrl, AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge, PkceCodeVerifier,
+    RedirectUrl, Scope, TokenResponse, TokenUrl,
+};
+use tracing::{debug, error, warn};
+
+/// Configuration for OAuth2 providers.
+///
+/// Client IDs are loaded from environment variables.
+/// No client secrets are used (public client with PKCE).
+#[derive(Debug, Clone)]
+pub struct OAuthConfig {
+    /// Google OAuth2 client ID (optional)
+    pub google_client_id: Option<String>,
+    /// GitHub OAuth2 client ID (optional)
+    pub github_client_id: Option<String>,
+    /// Redirect URI for OAuth callbacks (e.g., "aroeira://auth/callback")
+    pub redirect_uri: String,
+}
+
+impl OAuthConfig {
+    /// Creates config from environment variables.
+    ///
+    /// Looks for:
+    /// - `GOOGLE_CLIENT_ID`
+    /// - `GITHUB_CLIENT_ID`
+    #[must_use]
+    pub fn from_env(redirect_uri: String) -> Self {
+        Self {
+            google_client_id: std::env::var("GOOGLE_CLIENT_ID").ok(),
+            github_client_id: std::env::var("GITHUB_CLIENT_ID").ok(),
+            redirect_uri,
+        }
+    }
+}
+
+/// OAuth2 service implementation using PKCE flow.
+///
+/// This implementation:
+/// - Generates authorization URLs with PKCE challenges
+/// - Exchanges authorization codes for tokens
+/// - Fetches user info from provider APIs
+pub struct OAuthServiceImpl {
+    config: OAuthConfig,
+}
+
+impl OAuthServiceImpl {
+    /// Google OAuth2 authorization endpoint
+    const GOOGLE_AUTH_URL: &'static str = "https://accounts.google.com/o/oauth2/v2/auth";
+    /// Google OAuth2 token endpoint
+    const GOOGLE_TOKEN_URL: &'static str = "https://oauth2.googleapis.com/token";
+    /// Google userinfo endpoint
+    const GOOGLE_USERINFO_URL: &'static str = "https://openidconnect.googleapis.com/v1/userinfo";
+
+    /// GitHub OAuth2 authorization endpoint
+    const GITHUB_AUTH_URL: &'static str = "https://github.com/login/oauth/authorize";
+    /// GitHub OAuth2 token endpoint
+    const GITHUB_TOKEN_URL: &'static str = "https://github.com/login/oauth/access_token";
+    /// GitHub user API endpoint
+    const GITHUB_USER_URL: &'static str = "https://api.github.com/user";
+    /// GitHub user emails API endpoint
+    const GITHUB_EMAILS_URL: &'static str = "https://api.github.com/user/emails";
+
+    /// Creates a new OAuth service with the given configuration.
+    #[must_use]
+    pub fn new(config: OAuthConfig) -> Self {
+        Self { config }
+    }
+
+    /// Gets client ID and URLs for a provider.
+    fn get_provider_config(
+        &self,
+        provider: AuthProvider,
+    ) -> Result<(&str, &'static str, &'static str), OAuthError> {
+        match provider {
+            AuthProvider::Google => {
+                let client_id = self
+                    .config
+                    .google_client_id
+                    .as_ref()
+                    .ok_or_else(|| OAuthError::ProviderNotConfigured("Google".to_string()))?;
+                Ok((client_id.as_str(), Self::GOOGLE_AUTH_URL, Self::GOOGLE_TOKEN_URL))
+            }
+            AuthProvider::GitHub => {
+                let client_id = self
+                    .config
+                    .github_client_id
+                    .as_ref()
+                    .ok_or_else(|| OAuthError::ProviderNotConfigured("GitHub".to_string()))?;
+                Ok((client_id.as_str(), Self::GITHUB_AUTH_URL, Self::GITHUB_TOKEN_URL))
+            }
+        }
+    }
+
+    /// Returns the scopes required for each provider.
+    fn get_scopes(provider: AuthProvider) -> Vec<Scope> {
+        match provider {
+            AuthProvider::Google => vec![
+                Scope::new("openid".to_string()),
+                Scope::new("email".to_string()),
+                Scope::new("profile".to_string()),
+            ],
+            AuthProvider::GitHub => vec![
+                Scope::new("read:user".to_string()),
+                Scope::new("user:email".to_string()),
+            ],
+        }
+    }
+
+    /// Fetches user info from Google's userinfo endpoint.
+    async fn fetch_google_user(&self, access_token: &str) -> Result<OAuthUser, OAuthError> {
+        let client = reqwest::Client::new();
+        let response = client
+            .get(Self::GOOGLE_USERINFO_URL)
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(OAuthError::UserInfoFailed(format!(
+                "Google userinfo returned status {}",
+                response.status()
+            )));
+        }
+
+        let user_info: GoogleUserInfo = response
+            .json()
+            .await
+            .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
+
+        Ok(OAuthUser {
+            provider: AuthProvider::Google,
+            provider_user_id: user_info.sub,
+            email: user_info.email,
+            name: user_info.name,
+            avatar_url: user_info.picture,
+        })
+    }
+
+    /// Fetches user info from GitHub's API.
+    async fn fetch_github_user(&self, access_token: &str) -> Result<OAuthUser, OAuthError> {
+        let client = reqwest::Client::new();
+
+        // Fetch user profile
+        let user_response = client
+            .get(Self::GITHUB_USER_URL)
+            .header("User-Agent", "Aroeira-Desktop")
+            .header("Accept", "application/vnd.github+json")
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
+
+        if !user_response.status().is_success() {
+            return Err(OAuthError::UserInfoFailed(format!(
+                "GitHub user API returned status {}",
+                user_response.status()
+            )));
+        }
+
+        let user_info: GitHubUserInfo = user_response
+            .json()
+            .await
+            .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
+
+        // If email is not public, fetch from emails endpoint
+        let email = if let Some(email) = user_info.email {
+            email
+        } else {
+            self.fetch_github_primary_email(access_token).await?
+        };
+
+        Ok(OAuthUser {
+            provider: AuthProvider::GitHub,
+            provider_user_id: user_info.id.to_string(),
+            email,
+            name: user_info.name,
+            avatar_url: user_info.avatar_url,
+        })
+    }
+
+    /// Fetches primary email from GitHub's emails endpoint.
+    async fn fetch_github_primary_email(&self, access_token: &str) -> Result<String, OAuthError> {
+        let client = reqwest::Client::new();
+        let response = client
+            .get(Self::GITHUB_EMAILS_URL)
+            .header("User-Agent", "Aroeira-Desktop")
+            .header("Accept", "application/vnd.github+json")
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(OAuthError::UserInfoFailed(format!(
+                "GitHub emails API returned status {}",
+                response.status()
+            )));
+        }
+
+        let emails: Vec<GitHubEmail> = response
+            .json()
+            .await
+            .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
+
+        // Find primary email, or first verified email, or first email
+        emails
+            .iter()
+            .find(|e| e.primary && e.verified)
+            .or_else(|| emails.iter().find(|e| e.verified))
+            .or_else(|| emails.first())
+            .map(|e| e.email.clone())
+            .ok_or_else(|| OAuthError::UserInfoFailed("No email found".to_string()))
+    }
+}
+
+#[async_trait]
+impl OAuthService for OAuthServiceImpl {
+    async fn generate_authorization_url(
+        &self,
+        provider: AuthProvider,
+    ) -> Result<(String, OAuthPkceSession), OAuthError> {
+        debug!("Generating authorization URL for {:?}", provider);
+
+        let (client_id, auth_url_str, token_url_str) = self.get_provider_config(provider)?;
+
+        // Parse URLs
+        let auth_url = AuthUrl::new(auth_url_str.to_string())
+            .map_err(|e| OAuthError::CodeExchangeFailed(e.to_string()))?;
+        let token_url = TokenUrl::new(token_url_str.to_string())
+            .map_err(|e| OAuthError::CodeExchangeFailed(e.to_string()))?;
+        let redirect_url = RedirectUrl::new(self.config.redirect_uri.clone())
+            .map_err(|e| OAuthError::CodeExchangeFailed(e.to_string()))?;
+
+        // Create OAuth2 client
+        let client = oauth2::basic::BasicClient::new(ClientId::new(client_id.to_string()))
+            .set_auth_uri(auth_url)
+            .set_token_uri(token_url)
+            .set_redirect_uri(redirect_url);
+
+        // Generate PKCE challenge
+        let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+
+        // Build authorization URL with scopes and PKCE
+        let mut auth_request = client.authorize_url(CsrfToken::new_random);
+        for scope in Self::get_scopes(provider) {
+            auth_request = auth_request.add_scope(scope);
+        }
+        let (auth_url, csrf_state) = auth_request.set_pkce_challenge(pkce_challenge).url();
+
+        // Create session
+        let session = OAuthPkceSession::new(
+            csrf_state.secret().clone(),
+            pkce_verifier.secret().clone(),
+            provider,
+        );
+
+        debug!(
+            "Generated auth URL for {:?}, state: {}",
+            provider, session.state
+        );
+
+        Ok((auth_url.to_string(), session))
+    }
+
+    async fn exchange_code(
+        &self,
+        session: &OAuthPkceSession,
+        code: String,
+    ) -> Result<OAuthUser, OAuthError> {
+        debug!(
+            "Exchanging code for {:?}, state: {}",
+            session.provider, session.state
+        );
+
+        // Validate session
+        if !session.is_valid() {
+            warn!("Invalid session: state or verifier failed validation");
+            return Err(OAuthError::SessionNotFound);
+        }
+
+        if session.is_expired() {
+            warn!("Session expired for state: {}", session.state);
+            return Err(OAuthError::SessionNotFound);
+        }
+
+        let (client_id, auth_url_str, token_url_str) = self.get_provider_config(session.provider)?;
+
+        // Parse URLs
+        let auth_url = AuthUrl::new(auth_url_str.to_string())
+            .map_err(|e| OAuthError::CodeExchangeFailed(e.to_string()))?;
+        let token_url = TokenUrl::new(token_url_str.to_string())
+            .map_err(|e| OAuthError::CodeExchangeFailed(e.to_string()))?;
+        let redirect_url = RedirectUrl::new(self.config.redirect_uri.clone())
+            .map_err(|e| OAuthError::CodeExchangeFailed(e.to_string()))?;
+
+        // Create OAuth2 client
+        let client = oauth2::basic::BasicClient::new(ClientId::new(client_id.to_string()))
+            .set_auth_uri(auth_url)
+            .set_token_uri(token_url)
+            .set_redirect_uri(redirect_url);
+
+        // Create PKCE verifier from session
+        let pkce_verifier = PkceCodeVerifier::new(session.pkce_verifier.clone());
+
+        // Create HTTP client for token exchange
+        let http_client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| OAuthError::TokenRequestFailed(e.to_string()))?;
+
+        // Exchange code for token
+        let token_result = client
+            .exchange_code(AuthorizationCode::new(code))
+            .set_pkce_verifier(pkce_verifier)
+            .request_async(&http_client)
+            .await
+            .map_err(|e| {
+                error!("Token exchange failed: {:?}", e);
+                OAuthError::TokenRequestFailed(e.to_string())
+            })?;
+
+        let access_token = token_result.access_token().secret();
+
+        // Fetch user info based on provider
+        match session.provider {
+            AuthProvider::Google => self.fetch_google_user(access_token).await,
+            AuthProvider::GitHub => self.fetch_github_user(access_token).await,
+        }
+    }
+}
+
+/// Google userinfo response structure
+#[derive(serde::Deserialize)]
+struct GoogleUserInfo {
+    /// Unique user identifier
+    sub: String,
+    /// User's email
+    email: String,
+    /// User's full name
+    name: Option<String>,
+    /// Profile picture URL
+    picture: Option<String>,
+}
+
+/// GitHub user API response structure
+#[derive(serde::Deserialize)]
+struct GitHubUserInfo {
+    /// Unique user identifier
+    id: u64,
+    /// User's email (may be null if not public)
+    email: Option<String>,
+    /// User's name
+    name: Option<String>,
+    /// Avatar URL
+    avatar_url: Option<String>,
+}
+
+/// GitHub email API response structure
+#[derive(serde::Deserialize)]
+struct GitHubEmail {
+    /// Email address
+    email: String,
+    /// Whether this is the primary email
+    primary: bool,
+    /// Whether the email is verified
+    verified: bool,
+}
+
 #[cfg(test)]
 mod tests;
