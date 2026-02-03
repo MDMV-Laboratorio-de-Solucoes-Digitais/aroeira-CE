@@ -85,8 +85,14 @@ impl AppConfig {
         Self::validate_secret(&rate_limit_key, "RATE_LIMIT_KEY")?;
 
         // Load OAuth client IDs from environment (optional)
-        let google_client_id = std::env::var("GOOGLE_CLIENT_ID").ok();
-        let github_client_id = std::env::var("GITHUB_CLIENT_ID").ok();
+        let google_client_id = std::env::var("GOOGLE_CLIENT_ID")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let github_client_id = std::env::var("GITHUB_CLIENT_ID")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
 
         if google_client_id.is_none() && github_client_id.is_none() {
             info!(
