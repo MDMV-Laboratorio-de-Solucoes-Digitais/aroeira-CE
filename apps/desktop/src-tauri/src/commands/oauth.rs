@@ -516,7 +516,11 @@ mod tests {
 
         assert!(result.is_err());
         // Error should be generic, not exposing internal validation details
-        assert!(result.unwrap_err().contains("Invalid authentication callback"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Invalid authentication callback")
+        );
     }
 
     #[test]
@@ -526,7 +530,11 @@ mod tests {
 
         assert!(result.is_err());
         // Error should be generic, not exposing internal validation details
-        assert!(result.unwrap_err().contains("Invalid authentication callback"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Invalid authentication callback")
+        );
     }
 
     #[test]
@@ -536,7 +544,11 @@ mod tests {
 
         assert!(result.is_err());
         // Error should be generic, not exposing internal validation details
-        assert!(result.unwrap_err().contains("Invalid authentication callback"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Invalid authentication callback")
+        );
     }
 
     #[test]
@@ -546,7 +558,11 @@ mod tests {
 
         assert!(result.is_err());
         // Error should be generic, not exposing internal validation details
-        assert!(result.unwrap_err().contains("Invalid authentication callback"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Invalid authentication callback")
+        );
     }
 
     #[test]
@@ -556,6 +572,10 @@ mod tests {
 
         assert!(result.is_err());
         // Error should be generic, not exposing internal validation details
-        assert!(result.unwrap_err().contains("Invalid authentication callback"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Invalid authentication callback")
+        );
     }
 }
