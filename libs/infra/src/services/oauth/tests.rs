@@ -368,13 +368,13 @@ async fn exchange_code_fails_on_invalid_session() {
 
 #[tokio::test]
 async fn exchange_code_success_google() {
-    use wiremock::{MockServer, Mock, ResponseTemplate};
-    use wiremock::matchers::{method, path};
     use domain::modules::auth::oauth::OAuthPkceSession;
-    
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
     // Start mock server
     let mock_server = MockServer::start().await;
-    
+
     // Config with mock URLs
     let config = OAuthConfig {
         google_client_id: Some("client-id".to_string()),
@@ -388,7 +388,7 @@ async fn exchange_code_success_google() {
         github_user_url: None,
         github_emails_url: None,
     };
-    
+
     let service = OAuthServiceImpl::new(config);
 
     // Mock Token Endpoint
@@ -421,7 +421,7 @@ async fn exchange_code_success_google() {
         "a".repeat(43),
         AuthProvider::Google,
     );
-    
+
     // Execute exchange
     let user = service
         .exchange_code(&session, "auth-code".to_string())
@@ -436,13 +436,13 @@ async fn exchange_code_success_google() {
 
 #[tokio::test]
 async fn exchange_code_success_github() {
+    use domain::modules::auth::oauth::OAuthPkceSession;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
-    use domain::modules::auth::oauth::OAuthPkceSession;
 
     // Start mock server
     let mock_server = MockServer::start().await;
-    
+
     // Config with mock URLs
     let config = OAuthConfig {
         google_client_id: None,
@@ -508,7 +508,7 @@ async fn exchange_code_success_github() {
         "a".repeat(43),
         AuthProvider::GitHub,
     );
-    
+
     // Execute exchange
     let user = service
         .exchange_code(&session, "auth-code".to_string())

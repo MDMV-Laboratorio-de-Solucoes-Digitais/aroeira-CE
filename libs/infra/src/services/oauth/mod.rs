@@ -51,7 +51,7 @@ pub struct OAuthConfig {
     pub google_auth_url: Option<String>,
     pub google_token_url: Option<String>,
     pub google_userinfo_url: Option<String>,
-    
+
     pub github_auth_url: Option<String>,
     pub github_token_url: Option<String>,
     pub github_user_url: Option<String>,
@@ -128,8 +128,14 @@ impl OAuthServiceImpl {
                     .ok_or_else(|| OAuthError::ProviderNotConfigured("Google".to_string()))?;
                 Ok((
                     client_id.as_str(),
-                    self.config.google_auth_url.as_deref().unwrap_or(Self::GOOGLE_AUTH_URL),
-                    self.config.google_token_url.as_deref().unwrap_or(Self::GOOGLE_TOKEN_URL),
+                    self.config
+                        .google_auth_url
+                        .as_deref()
+                        .unwrap_or(Self::GOOGLE_AUTH_URL),
+                    self.config
+                        .google_token_url
+                        .as_deref()
+                        .unwrap_or(Self::GOOGLE_TOKEN_URL),
                 ))
             }
             AuthProvider::GitHub => {
@@ -140,8 +146,14 @@ impl OAuthServiceImpl {
                     .ok_or_else(|| OAuthError::ProviderNotConfigured("GitHub".to_string()))?;
                 Ok((
                     client_id.as_str(),
-                    self.config.github_auth_url.as_deref().unwrap_or(Self::GITHUB_AUTH_URL),
-                    self.config.github_token_url.as_deref().unwrap_or(Self::GITHUB_TOKEN_URL),
+                    self.config
+                        .github_auth_url
+                        .as_deref()
+                        .unwrap_or(Self::GITHUB_AUTH_URL),
+                    self.config
+                        .github_token_url
+                        .as_deref()
+                        .unwrap_or(Self::GITHUB_TOKEN_URL),
                 ))
             }
         }
@@ -164,7 +176,11 @@ impl OAuthServiceImpl {
 
     /// Fetches user info from Google's userinfo endpoint.
     async fn fetch_google_user(&self, access_token: &str) -> Result<OAuthUser, OAuthError> {
-        let url = self.config.google_userinfo_url.as_deref().unwrap_or(Self::GOOGLE_USERINFO_URL);
+        let url = self
+            .config
+            .google_userinfo_url
+            .as_deref()
+            .unwrap_or(Self::GOOGLE_USERINFO_URL);
         let response = ASYNC_HTTP_CLIENT
             .get(url)
             .bearer_auth(access_token)
@@ -186,7 +202,9 @@ impl OAuthServiceImpl {
 
         // Security Critical: Ensure email is verified by Google
         if !user_info.email_verified {
-            return Err(OAuthError::UserInfoFailed("Google email not verified".to_string()));
+            return Err(OAuthError::UserInfoFailed(
+                "Google email not verified".to_string(),
+            ));
         }
 
         Ok(OAuthUser {
@@ -202,7 +220,11 @@ impl OAuthServiceImpl {
     /// Fetches user info from GitHub's API.
     async fn fetch_github_user(&self, access_token: &str) -> Result<OAuthUser, OAuthError> {
         // Fetch user profile
-        let url = self.config.github_user_url.as_deref().unwrap_or(Self::GITHUB_USER_URL);
+        let url = self
+            .config
+            .github_user_url
+            .as_deref()
+            .unwrap_or(Self::GITHUB_USER_URL);
         let user_response = ASYNC_HTTP_CLIENT
             .get(url)
             .header("User-Agent", "Aroeira-Desktop")
@@ -238,8 +260,15 @@ impl OAuthServiceImpl {
     }
 
     /// Fetches primary email from GitHub's emails endpoint.
-    async fn fetch_github_primary_email(&self, access_token: &str) -> Result<(String, bool), OAuthError> {
-        let url = self.config.github_emails_url.as_deref().unwrap_or(Self::GITHUB_EMAILS_URL);
+    async fn fetch_github_primary_email(
+        &self,
+        access_token: &str,
+    ) -> Result<(String, bool), OAuthError> {
+        let url = self
+            .config
+            .github_emails_url
+            .as_deref()
+            .unwrap_or(Self::GITHUB_EMAILS_URL);
         let response = ASYNC_HTTP_CLIENT
             .get(url)
             .header("User-Agent", "Aroeira-Desktop")
@@ -328,7 +357,9 @@ impl OAuthService for OAuthServiceImpl {
         // Validate session
         if !session.is_valid() {
             warn!("Invalid PKCE session (failed validation)");
-            return Err(OAuthError::CodeExchangeFailed("Invalid PKCE session".to_string()));
+            return Err(OAuthError::CodeExchangeFailed(
+                "Invalid PKCE session".to_string(),
+            ));
         }
 
         if session.is_expired() {
@@ -385,18 +416,21 @@ impl OAuthService for OAuthServiceImpl {
         };
 
         // Execute with timeout
-        let token_result = tokio::time::timeout(std::time::Duration::from_secs(30), exchange_future)
-            .await
-            .map_err(|_| OAuthError::TokenRequestFailed("Token exchange timed out".to_string()))?
-            .map_err(|_e| {
-                // Sanitize error logging: avoid logging full error which might contain sensitive data
-                // Just log that it failed and the provider
-                error!("Token exchange failed for provider {:?}", session.provider);
-                
-                // Return a generic error description, or specific if safe (e.g. "access_denied")
-                // For now, keep it generic to be safe
-                OAuthError::TokenRequestFailed("Provider rejected token request".to_string())
-            })?;
+        let token_result =
+            tokio::time::timeout(std::time::Duration::from_secs(30), exchange_future)
+                .await
+                .map_err(|_| {
+                    OAuthError::TokenRequestFailed("Token exchange timed out".to_string())
+                })?
+                .map_err(|_e| {
+                    // Sanitize error logging: avoid logging full error which might contain sensitive data
+                    // Just log that it failed and the provider
+                    error!("Token exchange failed for provider {:?}", session.provider);
+
+                    // Return a generic error description, or specific if safe (e.g. "access_denied")
+                    // For now, keep it generic to be safe
+                    OAuthError::TokenRequestFailed("Provider rejected token request".to_string())
+                })?;
 
         let access_token = token_result.access_token().secret();
 
@@ -427,7 +461,10 @@ impl OAuthService for OAuthServiceImpl {
             })?;
 
             entry.set_password(access_token).map_err(|e| {
-                error!("Failed to securely store OAuth token for {}: {}", user_key_hash, e);
+                error!(
+                    "Failed to securely store OAuth token for {}: {}",
+                    user_key_hash, e
+                );
                 OAuthError::CodeExchangeFailed("Failed to store token securely".to_string())
             })?;
 
@@ -494,16 +531,11 @@ async fn async_http_client(
         request_builder = request_builder.header(name, value);
     }
 
-    let response = request_builder
-        .send()
-        .await?;
+    let response = request_builder.send().await?;
 
     let status = response.status();
     let headers = response.headers().clone();
-    let body = response
-        .bytes()
-        .await?
-        .to_vec();
+    let body = response.bytes().await?.to_vec();
 
     let mut resp = oauth2::HttpResponse::new(body);
     *resp.status_mut() = status;
