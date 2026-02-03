@@ -249,31 +249,65 @@ impl Default for OAuthSessionStore {
 /// # Returns
 ///
 /// * `Ok((code, state))` - The authorization code and state parameter
-/// * `Err(String)` - Description of what went wrong
+/// * `Err(String)` - Generic user-safe error message (details logged internally)
 ///
 /// # Errors
 ///
-/// Returns error if:
+/// Returns a generic error if:
 /// - URL cannot be parsed
 /// - URL scheme is not "aroeira"
 /// - URL host is not "auth" or path is not "/callback"
-/// - Code or state parameters are missing
+/// - Code or state parameters are missing or empty
 /// - Error parameter is present (OAuth error response)
+///
+/// # Security
+///
+/// This function returns generic error messages to prevent leaking internal
+/// validation logic. Specific details are logged internally for debugging.
 pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), String> {
     use crate::constants::{OAUTH_CALLBACK_HOST, OAUTH_CALLBACK_PATH, OAUTH_CALLBACK_SCHEME};
 
-    let url = Url::parse(callback_url).map_err(|_| "Invalid callback URL format")?;
+    // Generic error message for all validation failures
+    const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
+
+    let url = Url::parse(callback_url).map_err(|e| {
+        tracing::warn!("OAuth callback URL parse error: {e}");
+        GENERIC_ERROR
+    })?;
 
     // Enforce expected deep-link callback origin using constants
     if url.scheme() != OAUTH_CALLBACK_SCHEME {
-        return Err("Invalid callback URL scheme".to_string());
+        tracing::warn!(
+            expected = OAUTH_CALLBACK_SCHEME,
+            actual = url.scheme(),
+            "OAuth callback: invalid scheme"
+        );
+        return Err(GENERIC_ERROR.to_string());
     }
     if url.host_str() != Some(OAUTH_CALLBACK_HOST) || url.path() != OAUTH_CALLBACK_PATH {
-        return Err("Invalid callback URL target".to_string());
+        tracing::warn!(
+            expected_host = OAUTH_CALLBACK_HOST,
+            expected_path = OAUTH_CALLBACK_PATH,
+            actual_host = ?url.host_str(),
+            actual_path = url.path(),
+            "OAuth callback: invalid host or path"
+        );
+        return Err(GENERIC_ERROR.to_string());
     }
 
-    // Check for error response (use generic message for user)
-    if url.query_pairs().any(|(k, _)| k == "error") {
+    // Check for error response from OAuth provider
+    if let Some((_, error_code)) = url.query_pairs().find(|(k, _)| k == "error") {
+        // Log error details for debugging but return generic message
+        let error_desc = url
+            .query_pairs()
+            .find(|(k, _)| k == "error_description")
+            .map(|(_, v)| v.to_string())
+            .unwrap_or_else(|| "No description".to_string());
+        tracing::info!(
+            error_code = %error_code,
+            error_description = %error_desc,
+            "OAuth provider returned error"
+        );
         return Err("Authentication was denied or failed. Please try again.".to_string());
     }
 
@@ -283,14 +317,20 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
         .find(|(k, _)| k == "code")
         .map(|(_, v)| v.to_string())
         .filter(|v| !v.is_empty())
-        .ok_or("Missing or empty authorization code in callback")?;
+        .ok_or_else(|| {
+            tracing::warn!("OAuth callback: missing or empty code parameter");
+            GENERIC_ERROR.to_string()
+        })?;
 
     let state = url
         .query_pairs()
         .find(|(k, _)| k == "state")
         .map(|(_, v)| v.to_string())
         .filter(|v| !v.is_empty())
-        .ok_or("Missing or empty state parameter in callback")?;
+        .ok_or_else(|| {
+            tracing::warn!("OAuth callback: missing or empty state parameter");
+            GENERIC_ERROR.to_string()
+        })?;
 
     Ok((code, state))
 }
@@ -475,7 +515,8 @@ mod tests {
         let result = parse_oauth_callback_url(url);
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("scheme"));
+        // Error should be generic, not exposing internal validation details
+        assert!(result.unwrap_err().contains("Invalid authentication callback"));
     }
 
     #[test]
@@ -484,7 +525,8 @@ mod tests {
         let result = parse_oauth_callback_url(url);
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("target"));
+        // Error should be generic, not exposing internal validation details
+        assert!(result.unwrap_err().contains("Invalid authentication callback"));
     }
 
     #[test]
@@ -493,7 +535,8 @@ mod tests {
         let result = parse_oauth_callback_url(url);
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("target"));
+        // Error should be generic, not exposing internal validation details
+        assert!(result.unwrap_err().contains("Invalid authentication callback"));
     }
 
     #[test]
@@ -502,8 +545,8 @@ mod tests {
         let result = parse_oauth_callback_url(url);
 
         assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.contains("empty") || err.contains("Missing"));
+        // Error should be generic, not exposing internal validation details
+        assert!(result.unwrap_err().contains("Invalid authentication callback"));
     }
 
     #[test]
@@ -512,7 +555,7 @@ mod tests {
         let result = parse_oauth_callback_url(url);
 
         assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.contains("empty") || err.contains("Missing"));
+        // Error should be generic, not exposing internal validation details
+        assert!(result.unwrap_err().contains("Invalid authentication callback"));
     }
 }
