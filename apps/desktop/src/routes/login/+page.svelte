@@ -85,21 +85,14 @@
     // Prevent concurrent callback processing from multiple deep-link events
     if (oauthCallbackInFlight) return;
 
-    let callbackUrl: URL;
-    try {
-      callbackUrl = new URL(rawUrl);
-    } catch {
+    // Defensive bound to avoid processing extremely large deep-link payloads
+    if (rawUrl.length > 8192) return;
+
+    // The backend performs robust validation of the callback URL.
+    // We only do a basic check here to avoid invoking the backend for unrelated deep links.
+    if (!rawUrl.startsWith("aroeira:")) {
       return;
     }
-
-    const schemeOk = callbackUrl.protocol.toLowerCase() === "aroeira:";
-    const normalizedPath = callbackUrl.pathname.replace(/\/+$/, "") || "/";
-    const canonicalOk =
-      callbackUrl.hostname === "auth" && normalizedPath === "/callback";
-    const hostlessOk =
-      callbackUrl.hostname === "" && normalizedPath === "/auth/callback";
-
-    if (!schemeOk || (!canonicalOk && !hostlessOk)) return;
 
     // Set in-flight guard before any async operations
     oauthCallbackInFlight = true;
