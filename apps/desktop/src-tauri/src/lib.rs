@@ -89,7 +89,9 @@ impl AppConfig {
         let github_client_id = std::env::var("GITHUB_CLIENT_ID").ok();
 
         if google_client_id.is_none() && github_client_id.is_none() {
-            info!("No OAuth providers configured. Set GOOGLE_CLIENT_ID or GITHUB_CLIENT_ID to enable OAuth.");
+            info!(
+                "No OAuth providers configured. Set GOOGLE_CLIENT_ID or GITHUB_CLIENT_ID to enable OAuth."
+            );
         }
 
         Ok(Self {

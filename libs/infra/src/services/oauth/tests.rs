@@ -81,20 +81,14 @@ async fn generate_url_for_github_includes_required_params() {
         url.contains("client_id=test-github-client-id"),
         "URL should contain client_id"
     );
-    assert!(
-        url.contains("github.com"),
-        "URL should be for github.com"
-    );
+    assert!(url.contains("github.com"), "URL should be for github.com");
     assert!(
         url.contains("state="),
         "URL should contain state for CSRF protection"
     );
 
     // GitHub scopes
-    assert!(
-        url.contains("scope="),
-        "URL should contain scope parameter"
-    );
+    assert!(url.contains("scope="), "URL should contain scope parameter");
     assert!(
         url.contains("read:user") || url.contains("user"),
         "URL should request user scope for GitHub"
@@ -266,7 +260,9 @@ async fn exchange_code_fails_on_expired_session() {
     );
     session.created_at = Utc::now() - Duration::minutes(15); // 15 min old
 
-    let result = service.exchange_code(&session, "some-code".to_string()).await;
+    let result = service
+        .exchange_code(&session, "some-code".to_string())
+        .await;
 
     assert!(result.is_err(), "Should fail on expired session");
     let err = result.unwrap_err().to_string();
@@ -293,7 +289,9 @@ async fn exchange_code_fails_on_invalid_session() {
         AuthProvider::Google,
     );
 
-    let result = service.exchange_code(&session, "some-code".to_string()).await;
+    let result = service
+        .exchange_code(&session, "some-code".to_string())
+        .await;
 
     assert!(result.is_err(), "Should fail on invalid session");
 }

@@ -94,7 +94,11 @@ impl OAuthServiceImpl {
                     .google_client_id
                     .as_ref()
                     .ok_or_else(|| OAuthError::ProviderNotConfigured("Google".to_string()))?;
-                Ok((client_id.as_str(), Self::GOOGLE_AUTH_URL, Self::GOOGLE_TOKEN_URL))
+                Ok((
+                    client_id.as_str(),
+                    Self::GOOGLE_AUTH_URL,
+                    Self::GOOGLE_TOKEN_URL,
+                ))
             }
             AuthProvider::GitHub => {
                 let client_id = self
@@ -102,7 +106,11 @@ impl OAuthServiceImpl {
                     .github_client_id
                     .as_ref()
                     .ok_or_else(|| OAuthError::ProviderNotConfigured("GitHub".to_string()))?;
-                Ok((client_id.as_str(), Self::GITHUB_AUTH_URL, Self::GITHUB_TOKEN_URL))
+                Ok((
+                    client_id.as_str(),
+                    Self::GITHUB_AUTH_URL,
+                    Self::GITHUB_TOKEN_URL,
+                ))
             }
         }
     }
@@ -300,7 +308,8 @@ impl OAuthService for OAuthServiceImpl {
             return Err(OAuthError::SessionNotFound);
         }
 
-        let (client_id, auth_url_str, token_url_str) = self.get_provider_config(session.provider)?;
+        let (client_id, auth_url_str, token_url_str) =
+            self.get_provider_config(session.provider)?;
 
         // Parse URLs
         let auth_url = AuthUrl::new(auth_url_str.to_string())

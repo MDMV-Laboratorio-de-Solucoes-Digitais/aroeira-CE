@@ -97,7 +97,11 @@ pub async fn start_oauth_flow(
     let auth_provider = match provider.to_lowercase().as_str() {
         "google" => AuthProvider::Google,
         "github" => AuthProvider::GitHub,
-        _ => return Err(format!("Unknown provider: {provider}. Use 'google' or 'github'.")),
+        _ => {
+            return Err(format!(
+                "Unknown provider: {provider}. Use 'google' or 'github'."
+            ));
+        }
     };
 
     // Generate authorization URL
