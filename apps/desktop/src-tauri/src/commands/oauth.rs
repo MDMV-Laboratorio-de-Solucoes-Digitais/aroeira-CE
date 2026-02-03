@@ -10,11 +10,11 @@
 //! - Sessions expire after 10 minutes
 //! - Tokens stored in OS secure storage (not in this module)
 
-use infra::utils::hash_password;
 use crate::commands::auth::{get_device_id, handle_successful_login, hash_email_for_logging};
 use crate::state::AppState;
 use domain::modules::auth::oauth::{AuthProvider, OAuthPkceSession, OAuthService, OAuthUser};
 use infra::services::oauth::{OAuthConfig, OAuthServiceImpl};
+use infra::utils::hash_password;
 use parking_lot::Mutex;
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
@@ -98,6 +98,7 @@ impl From<OAuthUser> for OAuthCallbackResponse {
 pub async fn start_oauth_flow(
     provider: AuthProvider,
     oauth_state: State<'_, OAuthState>,
+    state: State<'_, AppState>,
 ) -> Result<StartOAuthResponse, String> {
     // Generate authorization URL
     let (auth_url, session) = oauth_state
@@ -109,12 +110,32 @@ pub async fn start_oauth_flow(
             "Failed to start authentication. Please try again.".to_string()
         })?;
 
-    let state = session.state.clone();
+    let state_param = session.state.clone();
 
-    // Store session for callback verification
-    oauth_state.session_store.store(session);
+    // Store session for callback verification (warm start)
+    oauth_state.session_store.store(session.clone());
 
-    Ok(StartOAuthResponse { auth_url, state })
+    // Persist session for cold start recovery (deep link opens closed app)
+    // One-time use: deleted after successful `take` on callback.
+    // Use underscore separator instead of colon (secure_storage doesn't allow colons in keys)
+    let storage_key = format!("oauth_pkce_session_{}", state_param);
+    let session_json = serde_json::to_string(&session).map_err(|e| {
+        tracing::error!("Failed to serialize OAuth PKCE session: {e}");
+        "Failed to start authentication. Please try again.".to_string()
+    })?;
+    state
+        .secure_storage
+        .save(&storage_key, &session_json)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to persist OAuth session: {e}");
+            "Failed to start authentication. Please try again.".to_string()
+        })?;
+
+    Ok(StartOAuthResponse {
+        auth_url,
+        state: state_param,
+    })
 }
 
 /// Handles an OAuth callback URL from deep linking.
@@ -152,15 +173,43 @@ pub async fn handle_oauth_callback(
     })?;
 
     // Retrieve and consume session (CSRF protection)
-    let session = oauth_state.session_store.take(&state_param).ok_or_else(|| {
-        tracing::warn!(
-            target: "audit",
-            outcome = "failure",
-            reason = "session_not_found",
-            "OAuth authentication failed: invalid or expired session"
-        );
-        "Invalid or expired OAuth session. Please try again.".to_string()
-    })?;
+    // First try in-memory store (warm start), then fall back to secure storage (cold start)
+    let session = match oauth_state.session_store.take(&state_param) {
+        Some(s) => s,
+        None => {
+            // Cold start: try to recover session from secure storage
+            let storage_key = format!("oauth_pkce_session_{}", state_param);
+            let session_json = state
+                .secure_storage
+                .get(&storage_key)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to read persisted OAuth session: {e}");
+                    "Invalid or expired OAuth session. Please try again.".to_string()
+                })?
+                .ok_or_else(|| {
+                    tracing::warn!(
+                        target: "audit",
+                        outcome = "failure",
+                        reason = "session_not_found",
+                        "OAuth authentication failed: invalid or expired session"
+                    );
+                    "Invalid or expired OAuth session. Please try again.".to_string()
+                })?;
+
+            // Consume-once: delete regardless of parse outcome to prevent replay attempts.
+            let _ = state.secure_storage.delete(&storage_key).await;
+
+            serde_json::from_str::<OAuthPkceSession>(&session_json).map_err(|e| {
+                tracing::error!("Failed to deserialize persisted OAuth session: {e}");
+                "Invalid or expired OAuth session. Please try again.".to_string()
+            })?
+        }
+    };
+
+    // Also clean up persisted session if it was found in memory (consumed via in-memory store)
+    let storage_key = format!("oauth_pkce_session_{}", state_param);
+    let _ = state.secure_storage.delete(&storage_key).await;
 
     // Exchange code for user info
     let user = match oauth_state
@@ -170,14 +219,19 @@ pub async fn handle_oauth_callback(
     {
         Ok(user) => user,
         Err(e) => {
-            // Log failure with context
+            // Log failure with context - sanitize error to avoid leaking sensitive provider data
             tracing::warn!(
                 target: "audit",
                 outcome = "failure",
                 reason = "code_exchange_failed",
                 "OAuth authentication failed: code exchange error"
             );
-            tracing::error!("OAuth code exchange error details: {e}");
+            // Log only error type/category, not full details which may contain tokens/PII
+            tracing::error!(
+                error_type = std::any::type_name_of_val(&e),
+                "OAuth code exchange failed for provider {:?}",
+                session.provider
+            );
 
             // Security: Do NOT restore session on failure.
             // OAuth2 state/code should be one-time use to prevent replay attacks.
@@ -191,7 +245,7 @@ pub async fn handle_oauth_callback(
     // 1. Look up user by email
     // 2. Create user if not exists
     // 3. Create session (JWT)
-    
+
     let user_id = match state.user_repo.find_by_email(&user.email).await {
         Ok(Some(mut u)) => {
             if user.email_verified && !u.email_verified {
@@ -212,12 +266,20 @@ pub async fn handle_oauth_callback(
             // Generate a random high-entropy password that will never be shown to the user
             // This ensures the account cannot be accessed via password login unless explicitly reset
             let oauth_random_password = format!("oauth:{}:{}", session.provider, Uuid::new_v4());
-            
+
             // Use infra's hash_password which handles security config correctly
-            let password_hash = hash_password(&oauth_random_password).map_err(|e| {
-                tracing::error!("Failed to hash generated OAuth password: {e}");
-                "Authentication failed".to_string()
-            })?;
+            // spawn_blocking is required because bcrypt is CPU-intensive and would block the async runtime
+            let password_hash =
+                tauri::async_runtime::spawn_blocking(move || hash_password(&oauth_random_password))
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Task join error during password hashing: {e}");
+                        "Authentication failed".to_string()
+                    })?
+                    .map_err(|e| {
+                        tracing::error!("Failed to hash generated OAuth password: {e}");
+                        "Authentication failed".to_string()
+                    })?;
 
             let new_user = domain::modules::auth::User {
                 id: Uuid::new_v4(),
@@ -227,17 +289,20 @@ pub async fn handle_oauth_callback(
                 verification_token: None,
                 verification_token_expires_at: None,
             };
-            
-            state.user_repo.save(&new_user).await
+
+            state
+                .user_repo
+                .save(&new_user)
+                .await
                 .map_err(|e| {
                     tracing::error!("Failed to create user from OAuth: {e}");
                     "Authentication failed".to_string()
                 })?
                 .id
-        },
+        }
         Err(e) => {
-             tracing::error!("Database error finding user: {e}");
-             return Err("Authentication failed".to_string());
+            tracing::error!("Database error finding user: {e}");
+            return Err("Authentication failed".to_string());
         }
     };
 
@@ -245,19 +310,20 @@ pub async fn handle_oauth_callback(
     let device_id = get_device_id()?;
 
     // Generate email hash for consistent rate limit clearing
-    let email_hash = hash_email_for_logging(
-        &user.email,
-        state.rate_limit_key.expose_secret().as_bytes(),
-    )
-    .map_err(|_| "Internal security error".to_string())?;
+    let email_hash =
+        hash_email_for_logging(&user.email, state.rate_limit_key.expose_secret().as_bytes())
+            .map_err(|_| "Internal security error".to_string())?;
 
     // Create session (JWT), store it, and clear rate limits
     handle_successful_login(user_id, &email_hash, &device_id, state.inner()).await?;
 
     // Log successful OAuth login (audit trail) with essential context
     // Note: email and provider_user_id are hashed/redacted for privacy in logs
-    let email_domain = user.email.rsplit_once('@').map_or("unknown", |(_, domain)| domain);
-    
+    let email_domain = user
+        .email
+        .rsplit_once('@')
+        .map_or("unknown", |(_, domain)| domain);
+
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(user.provider_user_id.as_bytes());
@@ -394,11 +460,16 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
     // Handle both canonical (with host) and hostless (deep link) formats
     // canonical: aroeira://auth/callback
     // hostless: aroeira:///auth/callback (appears as path "//auth/callback" with no host)
-    let is_canonical = url.host_str() == Some(OAUTH_CALLBACK_HOST) && url.path() == OAUTH_CALLBACK_PATH;
+    let is_canonical =
+        url.host_str() == Some(OAUTH_CALLBACK_HOST) && url.path() == OAUTH_CALLBACK_PATH;
     let is_hostless = url.host_str().is_none()
         && url.path().trim_start_matches('/')
-            == format!("{}/{}", OAUTH_CALLBACK_HOST, OAUTH_CALLBACK_PATH.trim_start_matches('/'));
-    
+            == format!(
+                "{}/{}",
+                OAUTH_CALLBACK_HOST,
+                OAUTH_CALLBACK_PATH.trim_start_matches('/')
+            );
+
     // Note: OAUTH_CALLBACK_HOST is "auth" and OAUTH_CALLBACK_PATH is "/callback"
     // So hostless path check is against "/auth/callback"
 
