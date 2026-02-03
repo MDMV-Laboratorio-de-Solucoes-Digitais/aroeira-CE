@@ -79,20 +79,19 @@
    * This handles the aroeira://auth/callback URLs.
    */
   async function processOAuthCallback(rawUrl: string): Promise<void> {
-    let u: URL;
+    let callbackUrl: URL;
     try {
-      u = new URL(rawUrl);
+      callbackUrl = new URL(rawUrl);
     } catch {
       return;
     }
 
-    const schemeOk = u.protocol.toLowerCase() === "aroeira:";
+    const schemeOk = callbackUrl.protocol.toLowerCase() === "aroeira:";
+    const normalizedPath = callbackUrl.pathname.replace(/\/+$/, "") || "/";
     const canonicalOk =
-      u.hostname === "auth" &&
-      (u.pathname === "/callback" || u.pathname === "/callback/");
+      callbackUrl.hostname === "auth" && normalizedPath === "/callback";
     const hostlessOk =
-      u.hostname === "" &&
-      (u.pathname === "/auth/callback" || u.pathname === "/auth/callback/");
+      callbackUrl.hostname === "" && normalizedPath === "/auth/callback";
 
     if (!schemeOk || (!canonicalOk && !hostlessOk)) return;
 
