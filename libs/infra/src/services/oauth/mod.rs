@@ -312,12 +312,13 @@ impl OAuthService for OAuthServiceImpl {
         let (client_id, auth_url_str, token_url_str) = self.get_provider_config(provider)?;
 
         // Parse URLs
-        let auth_url = AuthUrl::new(auth_url_str.to_string())
-            .map_err(|e| OAuthError::CodeExchangeFailed(e.to_string()))?;
+        let auth_url = AuthUrl::new(auth_url_str.to_string()).map_err(|e| {
+            OAuthError::ProviderNotConfigured(format!("Invalid authorization URL: {e}"))
+        })?;
         let token_url = TokenUrl::new(token_url_str.to_string())
-            .map_err(|e| OAuthError::CodeExchangeFailed(e.to_string()))?;
+            .map_err(|e| OAuthError::ProviderNotConfigured(format!("Invalid token URL: {e}")))?;
         let redirect_url = RedirectUrl::new(self.config.redirect_uri.clone())
-            .map_err(|e| OAuthError::CodeExchangeFailed(e.to_string()))?;
+            .map_err(|e| OAuthError::ProviderNotConfigured(format!("Invalid redirect URI: {e}")))?;
 
         // Create OAuth2 client
         let client = oauth2::basic::BasicClient::new(ClientId::new(client_id.to_string()))
