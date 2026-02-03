@@ -12,9 +12,10 @@
 
 use domain::modules::auth::oauth::{AuthProvider, OAuthPkceSession, OAuthService, OAuthUser};
 use infra::services::oauth::{OAuthConfig, OAuthServiceImpl};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tauri::State;
 use url::Url;
 
@@ -82,30 +83,21 @@ impl From<OAuthUser> for OAuthCallbackResponse {
 ///
 /// # Arguments
 ///
-/// * `provider` - Either "google" or "github"
+/// * `provider` - The OAuth provider (google or github)
 ///
 /// # Returns
 ///
 /// * `Ok(StartOAuthResponse)` - Authorization URL and state parameter
-/// * `Err(String)` - If provider is invalid or not configured
+/// * `Err(String)` - If provider is not configured
 #[tauri::command]
 pub async fn start_oauth_flow(
-    provider: String,
+    provider: AuthProvider,
     oauth_state: State<'_, OAuthState>,
 ) -> Result<StartOAuthResponse, String> {
-    // Parse provider
-    let auth_provider = match provider.to_lowercase().as_str() {
-        "google" => AuthProvider::Google,
-        "github" => AuthProvider::GitHub,
-        _ => {
-            return Err("Invalid provider. Use 'google' or 'github'.".to_string());
-        }
-    };
-
     // Generate authorization URL
     let (auth_url, session) = oauth_state
         .oauth_service
-        .generate_authorization_url(auth_provider)
+        .generate_authorization_url(provider)
         .await
         .map_err(|e| {
             tracing::error!("OAuth URL generation failed: {e}");
@@ -115,10 +107,7 @@ pub async fn start_oauth_flow(
     let state = session.state.clone();
 
     // Store session for callback verification
-    if !oauth_state.session_store.store(session) {
-        tracing::error!("Failed to store OAuth session");
-        return Err("Failed to start authentication. Please try again.".to_string());
-    }
+    oauth_state.session_store.store(session);
 
     Ok(StartOAuthResponse { auth_url, state })
 }
@@ -159,14 +148,24 @@ pub async fn handle_oauth_callback(
         .exchange_code(&session, code)
         .await
         .map_err(|e| {
-            tracing::error!("OAuth code exchange failed: {e}");
+            tracing::warn!(
+                provider = %session.provider,
+                "OAuth code exchange failed"
+            );
+            tracing::error!("OAuth code exchange error details: {e}");
             "Authentication failed. Please try again.".to_string()
         })?;
 
-    // Log successful OAuth login (audit trail)
+    // Log successful OAuth login (audit trail) with essential context
+    // Note: email is hashed/redacted for privacy in logs
+    let email_domain = user.email.split('@').nth(1).unwrap_or("unknown");
     tracing::info!(
+        target: "audit",
         provider = %session.provider,
-        "OAuth authentication successful"
+        provider_user_id = %user.provider_user_id,
+        email_domain = %email_domain,
+        outcome = "success",
+        "OAuth authentication completed"
     );
 
     Ok(OAuthCallbackResponse::from(user))
@@ -179,6 +178,7 @@ pub async fn handle_oauth_callback(
 /// 2. Receiving the callback with authorization code
 ///
 /// Sessions are automatically cleaned up when expired.
+/// Uses `parking_lot::Mutex` for better async performance.
 pub struct OAuthSessionStore {
     sessions: Mutex<HashMap<String, OAuthPkceSession>>,
 }
@@ -195,20 +195,14 @@ impl OAuthSessionStore {
     /// Stores a session, keyed by its state value.
     ///
     /// Automatically cleans up expired sessions during this operation.
-    /// Returns `true` if stored successfully, `false` if the lock was poisoned.
-    pub fn store(&self, session: OAuthPkceSession) -> bool {
-        let Ok(mut sessions) = self.sessions.lock() else {
-            // Lock poisoned - log and return false instead of panicking
-            tracing::error!("OAuth session store lock poisoned during store operation");
-            return false;
-        };
+    pub fn store(&self, session: OAuthPkceSession) {
+        let mut sessions = self.sessions.lock();
 
         // Clean up expired sessions
         sessions.retain(|_, s| !s.is_expired());
 
         // Store new session
         sessions.insert(session.state.clone(), session);
-        true
     }
 
     /// Takes a session by its state value, removing it from storage.
@@ -216,14 +210,9 @@ impl OAuthSessionStore {
     /// Returns `None` if:
     /// - Session doesn't exist
     /// - Session has expired
-    /// - Lock is poisoned
     #[must_use]
     pub fn take(&self, state: &str) -> Option<OAuthPkceSession> {
-        let Ok(mut sessions) = self.sessions.lock() else {
-            // Lock poisoned - log and return None instead of panicking
-            tracing::error!("OAuth session store lock poisoned during take operation");
-            return None;
-        };
+        let mut sessions = self.sessions.lock();
 
         // Remove and return, checking expiration
         sessions.remove(state).filter(|s| !s.is_expired())
@@ -256,13 +245,15 @@ impl Default for OAuthSessionStore {
 /// - Code or state parameters are missing
 /// - Error parameter is present (OAuth error response)
 pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), String> {
+    use crate::constants::{OAUTH_CALLBACK_HOST, OAUTH_CALLBACK_PATH, OAUTH_CALLBACK_SCHEME};
+
     let url = Url::parse(callback_url).map_err(|_| "Invalid callback URL format")?;
 
-    // Enforce expected deep-link callback origin
-    if url.scheme() != "aroeira" {
+    // Enforce expected deep-link callback origin using constants
+    if url.scheme() != OAUTH_CALLBACK_SCHEME {
         return Err("Invalid callback URL scheme".to_string());
     }
-    if url.host_str() != Some("auth") || url.path() != "/callback" {
+    if url.host_str() != Some(OAUTH_CALLBACK_HOST) || url.path() != OAUTH_CALLBACK_PATH {
         return Err("Invalid callback URL target".to_string());
     }
 

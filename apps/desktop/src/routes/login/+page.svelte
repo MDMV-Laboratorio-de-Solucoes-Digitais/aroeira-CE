@@ -59,10 +59,11 @@
       return;
     }
 
-    // Preserve loading state if already set (from button click),
-    // otherwise set a generic loading state
+    // Restore loading state from localStorage if not already set
+    // This handles cold start scenarios where the app was closed
     if (!oauthLoading) {
-      oauthLoading = "google"; // Default, will be updated when user info returns
+      const savedProvider = localStorage.getItem("oauth_pending_provider");
+      oauthLoading = (savedProvider as OAuthProvider) || null;
     }
     error = "";
 
@@ -73,12 +74,15 @@
         email: redactEmail(user.email),
       });
       setSessionId();
+      // Clear the saved provider on success
+      localStorage.removeItem("oauth_pending_provider");
       await goto(resolve("/dashboard"), { replaceState: true });
     } catch (err: unknown) {
       logAuditEvent("oauth_login", false, { error: String(err) });
       error = handleError(err, "OAuth authentication");
     } finally {
       oauthLoading = null;
+      localStorage.removeItem("oauth_pending_provider");
     }
   }
 
@@ -189,6 +193,9 @@
     oauthLoading = provider;
     error = "";
 
+    // Save provider to localStorage for cold start recovery
+    localStorage.setItem("oauth_pending_provider", provider);
+
     try {
       await startOAuthFlow(provider);
       // The browser will open and redirect back via deep link
@@ -197,6 +204,7 @@
       logAuditEvent("oauth_start", false, { provider, error: String(err) });
       error = handleError(err, `${provider} authentication`);
       oauthLoading = null;
+      localStorage.removeItem("oauth_pending_provider");
     }
   }
 </script>

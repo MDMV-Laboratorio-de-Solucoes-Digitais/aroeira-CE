@@ -135,6 +135,7 @@ dependencies = [
  "infra",
  "jsonwebtoken",
  "migration",
+ "parking_lot",
  "percent-encoding",
  "rand 0.9.2",
  "regex",

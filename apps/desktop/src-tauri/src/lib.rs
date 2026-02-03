@@ -424,7 +424,7 @@ async fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
     let oauth_config = infra::services::oauth::OAuthConfig {
         google_client_id: config.google_client_id,
         github_client_id: config.github_client_id,
-        redirect_uri: "aroeira://auth/callback".to_string(),
+        redirect_uri: crate::constants::OAUTH_REDIRECT_URI.to_string(),
     };
     app.manage(crate::commands::oauth::OAuthState::new(oauth_config));
 
