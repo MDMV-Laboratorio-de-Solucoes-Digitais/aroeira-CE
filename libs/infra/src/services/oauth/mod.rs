@@ -27,7 +27,10 @@ static ASYNC_HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
         .timeout(std::time::Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .expect("Failed to build static reqwest client")
+        .unwrap_or_else(|e| {
+            warn!("Failed to build static reqwest client: {e}; falling back to default client");
+            reqwest::Client::new()
+        })
 });
 
 /// Configuration for OAuth2 providers.
@@ -68,7 +71,6 @@ impl OAuthConfig {
 /// - Fetches user info from provider APIs
 pub struct OAuthServiceImpl {
     config: OAuthConfig,
-    client: reqwest::Client,
 }
 
 impl OAuthServiceImpl {
@@ -91,15 +93,7 @@ impl OAuthServiceImpl {
     /// Creates a new OAuth service with the given configuration.
     #[must_use]
     pub fn new(config: OAuthConfig) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .unwrap_or_else(|e| {
-                warn!("Failed to build custom reqwest client: {}, using default", e);
-                reqwest::Client::new()
-            });
-            
-        Self { config, client }
+        Self { config }
     }
 
     /// Gets client ID and URLs for a provider.
@@ -152,7 +146,7 @@ impl OAuthServiceImpl {
 
     /// Fetches user info from Google's userinfo endpoint.
     async fn fetch_google_user(&self, access_token: &str) -> Result<OAuthUser, OAuthError> {
-        let response = self.client
+        let response = ASYNC_HTTP_CLIENT
             .get(Self::GOOGLE_USERINFO_URL)
             .bearer_auth(access_token)
             .send()
@@ -171,19 +165,25 @@ impl OAuthServiceImpl {
             .await
             .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
 
+        // Security Critical: Ensure email is verified by Google
+        if !user_info.email_verified {
+            return Err(OAuthError::UserInfoFailed("Google email not verified".to_string()));
+        }
+
         Ok(OAuthUser {
             provider: AuthProvider::Google,
             provider_user_id: user_info.sub,
             email: user_info.email,
             name: user_info.name,
             avatar_url: user_info.picture,
+            email_verified: user_info.email_verified,
         })
     }
 
     /// Fetches user info from GitHub's API.
     async fn fetch_github_user(&self, access_token: &str) -> Result<OAuthUser, OAuthError> {
         // Fetch user profile
-        let user_response = self.client
+        let user_response = ASYNC_HTTP_CLIENT
             .get(Self::GITHUB_USER_URL)
             .header("User-Agent", "Aroeira-Desktop")
             .header("Accept", "application/vnd.github+json")
@@ -204,12 +204,8 @@ impl OAuthServiceImpl {
             .await
             .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
 
-        // If email is not public, fetch from emails endpoint
-        let email = if let Some(email) = user_info.email {
-            email
-        } else {
-            self.fetch_github_primary_email(access_token).await?
-        };
+        // Always fetch verified email from emails endpoint for security
+        let (email, email_verified) = self.fetch_github_primary_email(access_token).await?;
 
         Ok(OAuthUser {
             provider: AuthProvider::GitHub,
@@ -217,12 +213,13 @@ impl OAuthServiceImpl {
             email,
             name: user_info.name,
             avatar_url: user_info.avatar_url,
+            email_verified,
         })
     }
 
     /// Fetches primary email from GitHub's emails endpoint.
-    async fn fetch_github_primary_email(&self, access_token: &str) -> Result<String, OAuthError> {
-        let response = self.client
+    async fn fetch_github_primary_email(&self, access_token: &str) -> Result<(String, bool), OAuthError> {
+        let response = ASYNC_HTTP_CLIENT
             .get(Self::GITHUB_EMAILS_URL)
             .header("User-Agent", "Aroeira-Desktop")
             .header("Accept", "application/vnd.github+json")
@@ -243,14 +240,14 @@ impl OAuthServiceImpl {
             .await
             .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
 
-        // Find primary email, or first verified email, or first email
-        emails
+        // Security Critical: Only accept verified emails
+        let email_obj = emails
             .iter()
             .find(|e| e.primary && e.verified)
             .or_else(|| emails.iter().find(|e| e.verified))
-            .or_else(|| emails.first())
-            .map(|e| e.email.clone())
-            .ok_or_else(|| OAuthError::UserInfoFailed("No email found".to_string()))
+            .ok_or_else(|| OAuthError::UserInfoFailed("No verified email found".to_string()))?;
+
+        Ok((email_obj.email.clone(), email_obj.verified))
     }
 }
 
@@ -335,32 +332,31 @@ impl OAuthService for OAuthServiceImpl {
             .set_token_uri(token_url)
             .set_redirect_uri(redirect_url);
 
-        // Create PKCE verifier from session
-        let pkce_verifier = PkceCodeVerifier::new(session.pkce_verifier.clone());
-
-        // Prepare token exchange request
-        let token_request = client
-            .exchange_code(AuthorizationCode::new(code))
-            .set_pkce_verifier(pkce_verifier);
-
         // Perform token exchange with timeout and provider-specific adjustments
+        // Rebuild request inside match arms to avoid ownership issues (ExchangeCode consumes self)
         let exchange_future = async {
             match session.provider {
                 AuthProvider::GitHub => {
                     // GitHub requires Accept: application/json
-                    token_request
+                    let verifier = PkceCodeVerifier::new(session.pkce_verifier.clone());
+                    client
+                        .exchange_code(AuthorizationCode::new(code.clone()))
+                        .set_pkce_verifier(verifier)
                         .request_async(&|mut req: oauth2::HttpRequest| async move {
-                            req.headers_mut().insert(
-                                oauth2::http::header::ACCEPT,
-                                oauth2::http::HeaderValue::from_static("application/json"),
-                            );
+                            if let Ok(header_val) = "application/json".parse() {
+                                // "accept" implements IntoHeaderName
+                                req.headers_mut().insert("accept", header_val);
+                            }
                             async_http_client(req).await
                         })
                         .await
                 }
                 // Other providers (Google) work with default client
                 _ => {
-                    token_request
+                    let verifier = PkceCodeVerifier::new(session.pkce_verifier.clone());
+                    client
+                        .exchange_code(AuthorizationCode::new(code.clone()))
+                        .set_pkce_verifier(verifier)
                         .request_async(&async_http_client)
                         .await
                 }
@@ -397,12 +393,12 @@ impl OAuthService for OAuthServiceImpl {
             let service_name = "aroeira-oauth";
             let user_key = format!("{}:{}", user.provider, user.provider_user_id);
             
-            // Hash user key for logging to avoid PII leak
+            // Hash user key for logging and storage to avoid PII leak in OS store/logs
             let mut hasher = Sha256::new();
             hasher.update(user_key.as_bytes());
             let user_key_hash = hex::encode(hasher.finalize());
             
-            match keyring::Entry::new(service_name, &user_key) {
+            match keyring::Entry::new(service_name, &user_key_hash) {
                 Ok(entry) => {
                     if let Err(e) = entry.set_password(access_token) {
                         warn!("Failed to securely store OAuth token for {}: {}", user_key_hash, e);
@@ -431,6 +427,8 @@ struct GoogleUserInfo {
     name: Option<String>,
     /// Profile picture URL
     picture: Option<String>,
+    /// Whether email is verified
+    email_verified: bool,
 }
 
 /// GitHub user API response structure
@@ -439,7 +437,7 @@ struct GitHubUserInfo {
     /// Unique user identifier
     id: u64,
     /// User's email (may be null if not public)
-    email: Option<String>,
+    _email: Option<String>,
     /// User's name
     name: Option<String>,
     /// Avatar URL

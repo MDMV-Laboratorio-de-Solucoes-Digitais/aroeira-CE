@@ -198,8 +198,10 @@ pub async fn handle_oauth_callback(
             let new_user = domain::modules::auth::User {
                 id: Uuid::new_v4(),
                 email: user.email.clone(),
-                password_hash: "oauth_provider".to_string(), // Unusable password
-                email_verified: true, // Trusted from provider
+                // Valid bcrypt hash format, but not a usable password for the user.
+                // Prevents downstream code from choking on an invalid hash string.
+                password_hash: "$2b$12$C6UzMDM.H6dfI/f/IKcEeO7s9mYb1QO8QK9u7rY6gk9m7Qw1fQy4m".to_string(),
+                email_verified: user.email_verified, // Use provider verification status
                 verification_token: None,
                 verification_token_expires_at: None,
             };
@@ -284,13 +286,13 @@ impl OAuthSessionStore {
 
         // Enforce a hard cap to prevent memory growth (DoS prevention)
         if sessions.len() >= MAX_SESSIONS {
-            // Remove oldest session
-            if let Some((oldest_state, _)) = sessions
+            // Remove oldest session directly
+            if let Some(oldest_key) = sessions
                 .iter()
                 .min_by_key(|(_, s)| s.created_at)
-                .map(|(k, v)| (k.clone(), v.created_at))
+                .map(|(k, _)| k.clone())
             {
-                sessions.remove(&oldest_state);
+                sessions.remove(&oldest_key);
             }
         }
 

@@ -201,6 +201,8 @@ pub struct OAuthUser {
     pub name: Option<String>,
     /// URL to user's avatar/profile picture (optional)
     pub avatar_url: Option<String>,
+    /// Whether the email has been verified by the provider
+    pub email_verified: bool,
 }
 
 // ===========================================

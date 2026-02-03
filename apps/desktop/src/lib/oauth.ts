@@ -62,13 +62,7 @@ export async function startOAuthFlow(provider: OAuthProvider): Promise<string> {
 export async function handleOAuthCallback(
   callbackUrl: string,
 ): Promise<OAuthCallbackResponse> {
-  const u = new URL(callbackUrl);
-  const isCallback =
-    u.protocol.toLowerCase() === "aroeira:" &&
-    u.hostname === "auth" &&
-    (u.pathname === "/callback" || u.pathname === "/callback/");
-
-  if (!isCallback) {
+  if (!callbackUrl.startsWith("aroeira://auth/callback")) {
     throw new Error("Invalid OAuth callback URL");
   }
 

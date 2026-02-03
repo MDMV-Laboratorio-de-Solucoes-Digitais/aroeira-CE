@@ -102,7 +102,7 @@
         savedProvider === "google" || savedProvider === "github"
           ? (savedProvider as OAuthProvider)
           : null;
-      
+
       // Clear invalid state if any
       if (!oauthLoading && savedProvider) {
         localStorage.removeItem("oauth_pending_provider");
@@ -135,7 +135,10 @@
     try {
       policy = await invoke("get_password_policy");
     } catch (err) {
-      console.error("Failed to fetch password policy", sanitizeErrorForAudit(err));
+      console.error(
+        "Failed to fetch password policy",
+        sanitizeErrorForAudit(err),
+      );
     }
 
     // Check if the app was opened via a deep link (cold start)
@@ -147,7 +150,10 @@
         }
       }
     } catch (err) {
-      console.error("Failed to check initial deep links", sanitizeErrorForAudit(err));
+      console.error(
+        "Failed to check initial deep links",
+        sanitizeErrorForAudit(err),
+      );
     }
 
     // Listen for deep links while the app is running (warm start)
@@ -158,11 +164,10 @@
         }
       });
     } catch (err) {
-      console.error("Failed to setup deep link listener", sanitizeErrorForAudit(err));
-    }
-  });
-    } catch (err) {
-      console.error("Failed to set up deep link listener", err);
+      console.error(
+        "Failed to setup deep link listener",
+        sanitizeErrorForAudit(err),
+      );
     }
   });
 
