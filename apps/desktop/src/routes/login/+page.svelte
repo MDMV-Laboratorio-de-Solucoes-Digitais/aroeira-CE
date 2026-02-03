@@ -177,8 +177,11 @@
   });
 
   onDestroy(() => {
-    if (unlistenDeepLink) {
-      unlistenDeepLink();
+    // Idempotent cleanup: capture and nullify reference before calling
+    const unlisten = unlistenDeepLink;
+    unlistenDeepLink = null;
+    if (unlisten) {
+      unlisten();
     }
   });
 
