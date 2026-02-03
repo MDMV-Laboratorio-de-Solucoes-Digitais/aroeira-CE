@@ -379,10 +379,34 @@ impl OAuthService for OAuthServiceImpl {
         let access_token = token_result.access_token().secret();
 
         // Fetch user info based on provider
-        match session.provider {
+        let user = match session.provider {
             AuthProvider::Google => self.fetch_google_user(access_token).await,
             AuthProvider::GitHub => self.fetch_github_user(access_token).await,
+        }?;
+
+        // Securely store the token in the OS keyring
+        // Key format: "provider:user_id"
+        // This satisfies the compliance requirement for secure token storage
+        #[cfg(not(test))]
+        {
+            let service_name = "aroeira-oauth";
+            let user_key = format!("{}:{}", user.provider, user.provider_user_id);
+            
+            match keyring::Entry::new(service_name, &user_key) {
+                Ok(entry) => {
+                    if let Err(e) = entry.set_password(access_token) {
+                        warn!("Failed to securely store OAuth token for {}: {}", user_key, e);
+                    } else {
+                        debug!("Securely stored OAuth token for {}", user_key);
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to access system keyring: {}", e);
+                }
+            }
         }
+
+        Ok(user)
     }
 }
 
