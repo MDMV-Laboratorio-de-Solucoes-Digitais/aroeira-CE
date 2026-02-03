@@ -33,5 +33,15 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["aroeira"]
+      },
+      "mobile": {
+        "schemes": ["aroeira"]
+      }
+    }
   }
 }

@@ -444,6 +444,7 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_secure_storage::init())
+        .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
             // Use block_on to await async setup within the synchronous setup hook.
             // Added timeout to prevent indefinite blocking during startup.

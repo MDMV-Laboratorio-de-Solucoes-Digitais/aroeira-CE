@@ -24,6 +24,7 @@ migration = { workspace = true }
 tauri = { workspace = true }
 tauri-plugin-opener = { workspace = true }
 tauri-plugin-secure-storage = { workspace = true }
+tauri-plugin-deep-link = { workspace = true }
 
 # Async Runtime
 tokio = { workspace = true }
