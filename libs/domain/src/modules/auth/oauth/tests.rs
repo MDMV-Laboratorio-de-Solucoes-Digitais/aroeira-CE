@@ -179,6 +179,46 @@ fn pkce_session_stores_correct_provider() {
     assert_eq!(github_session.provider, AuthProvider::GitHub);
 }
 
+#[test]
+fn pkce_session_rejects_invalid_verifier_characters() {
+    // RFC 7636: code_verifier must use only unreserved URI characters
+    // Invalid characters should make the session invalid
+    let session_with_space = OAuthPkceSession::new(
+        "valid_state".to_string(),
+        format!("{}{}a", "a".repeat(20), " ".repeat(23)), // Contains space
+        AuthProvider::Google,
+    );
+    assert!(!session_with_space.is_valid());
+
+    let session_with_plus = OAuthPkceSession::new(
+        "valid_state".to_string(),
+        format!("{}+{}", "a".repeat(21), "b".repeat(21)), // Contains +
+        AuthProvider::Google,
+    );
+    assert!(!session_with_plus.is_valid());
+
+    let session_with_slash = OAuthPkceSession::new(
+        "valid_state".to_string(),
+        format!("{}/{}", "a".repeat(21), "b".repeat(21)), // Contains /
+        AuthProvider::Google,
+    );
+    assert!(!session_with_slash.is_valid());
+}
+
+#[test]
+fn pkce_session_accepts_valid_verifier_characters() {
+    // RFC 7636: [A-Z] / [a-z] / [0-9] / "-" / "." / "_" / "~"
+    let valid_verifier = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop0123456789-._~";
+    assert!(valid_verifier.len() >= 43);
+
+    let session = OAuthPkceSession::new(
+        "valid_state".to_string(),
+        valid_verifier.to_string(),
+        AuthProvider::Google,
+    );
+    assert!(session.is_valid());
+}
+
 // ===========================================
 // OAuthUser Tests
 // ===========================================

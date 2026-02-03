@@ -139,6 +139,7 @@ impl OAuthPkceSession {
     /// A session is valid if:
     /// - State is not empty (CSRF protection)
     /// - PKCE verifier is 43-128 characters (RFC 7636)
+    /// - PKCE verifier uses only unreserved URI characters (RFC 7636)
     #[must_use]
     pub fn is_valid(&self) -> bool {
         // State must not be empty (CSRF protection)
@@ -152,7 +153,21 @@ impl OAuthPkceSession {
             return false;
         }
 
+        // PKCE code_verifier must use only unreserved URI characters (RFC 7636 Section 4.1)
+        // Allowed: [A-Z] / [a-z] / [0-9] / "-" / "." / "_" / "~"
+        if !self.pkce_verifier.chars().all(Self::is_pkce_valid_char) {
+            return false;
+        }
+
         true
+    }
+
+    /// Checks if a character is valid for PKCE code_verifier (RFC 7636 Section 4.1).
+    ///
+    /// Unreserved URI characters: [A-Z] / [a-z] / [0-9] / "-" / "." / "_" / "~"
+    #[inline]
+    fn is_pkce_valid_char(c: char) -> bool {
+        c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~')
     }
 
     /// Checks if session has expired.

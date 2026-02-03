@@ -271,18 +271,20 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
         return Err("Authentication was denied or failed. Please try again.".to_string());
     }
 
-    // Extract code and state
+    // Extract code and state, rejecting empty values
     let code = url
         .query_pairs()
         .find(|(k, _)| k == "code")
         .map(|(_, v)| v.to_string())
-        .ok_or("Missing authorization code in callback")?;
+        .filter(|v| !v.is_empty())
+        .ok_or("Missing or empty authorization code in callback")?;
 
     let state = url
         .query_pairs()
         .find(|(k, _)| k == "state")
         .map(|(_, v)| v.to_string())
-        .ok_or("Missing state parameter in callback")?;
+        .filter(|v| !v.is_empty())
+        .ok_or("Missing or empty state parameter in callback")?;
 
     Ok((code, state))
 }
@@ -486,5 +488,25 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("target"));
+    }
+
+    #[test]
+    fn parse_callback_url_rejects_empty_code() {
+        let url = "aroeira://auth/callback?code=&state=xyz789";
+        let result = parse_oauth_callback_url(url);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("empty") || err.contains("Missing"));
+    }
+
+    #[test]
+    fn parse_callback_url_rejects_empty_state() {
+        let url = "aroeira://auth/callback?code=abc123&state=";
+        let result = parse_oauth_callback_url(url);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("empty") || err.contains("Missing"));
     }
 }
