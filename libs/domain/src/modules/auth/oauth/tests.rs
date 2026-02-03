@@ -156,14 +156,15 @@ fn pkce_session_expires_after_10_minutes() {
 }
 
 #[test]
-fn pkce_session_not_expired_at_exactly_10_minutes() {
+fn pkce_session_not_expired_just_before_10_minutes() {
     use chrono::{Duration, Utc};
 
     let mut session =
         OAuthPkceSession::new("state".to_string(), "a".repeat(43), AuthProvider::Google);
 
-    // At exactly 10 minutes, should still be valid
-    session.created_at = Utc::now() - Duration::minutes(10);
+    // Just under 10 minutes (9 min 59 sec) should still be valid
+    // Using 9 minutes 59 seconds to avoid timing race conditions
+    session.created_at = Utc::now() - Duration::seconds(599);
     assert!(!session.is_expired());
 }
 
