@@ -31,6 +31,10 @@ pub struct AppConfig {
     pub jwt_audience: String,
     pub rate_limit_key: String,
     pub password_security_level: PasswordSecurityLevel,
+    /// Google OAuth2 client ID (optional)
+    pub google_client_id: Option<String>,
+    /// GitHub OAuth2 client ID (optional)
+    pub github_client_id: Option<String>,
 }
 
 impl AppConfig {
@@ -80,6 +84,14 @@ impl AppConfig {
             get_or_create_secret_sync(app_handle, "rate_limit_key", "RATE_LIMIT_KEY")?;
         Self::validate_secret(&rate_limit_key, "RATE_LIMIT_KEY")?;
 
+        // Load OAuth client IDs from environment (optional)
+        let google_client_id = std::env::var("GOOGLE_CLIENT_ID").ok();
+        let github_client_id = std::env::var("GITHUB_CLIENT_ID").ok();
+
+        if google_client_id.is_none() && github_client_id.is_none() {
+            info!("No OAuth providers configured. Set GOOGLE_CLIENT_ID or GITHUB_CLIENT_ID to enable OAuth.");
+        }
+
         Ok(Self {
             db_url,
             jwt_secret,
@@ -93,6 +105,8 @@ impl AppConfig {
                 PasswordSecurityLevel::Secure,
                 str::parse,
             ),
+            google_client_id,
+            github_client_id,
         })
     }
 
@@ -388,8 +402,8 @@ async fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
         jwt_secret: SecretBox::from(config.jwt_secret.into_boxed_str()),
         password_min_length: config.password_min_length,
         jwt_expiration_hours: config.jwt_expiration_hours,
-        jwt_issuer: config.jwt_issuer,
-        jwt_audience: config.jwt_audience,
+        jwt_issuer: config.jwt_issuer.clone(),
+        jwt_audience: config.jwt_audience.clone(),
         rate_limit_key: SecretBox::from(config.rate_limit_key.into_boxed_str()),
         login_attempts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         register_attempts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
@@ -403,6 +417,14 @@ async fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
         device_register_attempts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         password_security_level: config.password_security_level,
     });
+
+    // Set up OAuth state
+    let oauth_config = infra::services::oauth::OAuthConfig {
+        google_client_id: config.google_client_id,
+        github_client_id: config.github_client_id,
+        redirect_uri: "aroeira://auth/callback".to_string(),
+    };
+    app.manage(crate::commands::oauth::OAuthState::new(oauth_config));
 
     Ok(())
 }
@@ -460,6 +482,8 @@ pub fn run() {
             commands::notes::delete_note,
             commands::secure_storage::has_auth_token,
             commands::secure_storage::get_user_id_from_token,
+            commands::oauth::start_oauth_flow,
+            commands::oauth::handle_oauth_callback,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

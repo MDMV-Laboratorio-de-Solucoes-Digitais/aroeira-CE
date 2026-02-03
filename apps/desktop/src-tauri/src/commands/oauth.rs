@@ -1,12 +1,159 @@
-//! OAuth2 Tauri Commands - TDD RED PHASE
+//! OAuth2 Tauri Commands - TDD GREEN PHASE
 //!
-//! This module provides Tauri commands for OAuth2 authentication.
-//! Currently contains only test definitions - implementation follows in GREEN phase.
+//! This module provides Tauri commands for OAuth2 authentication
+//! with PKCE flow for Google and GitHub providers.
+//!
+//! # Security Notes
+//!
+//! - Uses PKCE (RFC 7636) for all flows - no client secrets
+//! - State parameter provides CSRF protection
+//! - Sessions expire after 10 minutes
+//! - Tokens stored in OS secure storage (not in this module)
 
-use domain::modules::auth::oauth::OAuthPkceSession;
+use domain::modules::auth::oauth::{AuthProvider, OAuthPkceSession, OAuthService, OAuthUser};
+use infra::services::oauth::{OAuthConfig, OAuthServiceImpl};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use tauri::State;
 use url::Url;
+
+/// OAuth state managed by Tauri.
+///
+/// This struct is registered as Tauri managed state to persist
+/// OAuth sessions across command invocations.
+pub struct OAuthState {
+    /// Session store for pending OAuth flows
+    pub session_store: OAuthSessionStore,
+    /// OAuth service implementation
+    pub oauth_service: Arc<OAuthServiceImpl>,
+}
+
+impl OAuthState {
+    /// Creates new OAuth state with given configuration.
+    #[must_use]
+    pub fn new(config: OAuthConfig) -> Self {
+        Self {
+            session_store: OAuthSessionStore::new(),
+            oauth_service: Arc::new(OAuthServiceImpl::new(config)),
+        }
+    }
+}
+
+/// Response from `start_oauth_flow` command.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StartOAuthResponse {
+    /// Authorization URL to open in browser
+    pub auth_url: String,
+    /// State parameter for CSRF verification
+    pub state: String,
+}
+
+/// Response from `handle_oauth_callback` command.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OAuthCallbackResponse {
+    /// Provider that authenticated the user
+    pub provider: String,
+    /// User's email from the provider
+    pub email: String,
+    /// User's display name (optional)
+    pub name: Option<String>,
+    /// User's avatar URL (optional)
+    pub avatar_url: Option<String>,
+}
+
+impl From<OAuthUser> for OAuthCallbackResponse {
+    fn from(user: OAuthUser) -> Self {
+        Self {
+            provider: user.provider.to_string().to_lowercase(),
+            email: user.email,
+            name: user.name,
+            avatar_url: user.avatar_url,
+        }
+    }
+}
+
+/// Starts an OAuth authentication flow for the given provider.
+///
+/// This command:
+/// 1. Generates a PKCE challenge and authorization URL
+/// 2. Stores the PKCE session for later verification
+/// 3. Returns the URL to open in the system browser
+///
+/// # Arguments
+///
+/// * `provider` - Either "google" or "github"
+///
+/// # Returns
+///
+/// * `Ok(StartOAuthResponse)` - Authorization URL and state parameter
+/// * `Err(String)` - If provider is invalid or not configured
+#[tauri::command]
+pub async fn start_oauth_flow(
+    provider: String,
+    oauth_state: State<'_, OAuthState>,
+) -> Result<StartOAuthResponse, String> {
+    // Parse provider
+    let auth_provider = match provider.to_lowercase().as_str() {
+        "google" => AuthProvider::Google,
+        "github" => AuthProvider::GitHub,
+        _ => return Err(format!("Unknown provider: {provider}. Use 'google' or 'github'.")),
+    };
+
+    // Generate authorization URL
+    let (auth_url, session) = oauth_state
+        .oauth_service
+        .generate_authorization_url(auth_provider)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let state = session.state.clone();
+
+    // Store session for callback verification
+    oauth_state.session_store.store(session);
+
+    Ok(StartOAuthResponse { auth_url, state })
+}
+
+/// Handles an OAuth callback URL from deep linking.
+///
+/// This command:
+/// 1. Parses the callback URL to extract code and state
+/// 2. Verifies the state matches a pending session (CSRF protection)
+/// 3. Exchanges the code for tokens and user info
+/// 4. Returns the authenticated user information
+///
+/// # Arguments
+///
+/// * `callback_url` - The full callback URL (e.g., "aroeira://auth/callback?code=...&state=...")
+///
+/// # Returns
+///
+/// * `Ok(OAuthCallbackResponse)` - Authenticated user information
+/// * `Err(String)` - If callback parsing fails, state mismatch, or exchange fails
+#[tauri::command]
+pub async fn handle_oauth_callback(
+    callback_url: String,
+    oauth_state: State<'_, OAuthState>,
+) -> Result<OAuthCallbackResponse, String> {
+    // Parse callback URL
+    let (code, state) = parse_oauth_callback_url(&callback_url)?;
+
+    // Retrieve and consume session (CSRF protection)
+    let session = oauth_state
+        .session_store
+        .take(&state)
+        .ok_or("Invalid or expired OAuth session. Please try again.")?;
+
+    // Exchange code for user info
+    let user = oauth_state
+        .oauth_service
+        .exchange_code(&session, code)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(OAuthCallbackResponse::from(user))
+}
 
 /// Thread-safe storage for OAuth PKCE sessions.
 ///
