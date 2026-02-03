@@ -67,6 +67,7 @@ tauri-plugin-deep-link = "2"
 bcrypt = "0.18.0"
 hmac = "0.12"
 sha2 = "0.10"
+base64 = "0.22"
 jsonwebtoken = { version = "10.2.0", features = ["rust_crypto"] }
 secrecy = { version = "0.10", features = ["serde"] }
 oauth2 = { version = "5.0", features = ["reqwest"] }

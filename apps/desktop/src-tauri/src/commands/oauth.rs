@@ -12,6 +12,7 @@
 
 use crate::commands::auth::{get_device_id, handle_successful_login, hash_email_for_logging};
 use crate::state::AppState;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use domain::modules::auth::oauth::{AuthProvider, OAuthPkceSession, OAuthService, OAuthUser};
 use infra::services::oauth::{OAuthConfig, OAuthServiceImpl};
 use infra::utils::hash_password;
@@ -118,7 +119,9 @@ pub async fn start_oauth_flow(
     // Persist session for cold start recovery (deep link opens closed app)
     // One-time use: deleted after successful `take` on callback.
     // Use underscore separator instead of colon (secure_storage doesn't allow colons in keys)
-    let storage_key = format!("oauth_pkce_session_{}", state_param);
+    // Encode state with base64url to ensure it's safe for storage keys
+    let state_key = URL_SAFE_NO_PAD.encode(state_param.as_bytes());
+    let storage_key = format!("oauth_pkce_session_{}", state_key);
     let session_json = serde_json::to_string(&session).map_err(|e| {
         tracing::error!("Failed to serialize OAuth PKCE session: {e}");
         "Failed to start authentication. Please try again.".to_string()
@@ -178,7 +181,8 @@ pub async fn handle_oauth_callback(
         Some(s) => s,
         None => {
             // Cold start: try to recover session from secure storage
-            let storage_key = format!("oauth_pkce_session_{}", state_param);
+            let state_key = URL_SAFE_NO_PAD.encode(state_param.as_bytes());
+            let storage_key = format!("oauth_pkce_session_{}", state_key);
             let session_json = state
                 .secure_storage
                 .get(&storage_key)
@@ -217,7 +221,8 @@ pub async fn handle_oauth_callback(
 
     // Also clean up persisted session if it was found in memory (consumed via in-memory store)
     // Log failures but don't block auth flow - session expiry provides secondary protection.
-    let storage_key = format!("oauth_pkce_session_{}", state_param);
+    let state_key = URL_SAFE_NO_PAD.encode(state_param.as_bytes());
+    let storage_key = format!("oauth_pkce_session_{}", state_key);
     if let Err(e) = state.secure_storage.delete(&storage_key).await {
         tracing::warn!(
             target: "security",

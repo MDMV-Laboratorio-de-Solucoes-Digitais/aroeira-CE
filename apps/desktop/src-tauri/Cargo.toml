@@ -46,6 +46,7 @@ serde_json = { workspace = true }
 bcrypt = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }
+base64 = { workspace = true }
 jsonwebtoken = { workspace = true }
 secrecy = { workspace = true }
 
