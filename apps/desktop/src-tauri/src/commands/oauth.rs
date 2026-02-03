@@ -12,7 +12,6 @@
 
 use crate::commands::auth::{get_device_id, handle_successful_login, hash_email_for_logging};
 use crate::state::AppState;
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use domain::modules::auth::oauth::{AuthProvider, OAuthPkceSession, OAuthService, OAuthUser};
 use infra::services::oauth::{OAuthConfig, OAuthServiceImpl};
 use infra::utils::hash_password;
@@ -196,8 +195,8 @@ pub async fn handle_oauth_callback(
         }
         None => {
             // Cold start: try to recover session from secure storage
-            let state_key = URL_SAFE_NO_PAD.encode(state_param.as_bytes());
-            let storage_key = format!("oauth_pkce_session_{}", state_key);
+            let state_hash = hex::encode(Sha256::digest(state_param.as_bytes()));
+            let storage_key = format!("oauth_pkce_session_{}", state_hash);
             let session_json = state
                 .secure_storage
                 .get(&storage_key)
@@ -377,9 +376,11 @@ pub async fn handle_oauth_callback(
     let device_id = get_device_id()?;
 
     // Generate email hash for consistent rate limit clearing
-    let email_hash =
-        hash_email_for_logging(&user.email, state.rate_limit_key.expose_secret().as_bytes())
-            .map_err(|_| "Internal security error".to_string())?;
+    let email_hash = hash_email_for_logging(
+        &normalized_email,
+        state.rate_limit_key.expose_secret().as_bytes(),
+    )
+    .map_err(|_| "Internal security error".to_string())?;
 
     // Create session (JWT), store it, and clear rate limits
     handle_successful_login(user_id, &email_hash, &device_id, state.inner()).await?;
