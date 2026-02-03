@@ -252,7 +252,7 @@ pub async fn handle_oauth_callback(
     .map_err(|_| "Internal security error".to_string())?;
 
     // Create session (JWT), store it, and clear rate limits
-    handle_successful_login(user_id, &email_hash, &device_id, &state).await?;
+    handle_successful_login(user_id, &email_hash, &device_id, state.inner()).await?;
 
     // Log successful OAuth login (audit trail) with essential context
     // Note: email and provider_user_id are hashed/redacted for privacy in logs
@@ -393,9 +393,11 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
 
     // Handle both canonical (with host) and hostless (deep link) formats
     // canonical: aroeira://auth/callback
-    // hostless: aroeira:///auth/callback (appears as path "/auth/callback" with no host)
+    // hostless: aroeira:///auth/callback (appears as path "//auth/callback" with no host)
     let is_canonical = url.host_str() == Some(OAUTH_CALLBACK_HOST) && url.path() == OAUTH_CALLBACK_PATH;
-    let is_hostless = url.host_str().is_none() && url.path() == format!("/{}{}", OAUTH_CALLBACK_HOST, OAUTH_CALLBACK_PATH);
+    let is_hostless = url.host_str().is_none()
+        && url.path().trim_start_matches('/')
+            == format!("{}/{}", OAUTH_CALLBACK_HOST, OAUTH_CALLBACK_PATH.trim_start_matches('/'));
     
     // Note: OAUTH_CALLBACK_HOST is "auth" and OAUTH_CALLBACK_PATH is "/callback"
     // So hostless path check is against "/auth/callback"
