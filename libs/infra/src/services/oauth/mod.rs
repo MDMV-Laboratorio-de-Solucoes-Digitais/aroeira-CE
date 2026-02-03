@@ -327,8 +327,8 @@ impl OAuthService for OAuthServiceImpl {
 
         // Validate session
         if !session.is_valid() {
-            warn!("Invalid session: state or verifier failed validation");
-            return Err(OAuthError::SessionNotFound);
+            warn!("Invalid PKCE session (failed validation)");
+            return Err(OAuthError::CodeExchangeFailed("Invalid PKCE session".to_string()));
         }
 
         if session.is_expired() {
@@ -409,28 +409,29 @@ impl OAuthService for OAuthServiceImpl {
         // Securely store the token in the OS keyring
         // Key format: "provider:user_id"
         // This satisfies the compliance requirement for secure token storage
+        // IMPORTANT: If secure storage fails, we must fail the entire authentication flow
+        // to comply with the security requirement that tokens MUST be stored securely
         #[cfg(not(test))]
         {
             let service_name = "aroeira-oauth";
             let user_key = format!("{}:{}", user.provider, user.provider_user_id);
-            
+
             // Hash user key for logging and storage to avoid PII leak in OS store/logs
             let mut hasher = Sha256::new();
             hasher.update(user_key.as_bytes());
             let user_key_hash = hex::encode(hasher.finalize());
-            
-            match keyring::Entry::new(service_name, &user_key_hash) {
-                Ok(entry) => {
-                    if let Err(e) = entry.set_password(access_token) {
-                        warn!("Failed to securely store OAuth token for {}: {}", user_key_hash, e);
-                    } else {
-                        debug!("Securely stored OAuth token for {}", user_key_hash);
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to access system keyring: {}", e);
-                }
-            }
+
+            let entry = keyring::Entry::new(service_name, &user_key_hash).map_err(|e| {
+                error!("Failed to create keyring entry for OAuth token: {}", e);
+                OAuthError::CodeExchangeFailed("Failed to access secure storage".to_string())
+            })?;
+
+            entry.set_password(access_token).map_err(|e| {
+                error!("Failed to securely store OAuth token for {}: {}", user_key_hash, e);
+                OAuthError::CodeExchangeFailed("Failed to store token securely".to_string())
+            })?;
+
+            debug!("Securely stored OAuth token for {}", user_key_hash);
         }
 
         Ok(user)
