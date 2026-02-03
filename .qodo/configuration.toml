@@ -1,0 +1,104 @@
+# ==========================================================================
+# AROEIRA TEMPLATE - QODO MERGE CONFIGURATION
+# ==========================================================================
+# Configuration for Qodo Merge PR Agent integration.
+# Tailored for Tauri v2 + Svelte 5 (Runes) + Rust 1.93 stack.
+# ==========================================================================
+
+[pr_compliance]
+# Enable global compliance verification
+enable_global_pr_compliance = true
+
+# Add labels on failure (useful for CI pipelines to block merges)
+enable_user_defined_compliance_labels = true
+
+# Estimate review effort (useful for large PRs)
+enable_estimate_effort_to_review = true
+
+# Security and custom sections are critical for Tauri/Rust
+enable_security_section = true
+enable_custom_compliance_section = true
+
+# Avoid rewriting code already existing in the template
+enable_codebase_duplication_section = true
+
+# Security: Add "Possible security concern" label if issues detected
+enable_compliance_labels_security = true
+
+# Inject extra instructions for the AI to understand project-specific context
+extra_instructions = """
+This is the Aroeira Template project using:
+- Tauri v2 (desktop/mobile integration with capabilities-based permissions)
+- Rust 1.93+ with Axum 0.8.8 (backend API)
+- Svelte 5 with Runes syntax (frontend)
+- SeaORM (database ORM)
+- PostgreSQL/SQLite (database)
+
+CRITICAL ENFORCEMENT RULES:
+1. Be STRICT about Svelte 5 Runes syntax ($state, $derived, $effect, $props).
+2. REJECT any use of legacy Svelte 4 patterns ('export let', stores for local state).
+3. For Rust, enforce RIGOROUS error handling (no unwrap() in production code).
+4. Verify Tauri v2 capability changes follow least-privilege principle.
+5. Ensure async Axum handlers never block the main thread.
+"""
+
+# ------------------------------------------------------------------
+# SECTION: PR REVIEW SETTINGS
+# ------------------------------------------------------------------
+[pr_review]
+# Number of files that triggers detailed automatic review
+auto_review_threshold = 10
+
+# Request documentation review for architectural changes
+require_docs_for_architecture_changes = true
+
+# Automatic labels based on code area
+enable_area_labels = true
+
+# Inline comments for detected issues
+enable_inline_comments = true
+
+# ------------------------------------------------------------------
+# SECTION: PR DESCRIPTION
+# ------------------------------------------------------------------
+[pr_description]
+# Generate automatic PR description
+enable_auto_description = true
+
+# Include review checklist
+include_review_checklist = true
+
+# Categorize changes by type
+categorize_changes = true
+
+# ------------------------------------------------------------------
+# SECTION: SECURITY ANALYSIS
+# ------------------------------------------------------------------
+[security]
+# Deep security analysis for Rust and Tauri code
+enable_deep_security_scan = true
+
+# Detect SQL injection patterns (important for SeaORM)
+detect_sql_injection = true
+
+# Verify safe filesystem usage (critical for Tauri)
+check_filesystem_access = true
+
+# Analyze password and credential handling
+analyze_credential_handling = true
+
+# ------------------------------------------------------------------
+# SECTION: CODE QUALITY
+# ------------------------------------------------------------------
+[code_quality]
+# Suggest performance improvements
+suggest_performance_improvements = true
+
+# Detect duplicate code
+detect_duplicate_code = true
+
+# Verify naming conventions
+check_naming_conventions = true
+
+# Flag unused imports
+flag_unused_imports = true

@@ -1,0 +1,70 @@
+[package]
+name = "appsdesktop"
+version = "0.1.0-alpha"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[lib]
+name = "appsdesktop"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { workspace = true }
+
+[dependencies]
+# Local Crates
+domain = { workspace = true }
+infra = { workspace = true }
+sea-orm = { workspace = true }
+migration = { workspace = true }
+
+# Tauri
+tauri = { workspace = true }
+tauri-plugin-opener = { workspace = true }
+tauri-plugin-secure-storage = { workspace = true }
+
+# Async Runtime
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Logging & Tracing
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["json"] }
+
+# Error Handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Cryptography & Security
+bcrypt = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+jsonwebtoken = { workspace = true }
+secrecy = { workspace = true }
+
+# Utilities
+uuid = { workspace = true }
+chrono = { workspace = true }
+percent-encoding = { workspace = true }
+hex = { workspace = true }
+time = { workspace = true }
+rand = { workspace = true }
+regex = { workspace = true }
+futures = { workspace = true }
+tauri-plugin-os = "2"
+window-vibrancy = "0.7.1"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[dev-dependencies]
+  infra = { workspace = true, features = ["testing"] }
+  tempfile.workspace = true
+  temp-env = "0.3"

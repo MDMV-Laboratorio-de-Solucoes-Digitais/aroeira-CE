@@ -1,0 +1,251 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Check All (Pre-Push)",
+      "detail": "Run all checks that would fail on pre-push hook",
+      "type": "shell",
+      "command": "bash",
+      "args": ["./check_project.sh"],
+      "windows": {
+        "command": "pwsh",
+        "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "./check_project.ps1"]
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      },
+      "problemMatcher": [
+        {
+          "pattern": {
+            "regexp": "^(error|warning):(.*)$",
+            "severity": 1,
+            "message": 2
+          }
+        }
+      ]
+    },
+    {
+      "label": "Rust: Clippy (Strict)",
+      "detail": "Run clippy with pedantic lints (same as pre-commit)",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings",
+        "-W",
+        "clippy::pedantic"
+      ],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "problemMatcher": "$rustc"
+    },
+    {
+      "label": "Rust: Check Format",
+      "detail": "Check if Rust code is formatted correctly",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["fmt", "--", "--check"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Rust: Format",
+      "detail": "Format all Rust code",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["fmt", "--all"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Rust: Run Tests",
+      "detail": "Run all Rust tests",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["test", "--workspace"],
+      "group": "test",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "Frontend: Type Check",
+      "detail": "Run svelte-check and TypeScript validation (same as pre-push)",
+      "type": "shell",
+      "command": "npm",
+      "args": ["--prefix", "apps/desktop", "run", "check"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "problemMatcher": [
+        {
+          "owner": "svelte",
+          "fileLocation": ["relative", "${workspaceFolder}/apps/desktop"],
+          "pattern": [
+            {
+              "regexp": "^Error: (.*)$",
+              "message": 1
+            },
+            {
+              "regexp": "^\\s*at (.*?):(\\d+):(\\d+)$",
+              "file": 1,
+              "line": 2,
+              "column": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "label": "Frontend: Lint",
+      "detail": "Run ESLint on frontend code",
+      "type": "shell",
+      "command": "npm",
+      "args": ["--prefix", "apps/desktop", "run", "lint"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "problemMatcher": [
+        {
+          "owner": "eslint",
+          "fileLocation": ["relative", "${workspaceFolder}/apps/desktop"],
+          "pattern": {
+            "regexp": "^(.+):(\\d+):(\\d+)\\s+(error|warning)\\s+(.+)$",
+            "file": 1,
+            "line": 2,
+            "column": 3,
+            "severity": 4,
+            "message": 5
+          }
+        }
+      ]
+    },
+    {
+      "label": "Frontend: Format Check",
+      "detail": "Check if frontend code is formatted correctly",
+      "type": "shell",
+      "command": "npx",
+      "args": ["prettier", "--check", ".", "--ignore-path", ".prettierignore"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Docker: Start Database",
+      "detail": "Start PostgreSQL database in Docker",
+      "type": "shell",
+      "command": "docker",
+      "args": ["compose", "up", "-d"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Docker: Stop Database",
+      "detail": "Stop PostgreSQL database",
+      "type": "shell",
+      "command": "docker",
+      "args": ["compose", "down"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Lefthook: Install Hooks",
+      "detail": "Install git hooks for pre-commit and pre-push",
+      "type": "shell",
+      "command": "lefthook",
+      "args": ["install"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Lefthook: Run Pre-Commit",
+      "detail": "Run pre-commit hooks manually",
+      "type": "shell",
+      "command": "lefthook",
+      "args": ["run", "pre-commit"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Lefthook: Run Pre-Push",
+      "detail": "Run pre-push hooks manually",
+      "type": "shell",
+      "command": "lefthook",
+      "args": ["run", "pre-push"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    }
+  ]
+}

@@ -1,0 +1,206 @@
+name: CI
+
+on:
+  push:
+    branches: ["dev", "main"]
+    paths:
+      - "apps/desktop/**"
+      - "libs/**"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/ci.yml"
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "plans/**"
+  pull_request:
+    branches: ["dev", "main"]
+    paths:
+      - "apps/desktop/**"
+      - "libs/**"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/ci.yml"
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "plans/**"
+
+# Intelligent concurrency: cancel redundant PR builds, preserve main builds
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+
+jobs:
+  # ==============================================================
+  # Phase 1: Fast Checks (< 2 min) - Gate for heavy builds
+  # ==============================================================
+  fast-checks:
+    name: Fast Checks (Lint & Type Check)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install Node Dependencies
+        run: npm ci
+        working-directory: ./apps/desktop
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.6
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl wget file libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
+            libwebkit2gtk-4.1-dev || sudo apt-get install -y libwebkit2gtk-4.0-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            apps/desktop/src-tauri -> target
+
+      - name: Cargo Check (Fast compilation validation)
+        run: cargo check --workspace --locked --profile ci
+
+      - name: Check Formatting (Rust)
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (Rust Lint)
+        run: cargo clippy --workspace --all-targets --profile ci -- -W clippy::pedantic -D warnings
+
+      - name: Svelte Check
+        run: npm run check
+        working-directory: ./apps/desktop
+
+      - name: ESLint
+        run: npm run lint
+        working-directory: ./apps/desktop
+
+  # ==============================================================
+  # Phase 2: Rust Tests (Only runs if fast-checks pass)
+  # ==============================================================
+  test-rust:
+    name: Rust Tests
+    needs: fast-checks
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.6
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl wget file libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
+            libwebkit2gtk-4.1-dev || sudo apt-get install -y libwebkit2gtk-4.0-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            apps/desktop/src-tauri -> target
+
+      - name: Run Tests
+        run: cargo test --workspace --locked --profile ci
+
+  # ==============================================================
+  # Phase 2: Frontend Tests (Only runs if fast-checks pass)
+  # ==============================================================
+  test-frontend:
+    name: Frontend Tests (Vitest)
+    needs: fast-checks
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ./apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run Unit Tests
+        run: npm run test --if-present
+
+  # ==============================================================
+  # Phase 3: E2E Tests with Playwright Sharding
+  # ==============================================================
+  test-e2e:
+    name: E2E Tests (Shard ${{ matrix.shard }})
+    needs: [test-rust, test-frontend]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    # Only run on main or when explicitly requested
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && contains(join(github.event.pull_request.labels.*.name, ','), 'run-e2e'))
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1/3, 2/3, 3/3]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install Dependencies
+        run: npm ci
+        working-directory: ./apps/desktop
+
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps
+        working-directory: ./apps/desktop
+
+      - name: Run E2E Tests (Shard ${{ matrix.shard }})
+        run: npx playwright test --shard ${{ matrix.shard }}
+        working-directory: ./apps/desktop
+
+      - name: Upload Test Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report-shard-${{ strategy.job-index }}
+          path: apps/desktop/playwright-report/
+          retention-days: 7

@@ -1,0 +1,186 @@
+@import "tailwindcss";
+@plugin '@tailwindcss/forms';
+@plugin '@tailwindcss/typography';
+
+@theme {
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
+
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+}
+
+@utility pt-safe {
+  padding-top: var(--sat);
+}
+@utility pb-safe {
+  padding-bottom: var(--sab);
+}
+@utility pl-safe {
+  padding-left: var(--sal);
+}
+@utility pr-safe {
+  padding-right: var(--sar);
+}
+@utility mt-safe {
+  margin-top: var(--sat);
+}
+@utility mb-safe {
+  margin-bottom: var(--sab);
+}
+@utility ml-safe {
+  margin-left: var(--sal);
+}
+@utility mr-safe {
+  margin-right: var(--sar);
+}
+@utility h-safe-screen {
+  height: calc(100vh - var(--sat) - var(--sab));
+}
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 240 5.9% 10%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 240 5% 85%; /* Darkened from 96% for better Light Mode visibility */
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 72.2% 50.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 240 5.9% 10%;
+    --radius: 0.5rem;
+  }
+
+  /* Boost specificity to ensure override of :root */
+  :root.dark {
+    color-scheme: dark;
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 10% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 240 5.9% 10%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 240 5% 30%; /* Restored to balanced Dark Grey (visible on 3.9% bg) */
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 240 4.9% 83.9%;
+  }
+
+  html,
+  body {
+    @apply m-0 h-full w-full overflow-hidden p-0;
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+  }
+
+  /* Global layout wrapper for SvelteKit body content */
+  .global-layout-content {
+    @apply h-full w-full;
+  }
+}
+
+/* OUTSIDE LAYER BASE - FORCED GLOBAL OVERRIDES */
+
+/* Aroeira Theme (Nature/Industrial) - Overrides dark mode */
+:root[data-theme="aroeira"] {
+  color-scheme: light;
+  --background: 40 40% 96%; /* Warm Cream */
+  --foreground: 140 60% 15%; /* Deep Forest Green */
+  --card: 0 0% 100%;
+  --card-foreground: 140 60% 15%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 140 60% 15%;
+  --primary: 140 50% 30%; /* Rich Green */
+  --primary-foreground: 0 0% 100%;
+  --secondary: 40 30% 90%;
+  --secondary-foreground: 140 60% 15%;
+  --muted: 40 20% 92%;
+  --muted-foreground: 140 30% 40%;
+  --accent: 140 40% 90%; /* Light Green Highlight */
+  --accent-foreground: 140 60% 15%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 140 30% 80%;
+  --input: 140 30% 80%;
+  --ring: 140 50% 30%;
+  --radius: 0.75rem;
+}
+
+/* Enterprise Theme (High Contrast/Clean) - Overrides dark mode */
+:root[data-theme="enterprise"] {
+  color-scheme: light;
+  --background: 0 0% 100%;
+  --foreground: 0 0% 0%;
+  --card: 0 0% 100%;
+  --card-foreground: 0 0% 0%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 0 0% 0%;
+  --primary: 0 0% 0%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 0 0% 92%; /* Darker secondary for contrast */
+  --secondary-foreground: 0 0% 0%;
+  --muted: 0 0% 92%; /* Darker muted for contrast */
+  --muted-foreground: 0 0% 45%;
+  --accent: 0 0% 85%; /* Much darker hover state */
+  --accent-foreground: 0 0% 0%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 0 0% 60%; /* High contrast border */
+  --input: 0 0% 60%;
+  --ring: 0 0% 0%;
+  --radius: 0rem;
+}

@@ -1,0 +1,16 @@
+{
+  "recommendations": [
+    "rust-lang.rust-analyzer",
+    "svelte.svelte-vscode",
+    "tamasfe.even-better-toml",
+    "bradlc.vscode-tailwindcss",
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    "vadimcn.vscode-lldb",
+    "vitest.explorer",
+    "tauri-apps.tauri-vscode",
+    "streetsidesoftware.code-spell-checker",
+    "ms-playwright.playwright",
+    "evondev.indent-rainbow-palettes"
+  ]
+}

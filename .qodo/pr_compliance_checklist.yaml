@@ -1,0 +1,79 @@
+# ==========================================================================
+# AROEIRA TEMPLATE - QODO MERGE PR COMPLIANCE CHECKLIST
+# ==========================================================================
+# This file defines quality gates for PRs in the Aroeira Template project.
+# It enforces best practices for Tauri v2, Svelte 5 (Runes), and Rust 1.93+.
+# ==========================================================================
+
+pr_compliances:
+  # ------------------------------------------------------------------
+  # SECTION: GENERAL CODE HYGIENE & BEST PRACTICES
+  # ------------------------------------------------------------------
+  - title: "No Hardcoded Secrets or Credentials"
+    compliance_label: true
+    objective: "Prevent sensitive data leaks by ensuring no API keys, tokens, or passwords are hardcoded."
+    success_criteria: "Configuration values are loaded via environment variables (dotenv), config files, or secret managers."
+    failure_criteria: "Presence of hardcoded string literals that resemble API keys, passwords, or explicit .env file commits."
+
+  - title: "Clean & Production-Ready Code"
+    compliance_label: true
+    objective: "Ensure codebase cleanliness by removing temporary debug artifacts."
+    success_criteria: "Code is free of commented-out logic, console.log (JS/TS), or println! (Rust) used for debugging."
+    failure_criteria: "Contains 'console.log', 'println!' (outside CLI output), or large blocks of commented-out code."
+
+  # ------------------------------------------------------------------
+  # SECTION: RUST (BACKEND & CORE) - RUST 1.93 & AXUM 0.8.8
+  # ------------------------------------------------------------------
+  - title: "Safe Error Handling (Rust)"
+    compliance_label: true
+    objective: "Prevent runtime panics in the backend service."
+    success_criteria: "Uses proper Result/Option propagation (matches, '?', map_err). 'unwrap()' or 'expect()' are only used in tests or with explicit safety comments."
+    failure_criteria: "Usage of '.unwrap()' on Results/Options in production code without a guiding comment explaining why panic is impossible."
+
+  - title: "Axum Handler Efficiency"
+    compliance_label: true
+    objective: "Ensure Axum handlers are non-blocking and utilize Axum 0.8+ extraction patterns correctly."
+    success_criteria: "Database calls or heavy computations are async. State extraction uses `State<T>`. No blocking I/O on the main async thread."
+    failure_criteria: "Blocking I/O operations (std::fs, std::thread::sleep) inside async Axum handlers; Incorrect State cloning."
+
+  - title: "Rust Async Runtime Safety"
+    compliance_label: true
+    objective: "Ensure correct usage of Tokio runtime and concurrency primitives."
+    success_criteria: "Use of 'tokio::sync' primitives (Mutex, RwLock) instead of 'std::sync' counterparts across await points."
+    failure_criteria: "Holding a 'std::sync::Mutex' guard across an '.await' point."
+
+  # ------------------------------------------------------------------
+  # SECTION: TAURI V2 (DESKTOP/MOBILE INTEGRATION)
+  # ------------------------------------------------------------------
+  - title: "Tauri Command Input Validation"
+    compliance_label: true
+    objective: "Secure the IPC bridge by validating all inputs from the frontend."
+    success_criteria: "All #[tauri::command] functions strictly validate input arguments before processing or passing to the database."
+    failure_criteria: "Tauri commands accepting raw strings/objects and using them directly in shell commands or SQL queries without sanitization."
+
+  - title: "Tauri Permissions & Capabilities"
+    compliance_label: true
+    objective: "Adhere to the Principle of Least Privilege in Tauri v2 capabilities."
+    success_criteria: "Changes to 'capabilities' (JSON/TOML) are minimal and justified. No wildcard permissions (*) unless absolutely necessary."
+    failure_criteria: "Adding blanket permissions (e.g., 'fs:allow-read-recursive', 'shell:allow-open') without explicit context or documentation."
+
+  # ------------------------------------------------------------------
+  # SECTION: SVELTE 5 (FRONTEND) - RUNES MODE
+  # ------------------------------------------------------------------
+  - title: "Svelte 5 Runes Usage"
+    compliance_label: true
+    objective: "Ensure consistent use of Svelte 5 reactivity primitives (Runes)."
+    success_criteria: "Uses '$state', '$derived', '$effect', and '$props' syntax. Avoids legacy 'export let' or generic 'store' patterns for component-local state."
+    failure_criteria: "Mixing legacy Svelte 4 reactivity (stores/export let) with Svelte 5 Runes in the same component unnecessarily."
+
+  - title: "Svelte Effect Cleanup"
+    compliance_label: true
+    objective: "Prevent memory leaks in frontend reactivity."
+    success_criteria: "Usage of '$effect' that initiates listeners, timers, or subscriptions includes a returned cleanup function."
+    failure_criteria: "'$effect' blocks creating event listeners or intervals without a corresponding return function to clear them."
+
+  - title: "Accessibility (a11y) & Semantic HTML"
+    compliance_label: true
+    objective: "Maintain high accessibility standards in UI components."
+    success_criteria: "Interactive elements have aria-labels, alt text for images, and semantic tags (button, form, nav)."
+    failure_criteria: "Clickable 'div' or 'span' elements without keyboard events; images without alt tags."

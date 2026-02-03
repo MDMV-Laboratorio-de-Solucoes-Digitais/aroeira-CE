@@ -1,0 +1,52 @@
+{
+  "name": "aroeira-mdmv",
+  "version": "0.1.0-alpha",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "e2e": "npx playwright test",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "lint": "npm run lint:js && npm run lint:css",
+    "lint:js": "eslint .",
+    "lint:css": "prettier --check \"**/*.{css,scss,svelte}\"",
+    "format": "npm run format:js && npm run format:css",
+    "format:js": "eslint . --fix",
+    "format:css": "prettier --write \"**/*.{css,scss,svelte}\"",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:restart": "docker compose down && docker compose up -d"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "@eslint/compat": "^1.2.4",
+    "@playwright/test": "^1.58.0",
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@tailwindcss/vite": "^4.1.18",
+    "@types/node": "^25.0.10",
+    "@vitest/browser-playwright": "^4.0.18",
+    "@vitest/coverage-v8": "^4.0.18",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-svelte": "^2.46.1",
+    "globals": "^15.13.0",
+    "jsdom": "^27.4.0",
+    "mdsvex": "^0.12.6",
+    "prettier": "^3.7.4",
+    "prettier-plugin-svelte": "^3.4.1",
+    "svelte": "^5.0.0",
+    "typescript-eslint": "^8.19.1",
+    "vite": "^7.3.1",
+    "vite-plugin-devtools-json": "^1.0.0",
+    "vitest": "^4.0.18"
+  },
+  "overrides": {
+    "vite": "^7.3.1",
+    "@sveltejs/vite-plugin-svelte": {
+      "vite": "^7.3.1"
+    }
+  }
+}

@@ -1,0 +1,108 @@
+# ==========================================================================
+# AROEIRA TEMPLATE - QODO COMPLIANCE CHECK WORKFLOW
+# ==========================================================================
+# This workflow blocks PRs that fail Qodo compliance checks.
+# It monitors labels added by Qodo Merge and fails if blockers exist.
+# ==========================================================================
+
+name: Qodo Compliance Check
+
+on:
+  pull_request:
+    types: [labeled, unlabeled, synchronize, opened, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  check-labels:
+    name: Check Compliance Labels
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for Compliance Failures
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Safely get labels with null-coalescing and normalize to lowercase
+            const labels = (context.payload.pull_request.labels ?? [])
+              .map(l => String(l.name).trim().toLowerCase());
+
+            // Labels that Qodo adds when something is wrong (lowercase for comparison)
+            const blockLabels = new Set([
+              'failed compliance check',
+              'possible security concern',
+              'needs review',
+              'critical security issue'
+            ]);
+
+            const foundBlockers = labels.filter(l => blockLabels.has(l));
+
+            if (foundBlockers.length > 0) {
+              core.setFailed(`
+                ❌ PR blocked due to compliance labels: ${foundBlockers.join(', ')}
+
+                Please resolve the issues identified by Qodo Merge and request a re-review.
+
+                Common fixes:
+                - Run 'cargo clippy --workspace --all-targets -- -D warnings' for Rust issues
+                - Run 'npx svelte-check' for Svelte issues
+                - Review security concerns in the PR comments
+                - Ensure no hardcoded secrets or credentials
+              `);
+            } else {
+              console.log('✅ No blocking compliance labels found. PR is clear to proceed.');
+            }
+
+  pre-validation:
+    name: Pre-validation Checks
+    # Only run on events that change code, not just labels
+    if: github.event.action != 'labeled' && github.event.action != 'unlabeled'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl wget file libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
+            libwebkit2gtk-4.1-dev || sudo apt-get install -y libwebkit2gtk-4.0-dev
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install Dependencies (Root)
+        run: npm ci
+
+      - name: Install Dependencies (Desktop)
+        run: npm ci
+        working-directory: ./apps/desktop
+
+      - name: Rust Format Check
+        run: cargo fmt -- --check
+        continue-on-error: false
+
+      - name: Rust Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+        continue-on-error: false
+
+      - name: Svelte Check
+        run: npm run check
+        working-directory: ./apps/desktop
+        continue-on-error: false
+
+      - name: ESLint Check
+        run: npm run lint
+        continue-on-error: false
+
+      - name: Prettier Check
+        run: npx prettier --check . --ignore-path .prettierignore
+        continue-on-error: false

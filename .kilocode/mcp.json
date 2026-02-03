@@ -1,0 +1,46 @@
+{
+  "mcpServers": {
+    "svelte": {
+      "command": "npx",
+      "args": ["-y", "@sveltejs/mcp@0.1.19"],
+      "alwaysAllow": [
+        "list-sections",
+        "get-documentation",
+        "svelte-autofixer",
+        "playground-link"
+      ]
+    },
+    "tauri": {
+      "command": "npx",
+      "args": ["-y", "@hypothesi/tauri-mcp-server@0.8.1"],
+      "disabled": true,
+      "alwaysAllow": []
+    },
+    "postgres": {
+      "disabled": true,
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "--add-host",
+        "host.docker.internal:host-gateway",
+        "-e",
+        "DATABASE_URI",
+        "crystaldba/postgres-mcp@sha256:dbbd346860d29f1543e991f30f3284bf4ab5f096d049ecc3426528f20b1b6e6b",
+        "--access-mode=restricted"
+      ],
+      "env": { "DATABASE_URI": "${env:AROEIRA_DATABASE_URI}" }
+    },
+    "sqlite": {
+      "disabled": true,
+      "command": "npx",
+      "args": [
+        "-y",
+        "@berthojoris/mcp-sqlite-server@1.3.0",
+        "${env:AROEIRA_SQLITE_PATH}",
+        "list,read"
+      ]
+    }
+  }
+}

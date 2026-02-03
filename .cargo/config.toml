@@ -1,0 +1,7 @@
+[build]
+# Enable incremental compilation for faster rebuilds
+incremental = true
+
+[profile.dev]
+# Ensure debug symbols don't slow down compilation too much
+split-debuginfo = "unpacked"

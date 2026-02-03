@@ -1,0 +1,349 @@
+<script lang="ts">
+  import { onMount } from "svelte";
+  import { fly } from "svelte/transition";
+  import { Button } from "$lib/components/ui/button";
+  import * as Card from "$lib/components/ui/card";
+  import { Input } from "$lib/components/ui/input";
+  import { Label } from "$lib/components/ui/label";
+  import { invoke } from "@tauri-apps/api/core";
+  import { Lock, ShieldCheck, X, Check, Circle } from "lucide-svelte";
+  import { goto } from "$app/navigation";
+  import { resolve } from "$app/paths";
+  import { logAuditEvent, setSessionId } from "$lib/audit";
+  import { handleError } from "$lib/logger";
+
+  // Helper function to redact email addresses for audit logging
+  function redactEmail(email: string): string {
+    const [, domain] = email.split("@");
+    if (!domain) return "***@***";
+    return `***@${domain}`;
+  }
+
+  let isLogin = $state(true);
+  let loading = $state(false);
+  let error = $state("");
+  let successMessage = $state("");
+  let email = $state("");
+  let password = $state("");
+  let confirmPassword = $state("");
+  let isPasswordFocused = $state(false);
+
+  type PasswordSecurityLevel =
+    | "none"
+    | "minimum"
+    | "secure"
+    | "strict"
+    | "paranoid";
+  interface PasswordPolicy {
+    level: PasswordSecurityLevel;
+    min_length: number;
+  }
+
+  let policy = $state<PasswordPolicy>({ level: "secure", min_length: 8 });
+
+  onMount(async () => {
+    try {
+      policy = await invoke("get_password_policy");
+    } catch (err) {
+      console.error("Failed to fetch password policy", err);
+    }
+  });
+
+  // Derived state for password rules - use Array.from to count Unicode code points correctly
+  let hasMinLength = $derived([...password].length >= policy.min_length);
+  // Optimization: Only check regex if level requires it
+  let requiresComplexity = $derived(
+    ["secure", "strict", "paranoid"].includes(policy.level),
+  );
+
+  // Use Unicode property escapes to match backend behavior exactly
+  let hasUppercase = $derived(
+    !requiresComplexity || /\p{Upper}/u.test(password),
+  );
+  let hasLowercase = $derived(
+    !requiresComplexity || /\p{Lower}/u.test(password),
+  );
+  let hasNumber = $derived(!requiresComplexity || /\p{Number}/u.test(password));
+  let hasSpecial = $derived(
+    !requiresComplexity || /[^\p{Alphabetic}\p{Number}\s]/u.test(password),
+  );
+
+  let allRulesMet = $derived(
+    hasMinLength && hasUppercase && hasLowercase && hasNumber && hasSpecial,
+  );
+
+  async function handleSubmit(e: Event) {
+    e.preventDefault();
+    loading = true;
+    error = "";
+
+    try {
+      if (isLogin) {
+        await invoke("login", { email, password });
+        setSessionId();
+        logAuditEvent("login", true, { email: redactEmail(email) });
+        await goto(resolve("/dashboard"), { replaceState: true });
+      } else {
+        if (password !== confirmPassword) {
+          error = "Passwords do not match";
+          return;
+        }
+        await invoke("register", { email, password, confirmPassword });
+        logAuditEvent("register", true, { email: redactEmail(email) });
+        isLogin = true;
+        successMessage = "Registration successful! Please login.";
+        error = ""; // Clear any existing error
+        email = "";
+        password = "";
+        confirmPassword = "";
+      }
+    } catch (err: unknown) {
+      logAuditEvent(isLogin ? "login" : "register", false, {
+        email: redactEmail(email),
+      });
+      error = handleError(err, "authentication");
+    } finally {
+      loading = false;
+    }
+  }
+
+  function dismissError() {
+    error = "";
+  }
+</script>
+
+<div class="fixed inset-0 flex flex-col overflow-hidden bg-slate-50 font-sans">
+  <!-- Header -->
+  <header
+    class="flex w-full items-center justify-between border-b border-slate-200 bg-white px-4 py-1 shadow-sm"
+  >
+    <div class="flex items-center gap-2">
+      <div class="bg-primary text-primary-foreground rounded p-1">
+        <ShieldCheck size={20} />
+      </div>
+      <h1 class="text-xl font-bold tracking-tight text-slate-900">Aroeira</h1>
+    </div>
+    <div class="text-muted-foreground flex items-center gap-1 text-xs">
+      <Lock size={12} />
+      <span>Secure Environment</span>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main
+    class="flex flex-1 flex-col items-center justify-center overflow-y-auto p-2"
+  >
+    <Card.Root class="w-full max-w-95 border-slate-200 shadow-lg">
+      <Card.Header class="space-y-1 p-4 pb-2">
+        <Card.Title class="text-primary text-center text-2xl">
+          {isLogin ? "Welcome Back" : "Create Account"}
+        </Card.Title>
+        <Card.Description class="text-center">
+          {isLogin
+            ? "Enter your credentials to access your workspace."
+            : "Sign up to get started with Aroeira."}
+        </Card.Description>
+      </Card.Header>
+      <Card.Content class="p-4 pt-0">
+        <form onsubmit={handleSubmit} class="space-y-2">
+          {#if successMessage}
+            <div class="text-green-600 text-sm mb-4">
+              {successMessage}
+            </div>
+          {/if}
+          <div class="space-y-1">
+            <Label for="email" class="text-slate-700">Email</Label>
+            <Input
+              id="email"
+              type="email"
+              placeholder="name@example.com"
+              bind:value={email}
+              required
+              class="bg-white"
+            />
+          </div>
+          <div class="space-y-1 relative">
+            <Label for="password" class="text-slate-700">Password</Label>
+            <Input
+              id="password"
+              type="password"
+              placeholder="••••••••"
+              bind:value={password}
+              required
+              class="bg-white"
+              onfocus={() => (isPasswordFocused = true)}
+              onblur={() => (isPasswordFocused = false)}
+            />
+
+            {#if !isLogin && isPasswordFocused && !allRulesMet}
+              <!-- Floating Password Requirements -->
+              <div
+                class="absolute left-0 top-full z-50 mt-1 w-full rounded-lg border border-slate-200 bg-white p-3 shadow-xl md:left-full md:ml-4 md:top-0 md:mt-0 md:w-64"
+                transition:fly={{ y: -10, duration: 200 }}
+              >
+                <div
+                  class="mb-2 flex items-center justify-between border-b border-slate-100 pb-1"
+                >
+                  <p class="font-semibold text-xs text-slate-800">
+                    Password Requirements
+                  </p>
+                  <span class="text-[10px] text-slate-400 capitalize"
+                    >{policy.level}</span
+                  >
+                </div>
+                <ul class="space-y-1.5 text-xs text-slate-600">
+                  <li
+                    class="flex items-center gap-2 transition-colors duration-200 {hasMinLength
+                      ? 'text-green-600'
+                      : ''}"
+                  >
+                    {#if hasMinLength}
+                      <Check size={14} class="stroke-2" />
+                    {:else}
+                      <Circle size={14} class="stroke-2" />
+                    {/if}
+                    <span>At least {policy.min_length} characters</span>
+                  </li>
+                  {#if requiresComplexity}
+                    <li
+                      class="flex items-center gap-2 transition-colors duration-200 {hasUppercase
+                        ? 'text-green-600'
+                        : ''}"
+                    >
+                      {#if hasUppercase}
+                        <Check size={14} class="stroke-2" />
+                      {:else}
+                        <Circle size={14} class="stroke-2" />
+                      {/if}
+                      <span>One uppercase letter</span>
+                    </li>
+                    <li
+                      class="flex items-center gap-2 transition-colors duration-200 {hasLowercase
+                        ? 'text-green-600'
+                        : ''}"
+                    >
+                      {#if hasLowercase}
+                        <Check size={14} class="stroke-2" />
+                      {:else}
+                        <Circle size={14} class="stroke-2" />
+                      {/if}
+                      <span>One lowercase letter</span>
+                    </li>
+                    <li
+                      class="flex items-center gap-2 transition-colors duration-200 {hasNumber
+                        ? 'text-green-600'
+                        : ''}"
+                    >
+                      {#if hasNumber}
+                        <Check size={14} class="stroke-2" />
+                      {:else}
+                        <Circle size={14} class="stroke-2" />
+                      {/if}
+                      <span>One number</span>
+                    </li>
+                    <li
+                      class="flex items-center gap-2 transition-colors duration-200 {hasSpecial
+                        ? 'text-green-600'
+                        : ''}"
+                    >
+                      {#if hasSpecial}
+                        <Check size={14} class="stroke-2" />
+                      {:else}
+                        <Circle size={14} class="stroke-2" />
+                      {/if}
+                      <span>One special character</span>
+                    </li>
+                  {/if}
+                </ul>
+                <!-- Arrow/Caret for visual connection -->
+                <div
+                  class="absolute -top-1.5 left-4 h-3 w-3 rotate-45 border-l border-t border-slate-200 bg-white md:-left-1.5 md:top-3"
+                ></div>
+              </div>
+            {/if}
+          </div>
+          {#if !isLogin}
+            <div class="space-y-1">
+              <Label for="confirm-password" class="text-slate-700"
+                >Confirm Password</Label
+              >
+              <Input
+                id="confirm-password"
+                type="password"
+                placeholder="••••••••"
+                bind:value={confirmPassword}
+                required
+                class="bg-white"
+              />
+            </div>
+          {/if}
+          <Button
+            type="submit"
+            class="w-full font-semibold shadow-md"
+            disabled={loading}
+          >
+            {#if loading}
+              <span class="mr-2 animate-spin">⟳</span> Processing...
+            {:else}
+              {isLogin ? "Sign In" : "Create Account"}
+            {/if}
+          </Button>
+        </form>
+      </Card.Content>
+      <Card.Footer
+        class="flex flex-col gap-2 rounded-b-lg border-t border-slate-100 bg-slate-50/50 p-3"
+      >
+        <div class="text-muted-foreground relative w-full text-center text-xs">
+          <span class="relative z-10 bg-slate-50/50 px-2">
+            {isLogin ? "New to Aroeira?" : "Already have an account?"}
+          </span>
+          <div class="absolute inset-0 flex items-center">
+            <div class="w-full border-t border-slate-200"></div>
+          </div>
+        </div>
+        <Button
+          onclick={() => {
+            isLogin = !isLogin;
+            successMessage = "";
+            error = "";
+          }}
+          class="hover:text-primary w-full border border-slate-200 bg-transparent text-slate-900 shadow-sm hover:bg-white"
+        >
+          {isLogin ? "Create an account" : "Sign in to your account"}
+        </Button>
+      </Card.Footer>
+    </Card.Root>
+  </main>
+</div>
+
+{#if error}
+  <div
+    class="animate-in slide-in-from-top-2 fixed top-6 right-6 z-50 flex w-full max-w-sm items-start gap-4 rounded-lg border border-red-200/60 bg-red-100/80 p-4 text-sm text-red-900 shadow-[0_8px_30px_rgb(0,0,0,0.12)] backdrop-blur-sm sm:right-6 sm:w-auto"
+    role="alert"
+  >
+    <div class="mt-0.5">
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="currentColor"
+        class="h-5 w-5 text-red-500"
+      >
+        <path
+          fill-rule="evenodd"
+          d="M9.401 3.003c1.155-2 4.043-2 5.197 0l7.355 12.748c1.154 2-.29 4.5-2.599 4.5H4.645c-2.309 0-3.752-2.5-2.598-4.5L9.4 3.003zM12 8.25a.75.75 0 01.75.75v3.75a.75.75 0 01-1.5 0V9a.75.75 0 01.75-.75zm0 8.25a.75.75 0 100-1.5.75.75 0 000 1.5z"
+          clip-rule="evenodd"
+        />
+      </svg>
+    </div>
+    <div class="flex-1 font-medium leading-relaxed">
+      {error}
+    </div>
+    <button
+      onclick={dismissError}
+      class="text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-900 -mr-2 -mt-2 rounded-md p-2"
+      aria-label="Dismiss error"
+    >
+      <X size={16} />
+    </button>
+  </div>
+{/if}

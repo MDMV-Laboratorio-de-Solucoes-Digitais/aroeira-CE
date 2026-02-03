@@ -1,0 +1,47 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run All Tests",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "bash ./run_tests.sh",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      }
+    },
+    {
+      "name": "Run Rust Tests",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "cargo test --workspace",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      }
+    },
+    {
+      "name": "Run Frontend Tests",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "cd \"${workspaceFolder}/apps/desktop\" && npm test",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      }
+    }
+  ]
+}

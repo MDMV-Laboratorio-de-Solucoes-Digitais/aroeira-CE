@@ -1,0 +1,215 @@
+# Rust / Cargo
+target/
+debug/
+release/
+**/*.rs.bk
+
+# Node / JS
+node_modules/
+dist/
+build/
+.output/
+.svelte-kit/
+.npm/
+.yarn/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+apps/**/src-tauri/target/
+apps/**/src-tauri/gen/schemas/
+
+# Environment Variables
+.env
+.env.*
+!.env.example
+
+# OS specific
+.DS_Store
+Thumbs.db
+.idea/
+
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# Docker
+docker-compose.override.yml
+
+# Postgres / Database
+postgres_data/
+*.db
+*.db-shm
+*.db-wal
+
+# AI files
+AGENTS.md
+GEMINI.md
+QWEN.md
+LLXPRT.md
+.qwen/
+.qwen/PROJECT_SUMMARY.md
+opencode.json
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+logs/
+.tmp/
+
+# Build artifacts and specific debug logs
+apps_direct.log
+build.log
+check.log
+vite_manual.log
+vite_dev.log
+vite_final.log
+tauri_run.log
+tauri_run_new.log
+tauri_run_persistent.log
+tauri_run_final.log
+tauri_dev.log
+tauri_dev_v2.log
+apps/desktop/*.log
+apps/desktop/src-tauri/*.log
+
+# Generated documentation
+docs/generated/
+docs/api/
+
+# IDE and editor files
+*.swp
+*.swo
+*~
+.vs/
+.cache/
+
+# Local configuration
+.local/
+config.local.*
+
+# Target directories in workspace members
+libs/*/target/
+apps/*/target/
+
+# Platform-specific build outputs
+**/Debug/
+**/Release/
+**/*.dylib
+**/*.so
+**/*.dll
+
+# Temporary files created during development
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Icon?
+VolumeIcon.icns
+
+# Editor-specific files
+.atom/
+.sublime-project
+.sublime-workspace
+*.tmproj
+*.xcworkspace
+*.xcodeproj
+xcuserdata/
+
+# Test coverage
+coverage/
+coverage*.txt
+mutants.out/
+*.lcov
+*.profdata
+*.gcda
+*.gcno
+
+# IDE-specific
+.history/
+
+# Security scan results
+.bandit/
+.snyk/
+.codeclimate/
+.sonar/
+
+# Temporary test configuration
+tests/Cargo.toml
+
+# Ghost / Duplicate directories (from investigation)
+apps/desktop/apps/
+
+
+# Additional build artifacts
+**/bin/
+**/obj/
+**/*.o
+**/*.a
+**/*.lib
+
+# IDE and editor specific
+*.iml
+*.ipr
+*.iws
+.project
+.classpath
+.settings/
+
+# Backup files
+*~
+*.bak
+*.orig
+*.rej
+
+# Coverage and test reports
+**/reports/
+**/test-results/
+**/junit.xml
+**/cobertura.xml
+
+# Local development files
+**/local.properties
+**/local.config
+**/local-settings.json
+
+# Secrets and credentials
+**/secrets/
+**/credentials/
+**/keys/
+**/*.key
+**/*.pem
+**/*.crt
+**/*.cert
+**/private.key
+**/private.pem
+
+# Distribution archives
+**/*.tar.gz
+**/*.zip
+**/*.rar
+**/*.7z
+
+# Compiled files
+**/*.pyc
+**/*.pyo
+**/*.jar
+**/*.war
+**/*.ear
+**/*.class
+**/*.pdb
+**/*.idb
+**/*.ilk
+**/*.gem
+**/*.gemspec
+**/*.nupkg
+.eslintcache

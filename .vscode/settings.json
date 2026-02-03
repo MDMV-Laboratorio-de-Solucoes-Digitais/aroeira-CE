@@ -1,0 +1,72 @@
+{
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+
+  "[rust]": {
+    "editor.defaultFormatter": "rust-lang.rust-analyzer",
+    "editor.formatOnSave": true
+  },
+
+  "[toml]": {
+    "editor.defaultFormatter": "tamasfe.even-better-toml"
+  },
+
+  "files.associations": {
+    "*.css": "tailwindcss"
+  },
+
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit",
+    "source.organizeImports": "explicit"
+  },
+
+  "eslint.workingDirectories": ["./apps/desktop"],
+  "eslint.validate": [
+    "javascript",
+    "typescript",
+    "svelte"
+  ],
+  "eslint.run": "onType",
+  "eslint.useESLintClass": true,
+
+  "prettier.documentSelectors": [
+    "**/*.svelte",
+    "**/*.ts",
+    "**/*.js",
+    "**/*.css",
+    "**/*.html",
+    "**/*.md",
+    "**/*.json"
+  ],
+  "prettier.requireConfig": false,
+
+  "rust-analyzer.checkOnSave": true,
+  "rust-analyzer.check.command": "clippy",
+  "rust-analyzer.check.extraArgs": [
+    "--workspace",
+    "--all-targets",
+    "--",
+    "-D",
+    "warnings",
+    "-W",
+    "clippy::pedantic"
+  ],
+  "rust-analyzer.cargo.features": "all",
+  "rust-analyzer.diagnostics.enable": true,
+  "rust-analyzer.diagnostics.experimental.enable": true,
+  "rust-analyzer.procMacro.enable": true,
+  "rust-analyzer.lens.enable": true,
+
+  "svelte.plugin.typescript.diagnostics.enable": true,
+  "svelte.plugin.css.diagnostics.enable": true,
+  "svelte.plugin.svelte.diagnostics.enable": true,
+  "svelte.enable-ts-plugin": true,
+
+  "task.allowAutomaticTasks": "on",
+
+  "git.confirmSync": false,
+  "git.enableSmartCommit": true,
+
+  "problems.decorations.enabled": true,
+  "problems.autoReveal": true
+}

@@ -1,0 +1,30 @@
+# Package Managers
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+bun.lock
+bun.lockb
+
+# Build Artifacts & Dependencies
+node_modules
+target
+build
+dist
+.svelte-kit
+.env
+.env.*
+
+# Miscellaneous
+/static/
+test-results
+apps/desktop/src-tauri/gen/schemas
+.qwen
+.vscode
+GEMINI.md
+QWEN.md
+coverage
+mutants.out
+AGENTS.md
+opencode.json
+
+

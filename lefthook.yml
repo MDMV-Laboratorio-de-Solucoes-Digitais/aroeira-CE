@@ -1,0 +1,134 @@
+# ============================================================
+# LEFTHOOK CONFIGURATION - Git Hooks
+# ============================================================
+#
+# PERFORMANCE OPTIMIZATIONS:
+# - Pre-commit: Fast checks on staged files only
+# - Pre-push: Smart validation - only checks changed file types
+# - Profile 'ci' is used for consistent behavior with GitHub Actions
+# - ESLint uses cache for incremental linting
+#
+# To skip hooks in emergencies: git commit --no-verify
+
+pre-commit:
+  parallel: true
+  commands:
+    # Rust Formatting - Fast, auto-fixes staged files
+    fmt:
+      glob: "**/*.rs"
+      run: cargo fmt --all
+      stage_fixed: true
+
+    # Rust Quick Check - Fast syntax/type check
+    check:
+      glob: "**/*.rs"
+      run: cargo check --workspace
+
+    # JS/TS/Svelte Formatting - Only staged files
+    prettier:
+      glob: "**/*.{js,ts,svelte,json,md,yml,css}"
+      run: npx prettier --write {staged_files}
+      stage_fixed: true
+
+    # ESLint - Only staged files with cache
+    eslint:
+      glob: "apps/desktop/**/*.{js,ts,svelte}"
+      run: npx eslint --cache --cache-location apps/desktop/.eslintcache -- {staged_files}
+
+commit-msg:
+  commands:
+    commit-lint:
+      run: cog verify --file {1}
+
+pre-push:
+  parallel: true
+  commands:
+    # ============================================================
+    # RUST CHECKS - Only run when Rust files changed
+    # ============================================================
+    rust-clippy:
+      run: |
+        UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || true)
+        if [ -z "$UPSTREAM" ]; then
+          echo "⚠️ No upstream configured; running full clippy..."
+          cargo clippy --workspace --all-targets --profile ci -- -W clippy::pedantic -D warnings
+          exit 0
+        fi
+
+        if git diff --name-only "$UPSTREAM"...HEAD | grep -qE '\.rs$'; then
+          echo "🔧 Rust files changed - running clippy..."
+          cargo clippy --workspace --all-targets --profile ci -- -W clippy::pedantic -D warnings
+        else
+          echo "✅ No Rust files changed - skipping clippy"
+        fi
+
+    rust-test:
+      run: |
+        UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || true)
+        if [ -z "$UPSTREAM" ]; then
+          echo "⚠️ No upstream configured; running full Rust tests..."
+          cargo test --workspace --profile ci
+          exit 0
+        fi
+
+        if git diff --name-only "$UPSTREAM"...HEAD | grep -qE '\.rs$'; then
+          echo "🧪 Rust files changed - running tests..."
+          cargo test --workspace --profile ci
+        else
+          echo "✅ No Rust files changed - skipping Rust tests"
+        fi
+
+    # ============================================================
+    # FRONTEND CHECKS - Only run when JS/TS/Svelte files changed
+    # ============================================================
+    frontend-svelte-check:
+      run: |
+        UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || true)
+        if [ -z "$UPSTREAM" ]; then
+          echo "⚠️ No upstream configured; running full svelte-check..."
+          npm --prefix apps/desktop run check
+          exit 0
+        fi
+
+        if git diff --name-only "$UPSTREAM"...HEAD | grep -qE '\.(js|ts|svelte)$'; then
+          echo "📝 Frontend files changed - running svelte-check..."
+          npm --prefix apps/desktop run check
+        else
+          echo "✅ No frontend files changed - skipping svelte-check"
+        fi
+
+    frontend-eslint:
+      run: |
+        UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || true)
+        if [ -z "$UPSTREAM" ]; then
+          echo "⚠️ No upstream configured; running full ESLint..."
+          npm --prefix apps/desktop run lint
+          exit 0
+        fi
+
+        if git diff --name-only "$UPSTREAM"...HEAD | grep -qE '\.(js|ts|svelte)$'; then
+          echo "🔍 Frontend files changed - running ESLint..."
+          npm --prefix apps/desktop run lint
+        else
+          echo "✅ No frontend files changed - skipping ESLint"
+        fi
+
+    frontend-prettier:
+      run: |
+        UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || true)
+        if [ -z "$UPSTREAM" ]; then
+          echo "⚠️ No upstream configured; running full prettier check..."
+          npx prettier --check . --ignore-path .prettierignore
+          exit 0
+        fi
+
+        files=$(git diff --name-only "$UPSTREAM"...HEAD | grep -E '\.(js|ts|svelte|json|md|yml|css)$' || true)
+        if [ -n "$files" ]; then
+          echo "🎨 Frontend files changed - running prettier check..."
+          echo "$files" | while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            npx prettier --check --ignore-path .prettierignore --ignore-unknown "$file"
+          done
+        else
+          echo "✅ No frontend files changed - skipping prettier"
+        fi
