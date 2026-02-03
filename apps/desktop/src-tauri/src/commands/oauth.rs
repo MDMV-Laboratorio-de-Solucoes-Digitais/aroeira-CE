@@ -98,9 +98,7 @@ pub async fn start_oauth_flow(
         "google" => AuthProvider::Google,
         "github" => AuthProvider::GitHub,
         _ => {
-            return Err(format!(
-                "Unknown provider: {provider}. Use 'google' or 'github'."
-            ));
+            return Err("Invalid provider. Use 'google' or 'github'.".to_string());
         }
     };
 
@@ -109,12 +107,18 @@ pub async fn start_oauth_flow(
         .oauth_service
         .generate_authorization_url(auth_provider)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            tracing::error!("OAuth URL generation failed: {e}");
+            "Failed to start authentication. Please try again.".to_string()
+        })?;
 
     let state = session.state.clone();
 
     // Store session for callback verification
-    oauth_state.session_store.store(session);
+    if !oauth_state.session_store.store(session) {
+        tracing::error!("Failed to store OAuth session");
+        return Err("Failed to start authentication. Please try again.".to_string());
+    }
 
     Ok(StartOAuthResponse { auth_url, state })
 }
@@ -154,7 +158,16 @@ pub async fn handle_oauth_callback(
         .oauth_service
         .exchange_code(&session, code)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            tracing::error!("OAuth code exchange failed: {e}");
+            "Authentication failed. Please try again.".to_string()
+        })?;
+
+    // Log successful OAuth login (audit trail)
+    tracing::info!(
+        provider = %session.provider,
+        "OAuth authentication successful"
+    );
 
     Ok(OAuthCallbackResponse::from(user))
 }
@@ -182,14 +195,20 @@ impl OAuthSessionStore {
     /// Stores a session, keyed by its state value.
     ///
     /// Automatically cleans up expired sessions during this operation.
-    pub fn store(&self, session: OAuthPkceSession) {
-        let mut sessions = self.sessions.lock().expect("Session store lock poisoned");
+    /// Returns `true` if stored successfully, `false` if the lock was poisoned.
+    pub fn store(&self, session: OAuthPkceSession) -> bool {
+        let Ok(mut sessions) = self.sessions.lock() else {
+            // Lock poisoned - log and return false instead of panicking
+            tracing::error!("OAuth session store lock poisoned during store operation");
+            return false;
+        };
 
         // Clean up expired sessions
         sessions.retain(|_, s| !s.is_expired());
 
         // Store new session
         sessions.insert(session.state.clone(), session);
+        true
     }
 
     /// Takes a session by its state value, removing it from storage.
@@ -197,9 +216,14 @@ impl OAuthSessionStore {
     /// Returns `None` if:
     /// - Session doesn't exist
     /// - Session has expired
+    /// - Lock is poisoned
     #[must_use]
     pub fn take(&self, state: &str) -> Option<OAuthPkceSession> {
-        let mut sessions = self.sessions.lock().expect("Session store lock poisoned");
+        let Ok(mut sessions) = self.sessions.lock() else {
+            // Lock poisoned - log and return None instead of panicking
+            tracing::error!("OAuth session store lock poisoned during take operation");
+            return None;
+        };
 
         // Remove and return, checking expiration
         sessions.remove(state).filter(|s| !s.is_expired())
@@ -227,20 +251,24 @@ impl Default for OAuthSessionStore {
 ///
 /// Returns error if:
 /// - URL cannot be parsed
+/// - URL scheme is not "aroeira"
+/// - URL host is not "auth" or path is not "/callback"
 /// - Code or state parameters are missing
 /// - Error parameter is present (OAuth error response)
 pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), String> {
-    let url = Url::parse(callback_url).map_err(|e| format!("Invalid callback URL: {e}"))?;
+    let url = Url::parse(callback_url).map_err(|_| "Invalid callback URL format")?;
 
-    // Check for error response
-    if let Some(error) = url.query_pairs().find(|(k, _)| k == "error") {
-        let error_desc = url
-            .query_pairs()
-            .find(|(k, _)| k == "error_description")
-            .map(|(_, v)| v.to_string())
-            .unwrap_or_else(|| "Unknown error".to_string());
+    // Enforce expected deep-link callback origin
+    if url.scheme() != "aroeira" {
+        return Err("Invalid callback URL scheme".to_string());
+    }
+    if url.host_str() != Some("auth") || url.path() != "/callback" {
+        return Err("Invalid callback URL target".to_string());
+    }
 
-        return Err(format!("OAuth error: {} - {}", error.1, error_desc));
+    // Check for error response (use generic message for user)
+    if url.query_pairs().any(|(k, _)| k == "error") {
+        return Err("Authentication was denied or failed. Please try again.".to_string());
     }
 
     // Extract code and state
@@ -248,13 +276,13 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
         .query_pairs()
         .find(|(k, _)| k == "code")
         .map(|(_, v)| v.to_string())
-        .ok_or("Missing 'code' parameter in callback URL")?;
+        .ok_or("Missing authorization code in callback")?;
 
     let state = url
         .query_pairs()
         .find(|(k, _)| k == "state")
         .map(|(_, v)| v.to_string())
-        .ok_or("Missing 'state' parameter in callback URL")?;
+        .ok_or("Missing state parameter in callback")?;
 
     Ok((code, state))
 }
@@ -429,6 +457,34 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.contains("access_denied") || err.contains("denied"));
+        // Error should be generic, not expose provider details
+        assert!(err.contains("denied") || err.contains("failed"));
+    }
+
+    #[test]
+    fn parse_callback_url_rejects_wrong_scheme() {
+        let url = "https://auth/callback?code=abc123&state=xyz789";
+        let result = parse_oauth_callback_url(url);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("scheme"));
+    }
+
+    #[test]
+    fn parse_callback_url_rejects_wrong_host() {
+        let url = "aroeira://malicious/callback?code=abc123&state=xyz789";
+        let result = parse_oauth_callback_url(url);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("target"));
+    }
+
+    #[test]
+    fn parse_callback_url_rejects_wrong_path() {
+        let url = "aroeira://auth/malicious?code=abc123&state=xyz789";
+        let result = parse_oauth_callback_url(url);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("target"));
     }
 }

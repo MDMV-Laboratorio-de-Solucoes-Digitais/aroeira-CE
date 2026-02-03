@@ -279,10 +279,7 @@ impl OAuthService for OAuthServiceImpl {
             provider,
         );
 
-        debug!(
-            "Generated auth URL for {:?}, state: {}",
-            provider, session.state
-        );
+        debug!("Generated auth URL for {:?}", provider);
 
         Ok((auth_url.to_string(), session))
     }
@@ -292,10 +289,7 @@ impl OAuthService for OAuthServiceImpl {
         session: &OAuthPkceSession,
         code: String,
     ) -> Result<OAuthUser, OAuthError> {
-        debug!(
-            "Exchanging code for {:?}, state: {}",
-            session.provider, session.state
-        );
+        debug!("Exchanging code for {:?}", session.provider);
 
         // Validate session
         if !session.is_valid() {
@@ -304,7 +298,7 @@ impl OAuthService for OAuthServiceImpl {
         }
 
         if session.is_expired() {
-            warn!("Session expired for state: {}", session.state);
+            warn!("Session expired");
             return Err(OAuthError::SessionNotFound);
         }
 

@@ -59,7 +59,11 @@
       return;
     }
 
-    oauthLoading = "google"; // Show loading state
+    // Preserve loading state if already set (from button click),
+    // otherwise set a generic loading state
+    if (!oauthLoading) {
+      oauthLoading = "google"; // Default, will be updated when user info returns
+    }
     error = "";
 
     try {
@@ -99,9 +103,9 @@
 
     // Listen for deep links while the app is running (warm start)
     try {
-      unlistenDeepLink = await onOpenUrl((urls) => {
+      unlistenDeepLink = await onOpenUrl(async (urls) => {
         for (const url of urls) {
-          processOAuthCallback(url);
+          await processOAuthCallback(url);
         }
       });
     } catch (err) {
