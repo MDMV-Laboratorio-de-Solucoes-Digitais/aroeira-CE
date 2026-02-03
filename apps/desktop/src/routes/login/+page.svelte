@@ -86,12 +86,15 @@
       return;
     }
 
-    const isCallback =
-      u.protocol.toLowerCase() === "aroeira:" &&
+    const schemeOk = u.protocol.toLowerCase() === "aroeira:";
+    const canonicalOk =
       u.hostname === "auth" &&
       (u.pathname === "/callback" || u.pathname === "/callback/");
+    const hostlessOk =
+      (u.hostname === "" || u.hostname === "localhost") &&
+      (u.pathname === "/auth/callback" || u.pathname === "/auth/callback/");
 
-    if (!isCallback) return;
+    if (!schemeOk || (!canonicalOk && !hostlessOk)) return;
 
     // Restore loading state from localStorage if not already set
     // This handles cold start scenarios where the app was closed
