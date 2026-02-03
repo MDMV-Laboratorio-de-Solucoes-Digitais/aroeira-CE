@@ -178,7 +178,21 @@ pub async fn handle_oauth_callback(
     // Retrieve and consume session (CSRF protection)
     // First try in-memory store (warm start), then fall back to secure storage (cold start)
     let session = match oauth_state.session_store.take(&state_param) {
-        Some(s) => s,
+        Some(s) => {
+            // Warm start: session found in memory.
+            // We should still clean up any persisted session that might exist (e.g. from start_oauth_flow)
+            // to avoid leaving stale data in secure storage.
+            let state_key = URL_SAFE_NO_PAD.encode(state_param.as_bytes());
+            let storage_key = format!("oauth_pkce_session_{}", state_key);
+            if let Err(e) = state.secure_storage.delete(&storage_key).await {
+                tracing::warn!(
+                    target: "security",
+                    "Failed to delete persisted OAuth session from secure storage: {e}. \
+                     Session will expire naturally but cleanup is incomplete."
+                );
+            }
+            s
+        }
         None => {
             // Cold start: try to recover session from secure storage
             let state_key = URL_SAFE_NO_PAD.encode(state_param.as_bytes());
@@ -206,7 +220,6 @@ pub async fn handle_oauth_callback(
             if let Err(e) = state.secure_storage.delete(&storage_key).await {
                 tracing::warn!(
                     target: "security",
-                    storage_key = %storage_key,
                     "Failed to delete persisted OAuth session from secure storage: {e}. \
                      Session will expire naturally but cleanup is incomplete."
                 );
@@ -218,19 +231,6 @@ pub async fn handle_oauth_callback(
             })?
         }
     };
-
-    // Also clean up persisted session if it was found in memory (consumed via in-memory store)
-    // Log failures but don't block auth flow - session expiry provides secondary protection.
-    let state_key = URL_SAFE_NO_PAD.encode(state_param.as_bytes());
-    let storage_key = format!("oauth_pkce_session_{}", state_key);
-    if let Err(e) = state.secure_storage.delete(&storage_key).await {
-        tracing::warn!(
-            target: "security",
-            storage_key = %storage_key,
-            "Failed to delete persisted OAuth session from secure storage: {e}. \
-             Session will expire naturally but cleanup is incomplete."
-        );
-    }
 
     // Exchange code for user info
     let user = match oauth_state
@@ -270,7 +270,27 @@ pub async fn handle_oauth_callback(
     let user_id = match state.user_repo.find_by_email(&user.email).await {
         Ok(Some(mut u)) => {
             if user.email_verified && !u.email_verified {
+                // SECURITY CRITICAL: When verifying an existing unverified account via OAuth,
+                // we MUST invalidate the old password to prevent account takeover.
+                // Otherwise, an attacker who pre-registered the email could use the old password.
+                let oauth_random_password =
+                    format!("oauth:{}:{}", session.provider, Uuid::new_v4());
+
+                let password_hash = tauri::async_runtime::spawn_blocking(move || {
+                    hash_password(&oauth_random_password)
+                })
+                .await
+                .map_err(|e| {
+                    tracing::error!("Task join error during password hashing: {e}");
+                    "Authentication failed".to_string()
+                })?
+                .map_err(|e| {
+                    tracing::error!("Failed to hash generated OAuth password: {e}");
+                    "Authentication failed".to_string()
+                })?;
+
                 u.email_verified = true;
+                u.password_hash = password_hash; // Invalidate old password
                 u.verification_token = None;
                 u.verification_token_expires_at = None;
 
@@ -311,15 +331,25 @@ pub async fn handle_oauth_callback(
                 verification_token_expires_at: None,
             };
 
-            state
-                .user_repo
-                .save(&new_user)
-                .await
-                .map_err(|e| {
-                    tracing::error!("Failed to create user from OAuth: {e}");
-                    "Authentication failed".to_string()
-                })?
-                .id
+            match state.user_repo.save(&new_user).await {
+                Ok(saved) => saved.id,
+                Err(e) => {
+                    // Concurrency safety: if another callback created the same email concurrently,
+                    // re-fetch and proceed instead of failing the login.
+                    tracing::warn!(
+                        "User creation from OAuth failed (may be concurrent insert): {e}"
+                    );
+                    match state.user_repo.find_by_email(&user.email).await {
+                        Ok(Some(existing)) => existing.id,
+                        _ => {
+                            tracing::error!(
+                                "Failed to recover user after OAuth create conflict: {e}"
+                            );
+                            return Err("Authentication failed".to_string());
+                        }
+                    }
+                }
+            }
         }
         Err(e) => {
             tracing::error!("Database error finding user: {e}");
@@ -462,6 +492,8 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
 
     // Generic error message for all validation failures
     const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
+    const MAX_CODE_LEN: usize = 4096;
+    const MAX_STATE_LEN: usize = 512;
 
     let url = Url::parse(callback_url).map_err(|e| {
         tracing::warn!("OAuth callback URL parse error: {e}");
@@ -530,6 +562,15 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
 
     let code = get_query_param("code")?;
     let state = get_query_param("state")?;
+
+    if code.len() > MAX_CODE_LEN || state.len() > MAX_STATE_LEN {
+        tracing::warn!(
+            code_len = code.len(),
+            state_len = state.len(),
+            "OAuth callback: code/state too large"
+        );
+        return Err(GENERIC_ERROR.to_string());
+    }
 
     Ok((code, state))
 }
