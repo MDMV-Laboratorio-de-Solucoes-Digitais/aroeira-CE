@@ -74,11 +74,17 @@
 
   let policy = $state<PasswordPolicy>({ level: "secure", min_length: 8 });
 
+  // Guard against concurrent OAuth callback processing to prevent race conditions
+  let oauthCallbackInFlight = $state(false);
+
   /**
    * Process an OAuth callback URL from deep linking.
    * This handles the aroeira://auth/callback URLs.
    */
   async function processOAuthCallback(rawUrl: string): Promise<void> {
+    // Prevent concurrent callback processing from multiple deep-link events
+    if (oauthCallbackInFlight) return;
+
     let callbackUrl: URL;
     try {
       callbackUrl = new URL(rawUrl);
@@ -94,6 +100,9 @@
       callbackUrl.hostname === "" && normalizedPath === "/auth/callback";
 
     if (!schemeOk || (!canonicalOk && !hostlessOk)) return;
+
+    // Set in-flight guard before any async operations
+    oauthCallbackInFlight = true;
 
     // Restore loading state from localStorage if not already set
     // This handles cold start scenarios where the app was closed
@@ -119,7 +128,6 @@
         email: redactEmail(user.email),
       });
       setSessionId();
-      // Clear the saved provider on success
       localStorage.removeItem("oauth_pending_provider");
       await goto(resolve("/dashboard"), { replaceState: true });
     } catch (err: unknown) {
@@ -129,6 +137,7 @@
       error = handleError(err, "OAuth authentication");
     } finally {
       oauthLoading = null;
+      oauthCallbackInFlight = false;
       localStorage.removeItem("oauth_pending_provider");
     }
   }
