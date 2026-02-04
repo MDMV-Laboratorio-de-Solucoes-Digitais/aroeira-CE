@@ -336,7 +336,7 @@ async fn retrieve_session(
     state: &AppState,
 ) -> Result<OAuthPkceSession, String> {
     // First try in-memory store (warm start), then fall back to secure storage (cold start)
-    if let Some(s) = oauth_state.session_store.take(state_param) {
+    if let Some(session) = oauth_state.session_store.take(state_param) {
         // Warm start: session found in memory.
         // We should still clean up any persisted session that might exist (e.g. from start_oauth_flow)
         // to avoid leaving stale data in secure storage.
@@ -350,7 +350,7 @@ async fn retrieve_session(
             );
         }
 
-        if s.state != state_param || !s.is_valid() || s.is_expired() {
+        if session.state != state_param || !session.is_valid() || session.is_expired() {
             tracing::warn!(
                 target: "audit",
                 outcome = "failure",
@@ -360,7 +360,7 @@ async fn retrieve_session(
             return Err("Invalid or expired OAuth session. Please try again.".to_string());
         }
 
-        Ok(s)
+        Ok(session)
     } else {
         // Cold start: try to recover session from secure storage
         let state_hash = hex::encode(Sha256::digest(state_param.as_bytes()));
