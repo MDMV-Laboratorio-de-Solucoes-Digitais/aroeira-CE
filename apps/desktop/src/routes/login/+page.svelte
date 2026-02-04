@@ -74,6 +74,7 @@
   }
 
   let policy = $state<PasswordPolicy>({ level: "secure", min_length: 8 });
+  let oauthAvailable = $state(false);
 
   // Serialize OAuth callback handling to avoid races without dropping events
   let oauthCallbackQueue: Promise<void> = Promise.resolve();
@@ -142,6 +143,16 @@
     } catch (err) {
       console.error(
         "Failed to fetch password policy",
+        sanitizeErrorForAudit(err),
+      );
+    }
+
+    // Check OAuth availability
+    try {
+      oauthAvailable = await isOAuthAvailable();
+    } catch (err) {
+      console.error(
+        "Failed to check OAuth availability",
         sanitizeErrorForAudit(err),
       );
     }
@@ -452,7 +463,7 @@
           </Button>
         </form>
 
-        {#if isLogin && isOAuthAvailable()}
+        {#if isLogin && oauthAvailable}
           <!-- OAuth Divider -->
           <div class="relative my-4">
             <div class="absolute inset-0 flex items-center">
