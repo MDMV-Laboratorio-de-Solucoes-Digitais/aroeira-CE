@@ -321,8 +321,8 @@ pub async fn handle_oauth_callback(
 /// Returns an error string if:
 /// - Configuration check fails
 #[tauri::command]
-pub async fn get_oauth_availability(
-    oauth_state: State<'_, OAuthState>,
+pub fn get_oauth_availability(
+    oauth_state: &State<'_, OAuthState>,
 ) -> Result<OAuthAvailability, String> {
     Ok(OAuthAvailability {
         google: oauth_state.oauth_service.config.google_client_id.is_some(),
