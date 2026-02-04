@@ -442,14 +442,15 @@ impl OAuthService for OAuthServiceImpl {
             .set_redirect_uri(redirect_url);
 
         // Perform token exchange with timeout and provider-specific adjustments
-        // Rebuild request inside match arms to avoid ownership issues (ExchangeCode consumes self)
+        let verifier = PkceCodeVerifier::new(session.pkce_verifier.clone());
+        let token_request = client
+            .exchange_code(AuthorizationCode::new(code.clone()))
+            .set_pkce_verifier(verifier);
+
         let exchange_future = async {
             if session.provider == AuthProvider::GitHub {
                 // GitHub requires Accept: application/json
-                let verifier = PkceCodeVerifier::new(session.pkce_verifier.clone());
-                client
-                    .exchange_code(AuthorizationCode::new(code.clone()))
-                    .set_pkce_verifier(verifier)
+                token_request
                     .request_async(&|mut req: oauth2::HttpRequest| async move {
                         req.headers_mut().insert(
                             reqwest::header::ACCEPT,
@@ -460,12 +461,7 @@ impl OAuthService for OAuthServiceImpl {
                     .await
             } else {
                 // Other providers (Google) work with default client
-                let verifier = PkceCodeVerifier::new(session.pkce_verifier.clone());
-                client
-                    .exchange_code(AuthorizationCode::new(code.clone()))
-                    .set_pkce_verifier(verifier)
-                    .request_async(&async_http_client)
-                    .await
+                token_request.request_async(&async_http_client).await
             }
         };
 
