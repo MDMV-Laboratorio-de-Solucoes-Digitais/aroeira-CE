@@ -12,6 +12,7 @@
 
 use crate::commands::auth::{get_device_id, handle_successful_login, hash_email_for_logging};
 use crate::state::AppState;
+use domain::modules::auth::AuthError;
 use domain::modules::auth::oauth::{AuthProvider, OAuthPkceSession, OAuthService, OAuthUser};
 use hex;
 use infra::services::oauth::{OAuthConfig, OAuthServiceImpl};
@@ -499,31 +500,26 @@ async fn authenticate_or_create_user(
 
             match state.user_repo.save(&new_user).await {
                 Ok(saved) => Ok(saved.id),
-                Err(e) => {
-                    // By checking for a unique constraint error, we can handle the race condition
-                    // specifically, while failing fast on other unexpected database issues.
-                    // The exact string may depend on the database backend (e.g., SQLite, PostgreSQL).
-                    // For SQLite/SQLx it often contains "UNIQUE constraint failed".
-                    if e.to_string().contains("UNIQUE constraint failed") {
-                        tracing::warn!(
-                            "User creation from OAuth failed (likely concurrent insert): {e}"
-                        );
-                        if let Ok(Some(existing)) =
-                            state.user_repo.find_by_email(&normalized_email).await
-                        {
-                            Ok(existing.id)
-                        } else {
-                            tracing::error!(
-                                "Failed to recover user after OAuth create conflict: {e}"
-                            );
-                            Err("Authentication failed".to_string())
-                        }
+                Err(AuthError::EmailAlreadyExists) => {
+                    // Concurrency safety: if another callback created the same email concurrently,
+                    // re-fetch and proceed instead of failing the login.
+                    tracing::warn!(
+                        "User creation from OAuth failed due to concurrent insert (EmailAlreadyExists)"
+                    );
+                    if let Ok(Some(existing)) =
+                        state.user_repo.find_by_email(&normalized_email).await
+                    {
+                        Ok(existing.id)
                     } else {
-                        tracing::error!(
-                            "Failed to save new OAuth user due to unexpected database error: {e}"
-                        );
+                        tracing::error!("Failed to recover user after OAuth create conflict");
                         Err("Authentication failed".to_string())
                     }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to save new OAuth user due to unexpected database error: {e}"
+                    );
+                    Err("Authentication failed".to_string())
                 }
             }
         }
