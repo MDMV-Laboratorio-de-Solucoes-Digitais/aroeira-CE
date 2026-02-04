@@ -10,12 +10,16 @@ fn test_no_critical_vulnerabilities_remain() {
     // by testing the fixes for each vulnerability class
 
     // 1. Device ID spoofing fix
-    // We need to lock the mutex to ensure other tests aren't messing with env vars
+    // We need to lock mutex to ensure other tests aren't messing with env vars
     let _guard = super::device_id_security_tests::DEVICE_ID_TEST_MUTEX
         .lock()
         .unwrap();
-    let device_id1 = get_or_create_device_id().expect("Should generate device ID");
-    let device_id2 = get_or_create_device_id().expect("Should get same device ID");
+    let device_id1 = get_or_create_device_id().unwrap_or_else(|e| {
+        panic!("Failed to get device ID: {}", e);
+    });
+    let device_id2 = get_or_create_device_id().unwrap_or_else(|e| {
+        panic!("Failed to get device ID: {}", e);
+    });
     assert_eq!(
         device_id1, device_id2,
         "Device ID should be persistent, not spoofable"
@@ -133,7 +137,9 @@ fn test_security_controls_are_effective() {
     let _guard = super::device_id_security_tests::DEVICE_ID_TEST_MUTEX
         .lock()
         .unwrap();
-    let device_id = get_or_create_device_id().expect("Should get device ID");
+    let device_id = get_or_create_device_id().unwrap_or_else(|e| {
+        panic!("Failed to get device ID: {}", e);
+    });
     assert!(
         !device_id.is_empty(),
         "Device ID should be generated securely"

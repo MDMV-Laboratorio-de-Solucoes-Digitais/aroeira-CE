@@ -34,8 +34,9 @@ fn test_device_id_persistence_across_application_restarts() {
     let device_id1 = get_or_create_device_id().expect("Should generate device ID");
 
     // Simulate app restart by calling again
-    let device_id2 = get_or_create_device_id().expect("Should get same device ID");
-
+    let device_id2 = get_or_create_device_id().unwrap_or_else(|e| {
+        panic!("Failed to get device ID: {}", e);
+    });
     assert_eq!(device_id1, device_id2);
 }
 
