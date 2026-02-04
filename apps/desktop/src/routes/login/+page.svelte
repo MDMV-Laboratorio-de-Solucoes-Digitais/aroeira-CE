@@ -14,8 +14,9 @@
   import {
     startOAuthFlow,
     handleOAuthCallback,
-    isOAuthAvailable,
+    getOAuthAvailability,
     type OAuthProvider,
+    type OAuthAvailability,
   } from "$lib/oauth";
   import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
   import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -74,7 +75,7 @@
   }
 
   let policy = $state<PasswordPolicy>({ level: "secure", min_length: 8 });
-  let oauthAvailable = $state(false);
+  let oauthAvailability = $state<OAuthAvailability | null>(null);
 
   // Serialize OAuth callback handling to avoid races without dropping events
   let oauthCallbackQueue: Promise<void> = Promise.resolve();
@@ -149,12 +150,13 @@
 
     // Check OAuth availability
     try {
-      oauthAvailable = await isOAuthAvailable();
+      oauthAvailability = await getOAuthAvailability();
     } catch (err) {
       console.error(
         "Failed to check OAuth availability",
         sanitizeErrorForAudit(err),
       );
+      oauthAvailability = null;
     }
 
     // Check if the app was opened via a deep link (cold start)
@@ -463,7 +465,7 @@
           </Button>
         </form>
 
-        {#if isLogin && oauthAvailable}
+        {#if isLogin && oauthAvailability && (oauthAvailability.google || oauthAvailability.github)}
           <!-- OAuth Divider -->
           <div class="relative my-4">
             <div class="absolute inset-0 flex items-center">
