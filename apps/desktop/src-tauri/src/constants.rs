@@ -27,7 +27,7 @@ pub const MAX_NOTE_CONTENT_BYTES: usize = 50000;
 /// Default database URL - uses a more secure path in the app's data directory
 pub const DEFAULT_SQLITE_DB_URL: &str = "sqlite:data/Aroeira_local.db?mode=rwc";
 
-/// OAuth2 constants
+/// `OAuth2` constants
 pub const OAUTH_REDIRECT_URI: &str = "aroeira://auth/callback";
 pub const OAUTH_CALLBACK_SCHEME: &str = "aroeira";
 pub const OAUTH_CALLBACK_HOST: &str = "auth";
