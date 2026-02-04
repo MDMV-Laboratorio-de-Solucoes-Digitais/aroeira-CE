@@ -493,7 +493,6 @@ impl OAuthService for OAuthServiceImpl {
         // NOTE: The app session (JWT) is stored via tauri secure storage; provider token storage
         // should not hard-fail the entire login on platforms where keyring is unavailable.
         {
-            let service_name = "aroeira-oauth".to_string();
             let user_key = format!("{}:{}", user.provider, user.provider_user_id);
 
             // Hash user key for logging and storage to avoid PII leak in OS store/logs
