@@ -149,6 +149,7 @@ impl OAuthServiceImpl {
 
     /// Creates a new OAuth service with injected storage (for testing).
     #[cfg(test)]
+    #[must_use]
     pub fn new_with_storage(config: OAuthConfig, storage: Box<dyn TokenStorage>) -> Self {
         Self {
             config,
@@ -430,31 +431,28 @@ impl OAuthService for OAuthServiceImpl {
         // Perform token exchange with timeout and provider-specific adjustments
         // Rebuild request inside match arms to avoid ownership issues (ExchangeCode consumes self)
         let exchange_future = async {
-            match session.provider {
-                AuthProvider::GitHub => {
-                    // GitHub requires Accept: application/json
-                    let verifier = PkceCodeVerifier::new(session.pkce_verifier.clone());
-                    client
-                        .exchange_code(AuthorizationCode::new(code.clone()))
-                        .set_pkce_verifier(verifier)
-                        .request_async(&|mut req: oauth2::HttpRequest| async move {
-                            if let Ok(header_val) = "application/json".parse() {
-                                // "accept" implements IntoHeaderName
-                                req.headers_mut().insert("accept", header_val);
-                            }
-                            async_http_client(req).await
-                        })
-                        .await
-                }
+            if session.provider == AuthProvider::GitHub {
+                // GitHub requires Accept: application/json
+                let verifier = PkceCodeVerifier::new(session.pkce_verifier.clone());
+                client
+                    .exchange_code(AuthorizationCode::new(code.clone()))
+                    .set_pkce_verifier(verifier)
+                    .request_async(&|mut req: oauth2::HttpRequest| async move {
+                        if let Ok(header_val) = "application/json".parse() {
+                            // "accept" implements IntoHeaderName
+                            req.headers_mut().insert("accept", header_val);
+                        }
+                        async_http_client(req).await
+                    })
+                    .await
+            } else {
                 // Other providers (Google) work with default client
-                _ => {
-                    let verifier = PkceCodeVerifier::new(session.pkce_verifier.clone());
-                    client
-                        .exchange_code(AuthorizationCode::new(code.clone()))
-                        .set_pkce_verifier(verifier)
-                        .request_async(&async_http_client)
-                        .await
-                }
+                let verifier = PkceCodeVerifier::new(session.pkce_verifier.clone());
+                client
+                    .exchange_code(AuthorizationCode::new(code.clone()))
+                    .set_pkce_verifier(verifier)
+                    .request_async(&async_http_client)
+                    .await
             }
         };
 
@@ -500,7 +498,7 @@ impl OAuthService for OAuthServiceImpl {
             // Create token payload containing both access and refresh tokens
             let token_payload = serde_json::json!({
                 "access_token": access_token,
-                "refresh_token": token_result.refresh_token().map(|t| t.secret()),
+                "refresh_token": token_result.refresh_token().map(oauth2::RefreshToken::secret),
             });
 
             match self
