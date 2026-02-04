@@ -71,3 +71,4 @@ custom-protocol = ["tauri/custom-protocol"]
   infra = { workspace = true, features = ["testing"] }
   tempfile.workspace = true
   temp-env = "0.3"
+  dirs = { workspace = true }
