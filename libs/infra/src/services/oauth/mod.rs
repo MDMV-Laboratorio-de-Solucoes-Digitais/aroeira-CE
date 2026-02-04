@@ -1,4 +1,4 @@
-//! OAuth2 Service Implementation - TDD GREEN PHASE
+//! `OAuth2` Service Implementation - TDD GREEN PHASE
 //!
 //! This module implements the `OAuthService` trait from the domain layer
 //! using the `oauth2` crate for PKCE-based authentication flows.
@@ -32,17 +32,17 @@ static ASYNC_HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::Lazy
         })
 });
 
-/// Configuration for OAuth2 providers.
+/// Configuration for `OAuth2` providers.
 ///
 /// Client IDs are loaded from environment variables.
 /// No client secrets are used (public client with PKCE).
 #[derive(Debug, Clone)]
 pub struct OAuthConfig {
-    /// Google OAuth2 client ID (optional)
+    /// Google `OAuth2` client ID (optional)
     pub google_client_id: Option<String>,
-    /// GitHub OAuth2 client ID (optional)
+    /// GitHub `OAuth2` client ID (optional)
     pub github_client_id: Option<String>,
-    /// Redirect URI for OAuth callbacks (e.g., "aroeira://auth/callback")
+    /// Redirect URI for OAuth callbacks (e.g., `<aroeira://auth/callback>`)
     pub redirect_uri: String,
 
     // Test overrides
@@ -81,6 +81,11 @@ impl OAuthConfig {
 
 /// Trait for securely storing OAuth tokens.
 pub trait TokenStorage: Send + Sync {
+    /// Stores a token secret securely.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage fails (e.g. keyring unavailable).
     fn store(&self, service: &str, user_key: &str, secret: &str) -> Result<(), String>;
 }
 
@@ -105,7 +110,7 @@ impl TokenStorage for KeyringTokenStorage {
     }
 }
 
-/// OAuth2 service implementation using PKCE flow.
+/// `OAuth2` service implementation using PKCE flow.
 ///
 /// This implementation:
 /// - Generates authorization URLs with PKCE challenges
@@ -117,16 +122,16 @@ pub struct OAuthServiceImpl {
 }
 
 impl OAuthServiceImpl {
-    /// Google OAuth2 authorization endpoint
+    /// Google `OAuth2` authorization endpoint
     const GOOGLE_AUTH_URL: &'static str = "https://accounts.google.com/o/oauth2/v2/auth";
-    /// Google OAuth2 token endpoint
+    /// Google `OAuth2` token endpoint
     const GOOGLE_TOKEN_URL: &'static str = "https://oauth2.googleapis.com/token";
     /// Google userinfo endpoint
     const GOOGLE_USERINFO_URL: &'static str = "https://openidconnect.googleapis.com/v1/userinfo";
 
-    /// GitHub OAuth2 authorization endpoint
+    /// GitHub `OAuth2` authorization endpoint
     const GITHUB_AUTH_URL: &'static str = "https://github.com/login/oauth/authorize";
-    /// GitHub OAuth2 token endpoint
+    /// GitHub `OAuth2` token endpoint
     const GITHUB_TOKEN_URL: &'static str = "https://github.com/login/oauth/access_token";
     /// GitHub user API endpoint
     const GITHUB_USER_URL: &'static str = "https://api.github.com/user";
