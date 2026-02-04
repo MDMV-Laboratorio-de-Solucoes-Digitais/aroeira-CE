@@ -1,6 +1,6 @@
-//! OAuth2 Domain Types - TDD GREEN PHASE
+//! `OAuth2` Domain Types - TDD GREEN PHASE
 //!
-//! This module contains OAuth2 authentication types for PKCE flow.
+//! This module contains `OAuth2` authentication types for PKCE flow.
 //! Implements the types required by the test suite defined in `tests.rs`.
 //!
 //! # Security Notes
@@ -20,16 +20,16 @@ use thiserror::Error;
 // AuthProvider
 // ===========================================
 
-/// Supported OAuth2 providers.
+/// Supported `OAuth2` providers.
 ///
 /// Each provider has different OAuth endpoints and user info schemas.
 /// Serializes to lowercase for consistent JSON representation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthProvider {
-    /// Google OAuth2 (OpenID Connect)
+    /// Google `OAuth2` (`OpenID` Connect)
     Google,
-    /// GitHub OAuth2
+    /// GitHub `OAuth2`
     GitHub,
 }
 
@@ -46,7 +46,7 @@ impl fmt::Display for AuthProvider {
 // OAuthError
 // ===========================================
 
-/// Error types for OAuth2 authentication flow.
+/// Error types for `OAuth2` authentication flow.
 ///
 /// These errors are designed to be informative for debugging while
 /// avoiding leaking sensitive information in production error messages.
@@ -162,7 +162,7 @@ impl OAuthPkceSession {
         true
     }
 
-    /// Checks if a character is valid for PKCE code_verifier (RFC 7636 Section 4.1).
+    /// Checks if a character is valid for PKCE `code_verifier` (RFC 7636 Section 4.1).
     ///
     /// Unreserved URI characters: [A-Z] / [a-z] / [0-9] / "-" / "." / "_" / "~"
     #[inline]
@@ -209,7 +209,7 @@ pub struct OAuthUser {
 // OAuthService (Port/Interface)
 // ===========================================
 
-/// Port for OAuth2 authentication service.
+/// Port for `OAuth2` authentication service.
 ///
 /// This trait defines the interface for OAuth operations.
 /// Infrastructure layer will provide the concrete implementation.
