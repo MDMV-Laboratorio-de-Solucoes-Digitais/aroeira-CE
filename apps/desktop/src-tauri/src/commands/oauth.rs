@@ -129,6 +129,11 @@ pub async fn start_oauth_flow(
         "Authentication failed. Please try again.".to_string()
     })?;
 
+    // Hash device_id for privacy in logs
+    let mut hasher = Sha256::new();
+    hasher.update(device_id.as_bytes());
+    let device_id_hash = hex::encode(hasher.finalize());
+
     // Generate authorization URL
     let (auth_url, session) = oauth_state
         .oauth_service
@@ -139,7 +144,7 @@ pub async fn start_oauth_flow(
                 target: "audit",
                 outcome = "failure",
                 reason = "url_generation_failed",
-                device_id = %device_id,
+                device_id = %device_id_hash,
                 error = %e,
                 "OAuth URL generation failed"
             );
@@ -150,7 +155,7 @@ pub async fn start_oauth_flow(
         target: "audit",
         action = "oauth_start",
         provider = %provider,
-        device_id = %device_id,
+        device_id = %device_id_hash,
         "Starting OAuth flow"
     );
 
@@ -229,13 +234,18 @@ pub async fn handle_oauth_callback(
         "Authentication failed. Please try again.".to_string()
     })?;
 
+    // Hash device_id for privacy in logs
+    let mut hasher = Sha256::new();
+    hasher.update(device_id.as_bytes());
+    let device_id_hash = hex::encode(hasher.finalize());
+
     // Prevent DoS via excessive URL length
     if callback_url.len() > MAX_CALLBACK_LEN {
         tracing::warn!(
             target: "audit",
             outcome = "failure",
             reason = "callback_too_long",
-            device_id = %device_id,
+            device_id = %device_id_hash,
             "OAuth callback URL exceeded max length"
         );
         return Err("Invalid authentication request".to_string());
@@ -247,7 +257,7 @@ pub async fn handle_oauth_callback(
             target: "audit",
             outcome = "failure",
             reason = "invalid_callback",
-            device_id = %device_id,
+            device_id = %device_id_hash,
             "OAuth authentication failed: invalid callback URL"
         );
     })?;
@@ -260,7 +270,7 @@ pub async fn handle_oauth_callback(
                 target: "audit",
                 outcome = "failure",
                 reason = "session_retrieval_failed",
-                device_id = %device_id,
+                device_id = %device_id_hash,
                 error = %e,
                 "OAuth session retrieval failed"
             );
@@ -279,7 +289,7 @@ pub async fn handle_oauth_callback(
                 target: "audit",
                 outcome = "failure",
                 reason = "code_exchange_failed",
-                device_id = %device_id,
+                device_id = %device_id_hash,
                 "OAuth authentication failed: code exchange error"
             );
             // Log only error type/category, not full details which may contain tokens/PII
