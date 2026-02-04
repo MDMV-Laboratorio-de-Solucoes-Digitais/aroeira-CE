@@ -43,7 +43,9 @@ export interface OAuthAvailability {
  * @returns The state parameter used for this flow
  * @throws Error if provider is not configured or flow fails
  */
-export async function startOAuthFlow(provider: OAuthProvider): Promise<string> {
+export async function startOAuthFlow(
+  provider: OAuthProvider,
+): Promise<StartOAuthResponse> {
   const response = await invoke<StartOAuthResponse>("start_oauth_flow", {
     provider,
   });
@@ -53,18 +55,21 @@ export async function startOAuthFlow(provider: OAuthProvider): Promise<string> {
     throw new Error("Invalid authorization URL");
   }
 
+  const hostname = url.hostname.replace(/\.$/, "").toLowerCase();
   const allowedHostnames =
     provider === "google"
       ? new Set(["accounts.google.com"])
-      : new Set(["github.com"]);
+      : new Set(["github.com", "www.github.com"]);
 
-  if (!allowedHostnames.has(url.hostname)) {
+  if (!allowedHostnames.has(hostname)) {
     throw new Error("Unexpected authorization host");
   }
 
-  await openUrl(url.toString());
+  return response;
+}
 
-  return response.state;
+export async function openOAuthAuthUrl(auth_url: string): Promise<void> {
+  await openUrl(auth_url);
 }
 
 /**

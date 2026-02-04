@@ -15,6 +15,7 @@
     startOAuthFlow,
     handleOAuthCallback,
     getOAuthAvailability,
+    openOAuthAuthUrl,
     type OAuthProvider,
     type OAuthAvailability,
   } from "$lib/oauth";
@@ -338,8 +339,9 @@
     );
 
     try {
-      const state = await startOAuthFlow(provider);
+      const { auth_url, state } = await startOAuthFlow(provider);
       localStorage.setItem("oauth_pending_state", state);
+      await openOAuthAuthUrl(auth_url);
       // The browser will open and redirect back via deep link
       // The callback is handled by processOAuthCallback
     } catch (err: unknown) {
