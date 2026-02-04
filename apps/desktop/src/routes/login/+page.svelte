@@ -86,12 +86,23 @@
    */
   function processOAuthCallback(rawUrl: string): Promise<void> {
     // Defensive bound to avoid processing extremely large deep-link payloads
-    if (rawUrl.length > 8192) return Promise.resolve();
+    if (rawUrl.length > 8192) {
+      oauthLoading = null;
+      localStorage.removeItem("oauth_pending_provider");
+      error = "Authentication callback was invalid. Please try again.";
+      return Promise.resolve();
+    }
 
     // Cheap pre-filter: only handle our OAuth callback deep links
     const isCanonical = rawUrl.startsWith("aroeira://auth/callback");
     const isHostless = rawUrl.startsWith("aroeira:///auth/callback");
     if (!isCanonical && !isHostless) {
+      // If we were expecting an OAuth callback, don't leave the UI spinning forever.
+      if (localStorage.getItem("oauth_pending_provider")) {
+        oauthLoading = null;
+        localStorage.removeItem("oauth_pending_provider");
+        error = "Authentication callback was invalid. Please try again.";
+      }
       return Promise.resolve();
     }
 
@@ -488,14 +499,14 @@
               {#if oauthLoading === "google"}
                 <Loader2 class="mr-2 h-4 w-4 animate-spin" />
               {:else}
-                <svg class="mr-2 h-4 w-4" viewBox="0 0 24 24">
+                <svg
+                  class="mr-2 h-4 w-4"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
                   <path
                     fill="currentColor"
-                    d="M22.56 12.25c0-.78-.07-1.53-.2.2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                  />
-                  <path
-                    fill="currentColor"
-                    d="M12 23c2.97 0 5.46-.98 7.28 2.66l3.15 3.15C17.45 2.09 14.97 1.12 12.23z"
+                    d="M21.35 11.1H12v2.95h5.35c-.23 1.5-1.74 4.4-5.35 4.4-3.22 0-5.85-2.66-5.85-5.95S8.78 6.55 12 6.55c1.84 0 3.07.78 3.78 1.45l2.58-2.48C16.9 4.15 14.75 3 12 3 7.03 3 3 7.03 3 12s4.03 9 9 9c5.2 0 8.65-3.65 8.65-8.8 0-.6-.07-1.05-.15-1.1Z"
                   />
                 </svg>
               {/if}
@@ -513,14 +524,14 @@
                 {#if oauthLoading === "github"}
                   <Loader2 class="mr-2 h-4 w-4 animate-spin" />
                 {:else}
-                  <svg class="mr-2 h-4 w-4" viewBox="0 0 24 24">
+                  <svg
+                    class="mr-2 h-4 w-4"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
                     <path
                       fill="currentColor"
-                      d="M12 0c-6.626 0-12 5.373.12 12.23c2.09 9.28 1.12 14.97 12.23c2.09 9.28 1.12 14.97 12.23z"
-                    />
-                    <path
-                      fill="currentColor"
-                      d="M17.45 17.45 9.28 1.12 12.23c2.09 9.28 1.12 14.97 12.23z"
+                      d="M12 2C6.48 2 2 6.58 2 12.26c0 4.54 2.87 8.39 6.84 9.75.5.1.68-.22.68-.48 0-.24-.01-.87-.01-1.71-2.78.62-3.37-1.38-3.37-1.38-.45-1.2-1.11-1.52-1.11-1.52-.9-.64.07-.63.07-.63 1 .07 1.53 1.06 1.53 1.06.9 1.56 2.36 1.11 2.94.85.09-.67.35-1.11.63-1.36-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.38-2.03 1-2.74-.1-.26-.44-1.3.1-2.7 0 0 .82-.27 2.7 1.03.78-.22 1.62-.33 2.46-.33.84 0 1.68.11 2.46.33 1.88-1.3 2.7-1.03 2.7-1.03.54 1.4.2 2.44.1 2.7.62.71 1 1.62 1 2.74 0 3.93-2.34 4.8-4.58 5.05.36.32.68.95.68 1.92 0 1.38-.01 2.49-.01 2.83 0 .27.18.59.69.48A10.06 10.06 0 0 0 22 12.26C22 6.58 17.52 2 12 2Z"
                     />
                   </svg>
                 {/if}
