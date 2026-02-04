@@ -48,7 +48,21 @@ export async function startOAuthFlow(provider: OAuthProvider): Promise<string> {
     provider,
   });
 
-  await openUrl(response.auth_url);
+  const url = new URL(response.auth_url);
+  if (url.protocol !== "https:") {
+    throw new Error("Invalid authorization URL");
+  }
+
+  const allowedHosts =
+    provider === "google"
+      ? new Set(["accounts.google.com"])
+      : new Set(["github.com"]);
+
+  if (!allowedHosts.has(url.host)) {
+    throw new Error("Unexpected authorization host");
+  }
+
+  await openUrl(url.toString());
 
   return response.state;
 }
