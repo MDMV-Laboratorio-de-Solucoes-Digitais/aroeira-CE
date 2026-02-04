@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use domain::modules::auth::oauth::{
     AuthProvider, OAuthError, OAuthPkceSession, OAuthService, OAuthUser,
 };
+use hex;
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge, PkceCodeVerifier,
     RedirectUrl, Scope, TokenResponse, TokenUrl,
@@ -118,7 +119,7 @@ impl TokenStorage for KeyringTokenStorage {
 /// - Fetches user info from provider APIs
 pub struct OAuthServiceImpl {
     config: OAuthConfig,
-    token_storage: Box<dyn TokenStorage>,
+    token_storage: std::sync::Arc<dyn TokenStorage>,
 }
 
 impl OAuthServiceImpl {
@@ -143,14 +144,17 @@ impl OAuthServiceImpl {
     pub fn new(config: OAuthConfig) -> Self {
         Self {
             config,
-            token_storage: Box::new(KeyringTokenStorage),
+            token_storage: std::sync::Arc::new(KeyringTokenStorage),
         }
     }
 
     /// Creates a new OAuth service with injected storage (for testing).
     #[cfg(test)]
     #[must_use]
-    pub fn new_with_storage(config: OAuthConfig, storage: Box<dyn TokenStorage>) -> Self {
+    pub fn new_with_storage(
+        config: OAuthConfig,
+        storage: std::sync::Arc<dyn TokenStorage>,
+    ) -> Self {
         Self {
             config,
             token_storage: storage,
@@ -487,7 +491,7 @@ impl OAuthService for OAuthServiceImpl {
         // NOTE: The app session (JWT) is stored via tauri secure storage; provider token storage
         // should not hard-fail the entire login on platforms where keyring is unavailable.
         {
-            let service_name = "aroeira-oauth";
+            let service_name = "aroeira-oauth".to_string();
             let user_key = format!("{}:{}", user.provider, user.provider_user_id);
 
             // Hash user key for logging and storage to avoid PII leak in OS store/logs
@@ -501,10 +505,19 @@ impl OAuthService for OAuthServiceImpl {
                 "refresh_token": token_result.refresh_token().map(oauth2::RefreshToken::secret),
             });
 
-            match self
-                .token_storage
-                .store(service_name, &user_key_hash, &token_payload.to_string())
-            {
+            // Prevent blocking async runtime with synchronous keyring operations
+            let storage = self.token_storage.clone();
+            let token_payload_str = token_payload.to_string();
+            let user_key_hash_for_store = user_key_hash.clone();
+
+            let store_result = tokio::task::spawn_blocking(move || {
+                storage.store(&service_name, &user_key_hash_for_store, &token_payload_str)
+            })
+            .await
+            .map_err(|e| format!("Task join error: {e}"))
+            .and_then(|r| r.map_err(|e| e.to_string()));
+
+            match store_result {
                 Ok(()) => debug!("Securely stored OAuth token for {}", user_key_hash),
                 Err(e) => {
                     warn!(
