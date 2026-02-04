@@ -53,12 +53,12 @@ export async function startOAuthFlow(provider: OAuthProvider): Promise<string> {
     throw new Error("Invalid authorization URL");
   }
 
-  const allowedHosts =
+  const allowedHostnames =
     provider === "google"
       ? new Set(["accounts.google.com"])
       : new Set(["github.com"]);
 
-  if (!allowedHosts.has(url.host)) {
+  if (!allowedHostnames.has(url.hostname)) {
     throw new Error("Unexpected authorization host");
   }
 
