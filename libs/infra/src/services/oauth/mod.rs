@@ -515,7 +515,7 @@ impl OAuthService for OAuthServiceImpl {
             })
             .await
             .map_err(|e| format!("Task join error: {e}"))
-            .and_then(|r| r.map_err(|e| e.to_string()));
+            .and_then(|r| r);
 
             match store_result {
                 Ok(()) => debug!("Securely stored OAuth token for {}", user_key_hash),
