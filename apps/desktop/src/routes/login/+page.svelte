@@ -75,66 +75,65 @@
 
   let policy = $state<PasswordPolicy>({ level: "secure", min_length: 8 });
 
-  // Guard against concurrent OAuth callback processing to prevent race conditions
-  let oauthCallbackInFlight = $state(false);
+  // Serialize OAuth callback handling to avoid races without dropping events
+  let oauthCallbackQueue: Promise<void> = Promise.resolve();
 
   /**
    * Process an OAuth callback URL from deep linking.
    * This handles the aroeira://auth/callback URLs.
    */
-  async function processOAuthCallback(rawUrl: string): Promise<void> {
-    // Prevent concurrent callback processing from multiple deep-link events
-    if (oauthCallbackInFlight) return;
-
+  function processOAuthCallback(rawUrl: string): Promise<void> {
     // Defensive bound to avoid processing extremely large deep-link payloads
-    if (rawUrl.length > 8192) return;
+    if (rawUrl.length > 8192) return Promise.resolve();
 
     // Cheap pre-filter: only handle our OAuth callback deep links
     const isCanonical = rawUrl.startsWith("aroeira://auth/callback");
     const isHostless = rawUrl.startsWith("aroeira:///auth/callback");
     if (!isCanonical && !isHostless) {
-      return;
+      return Promise.resolve();
     }
 
-    // Set in-flight guard before any async operations
-    oauthCallbackInFlight = true;
+    oauthCallbackQueue = oauthCallbackQueue
+      .catch(() => {
+        // Keep the queue alive even if a previous callback failed
+      })
+      .then(async () => {
+        // Restore loading state from localStorage if not already set
+        if (!oauthLoading) {
+          const savedProvider = localStorage.getItem("oauth_pending_provider");
+          oauthLoading =
+            savedProvider === "google" || savedProvider === "github"
+              ? (savedProvider as OAuthProvider)
+              : null;
 
-    // Restore loading state from localStorage if not already set
-    // This handles cold start scenarios where the app was closed
-    if (!oauthLoading) {
-      const savedProvider = localStorage.getItem("oauth_pending_provider");
-      // Validate provider to ensure UI state is correct
-      oauthLoading =
-        savedProvider === "google" || savedProvider === "github"
-          ? (savedProvider as OAuthProvider)
-          : null;
+          if (!oauthLoading && savedProvider) {
+            localStorage.removeItem("oauth_pending_provider");
+          }
+        }
 
-      // Clear invalid state if any
-      if (!oauthLoading && savedProvider) {
-        localStorage.removeItem("oauth_pending_provider");
-      }
-    }
-    error = "";
+        error = "";
 
-    try {
-      const user = await handleOAuthCallback(rawUrl);
-      logAuditEvent("oauth_login", true, {
-        provider: user.provider,
-        email: redactEmail(user.email),
+        try {
+          const user = await handleOAuthCallback(rawUrl);
+          logAuditEvent("oauth_login", true, {
+            provider: user.provider,
+            email: redactEmail(user.email),
+          });
+          setSessionId();
+          localStorage.removeItem("oauth_pending_provider");
+          await goto(resolve("/dashboard"), { replaceState: true });
+        } catch (err: unknown) {
+          logAuditEvent("oauth_login", false, {
+            error: sanitizeErrorForAudit(err),
+          });
+          error = handleError(err, "OAuth authentication");
+        } finally {
+          oauthLoading = null;
+          localStorage.removeItem("oauth_pending_provider");
+        }
       });
-      setSessionId();
-      localStorage.removeItem("oauth_pending_provider");
-      await goto(resolve("/dashboard"), { replaceState: true });
-    } catch (err: unknown) {
-      logAuditEvent("oauth_login", false, {
-        error: sanitizeErrorForAudit(err),
-      });
-      error = handleError(err, "OAuth authentication");
-    } finally {
-      oauthLoading = null;
-      oauthCallbackInFlight = false;
-      localStorage.removeItem("oauth_pending_provider");
-    }
+
+    return oauthCallbackQueue;
   }
 
   onMount(async () => {
