@@ -89,9 +89,10 @@
     // Defensive bound to avoid processing extremely large deep-link payloads
     if (rawUrl.length > 8192) return;
 
-    // The backend performs robust validation of the callback URL.
-    // We only do a basic check here to avoid invoking the backend for unrelated deep links.
-    if (!rawUrl.startsWith("aroeira:")) {
+    // Cheap pre-filter: only handle our OAuth callback deep links
+    const isCanonical = rawUrl.startsWith("aroeira://auth/callback");
+    const isHostless = rawUrl.startsWith("aroeira:///auth/callback");
+    if (!isCanonical && !isHostless) {
       return;
     }
 
