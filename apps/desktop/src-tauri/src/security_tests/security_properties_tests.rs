@@ -15,10 +15,10 @@ fn test_no_critical_vulnerabilities_remain() {
         .lock()
         .unwrap();
     let device_id1 = get_or_create_device_id().unwrap_or_else(|e| {
-        panic!("Failed to get device ID: {}", e);
+        panic!("Failed to get device ID: {e}");
     });
     let device_id2 = get_or_create_device_id().unwrap_or_else(|e| {
-        panic!("Failed to get device ID: {}", e);
+        panic!("Failed to get device ID: {e}");
     });
     assert_eq!(
         device_id1, device_id2,
@@ -138,7 +138,7 @@ fn test_security_controls_are_effective() {
         .lock()
         .unwrap();
     let device_id = get_or_create_device_id().unwrap_or_else(|e| {
-        panic!("Failed to get device ID: {}", e);
+        panic!("Failed to get device ID: {e}");
     });
     assert!(
         !device_id.is_empty(),

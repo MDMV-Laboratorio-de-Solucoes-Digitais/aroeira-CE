@@ -82,13 +82,11 @@ fn test_device_id_has_sufficient_entropy_256bit() {
 fn test_device_id_file_has_restrictive_permissions() {
     let _guard = DEVICE_ID_TEST_MUTEX.lock().unwrap();
 
+    // Create a real temporary directory for testing (platform-independent)
     let temp_dir = TempDir::new().expect("Should create temp dir");
 
-    let _device_id = with_var(
-        "XDG_DATA_HOME",
-        Some(temp_dir.path().to_string_lossy().to_string()),
-        || get_or_create_device_id().expect("Should generate device ID"),
-    );
+    // Get device ID to ensure it exists for testing
+    let _device_id = get_or_create_device_id().expect("Should generate device ID");
 
     // The path structure created by device identifier: $XDG_DATA_HOME/Aroeira/device/device.id
     let device_file = temp_dir
@@ -97,17 +95,34 @@ fn test_device_id_file_has_restrictive_permissions() {
         .join("device")
         .join("device.id");
 
-    // On Unix systems, check file permissions
+    // Create device config directory (must have parent path)
+    if let Some(config_dir) = device_file.parent() {
+        fs::create_dir_all(config_dir).expect("Should create config dir");
+    }
+
+    // Check file permissions on all platforms
+    let metadata = fs::metadata(&device_file).expect("Should get file metadata");
+    let permissions = metadata.permissions();
+
+    // On Unix systems, verify restrictive permissions (0o700: owner read/write only)
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let metadata = fs::metadata(&device_file).expect("Should get file metadata");
-        let permissions = metadata.permissions();
-        // Check that permissions are 0o600 (owner read/write only)
         assert_eq!(
             permissions.mode() & 0o777,
             0o600,
-            "Device ID file should have restrictive permissions"
+            "Device ID file should have restrictive permissions (Unix)"
+        );
+    }
+
+    // On Windows, just verify the file exists and can be read/written (can't set 0o600 directly)
+    #[cfg(windows)]
+    {
+        // Windows doesn't support Unix-style permissions
+        // Just verify the file exists and can be read/written
+        assert!(
+            device_file.exists(),
+            "Device ID file should exist (Windows)"
         );
     }
 }
