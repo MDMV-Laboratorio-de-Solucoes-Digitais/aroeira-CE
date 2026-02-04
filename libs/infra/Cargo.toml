@@ -53,7 +53,7 @@ percent-encoding = { workspace = true }
 which = { workspace = true }
 dirs = { workspace = true }
 libc = { workspace = true }
-keyring = "3.6.3"
+keyring = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [

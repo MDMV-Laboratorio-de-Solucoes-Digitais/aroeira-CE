@@ -90,6 +90,7 @@ walkdir = "2.5.0"
 libc = "0.2"
 rand = "0.9"
 winreg = "0.55"
+keyring = "3.6.3"
 
 # Testing
 proptest = "1.9"
