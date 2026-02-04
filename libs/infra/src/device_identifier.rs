@@ -431,7 +431,9 @@ impl DeviceIdentifier {
     /// Get device config directory
     fn get_device_config_dir() -> Result<PathBuf, anyhow::Error> {
         let config_dir = dirs::data_dir()
-            .ok_or_else(|| anyhow::anyhow!("Unable to determine data directory"))?;
+            .ok_or_else(|| anyhow::anyhow!("Unable to determine data directory"))?
+            .join("Aroeira")
+            .join("device");
 
         Ok(config_dir)
     }
