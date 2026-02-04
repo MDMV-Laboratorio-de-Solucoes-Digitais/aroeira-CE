@@ -28,8 +28,11 @@ static ASYNC_HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::Lazy
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap_or_else(|e| {
-            warn!("Failed to build static reqwest client: {e}; falling back to default client");
-            reqwest::Client::new()
+            warn!("Failed to build static reqwest client: {e}; falling back to default client with timeout");
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_default()
         })
 });
 
