@@ -29,6 +29,9 @@ jobs:
   build-frontend:
     name: Build Frontend
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      id-token: write
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -62,6 +65,9 @@ jobs:
     name: Build Tauri (${{ matrix.platform }})
     needs: build-frontend
     timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: true
       matrix:

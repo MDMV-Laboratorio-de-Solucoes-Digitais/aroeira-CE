@@ -18,6 +18,14 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
+fn get_test_rate_limit_key() -> [u8; 32] {
+    std::env::var("TEST_RATE_LIMIT_KEY")
+        .unwrap_or_else(|_| format!("rate_limit_key_{}", uuid::Uuid::new_v4()))
+        .as_bytes()
+        .try_into()
+        .unwrap_or([0u8; 32])
+}
+
 #[tokio::test]
 async fn test_request_ids_are_generated_and_propagated() {
     // In the auth module, we generate request IDs for tracing
@@ -174,8 +182,8 @@ async fn test_dummy_verification_prevents_timing_attacks() {
     }
 
     // Create a fake password hash for testing
-    let password = "test_password";
-    let hash = bcrypt::hash("test_password", bcrypt::DEFAULT_COST).unwrap();
+    let password = Uuid::new_v4().to_string();
+    let hash = bcrypt::hash(&password, bcrypt::DEFAULT_COST).unwrap();
 
     let mut real_samples = Vec::with_capacity(10);
     for _ in 0..10 {
@@ -203,7 +211,7 @@ async fn test_dummy_verification_prevents_timing_attacks() {
 
 #[tokio::test]
 async fn test_password_hashing_uses_strong_algorithms_bcrypt() {
-    let password = "MySuperSecurePassword123!";
+    let password = Uuid::new_v4().to_string();
 
     // Hash the password using our utility function
     let hashed = hash_password(password).expect("Should hash password");
