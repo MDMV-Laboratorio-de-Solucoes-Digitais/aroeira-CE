@@ -17,12 +17,11 @@ use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge, PkceCodeVerifier,
     RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
-use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
 use tracing::{debug, error, warn};
 
 // Static HTTP client for async_http_client callback (connection pooling)
-static ASYNC_HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+static ASYNC_HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(|| {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none())
