@@ -91,6 +91,8 @@
       oauthLoading = null;
       localStorage.removeItem("oauth_pending_provider");
       error = "Authentication callback was invalid. Please try again.";
+      if (oauthTimeout) clearTimeout(oauthTimeout);
+      oauthTimeout = null;
       return Promise.resolve();
     }
 
@@ -98,6 +100,14 @@
     try {
       parsed = new URL(rawUrl);
     } catch {
+      // If this looks like our scheme but isn't parseable, treat as a failed callback
+      if (rawUrl.startsWith("aroeira:")) {
+        oauthLoading = null;
+        localStorage.removeItem("oauth_pending_provider");
+        error = "Authentication callback was invalid. Please try again.";
+        if (oauthTimeout) clearTimeout(oauthTimeout);
+        oauthTimeout = null;
+      }
       return Promise.resolve();
     }
 
@@ -148,6 +158,8 @@
         } finally {
           oauthLoading = null;
           localStorage.removeItem("oauth_pending_provider");
+          if (oauthTimeout) clearTimeout(oauthTimeout);
+          oauthTimeout = null;
         }
       });
 
@@ -287,6 +299,20 @@
     // Save provider to localStorage for cold start recovery
     localStorage.setItem("oauth_pending_provider", provider);
 
+    // Prevent the UI from getting stuck if the callback never arrives
+    if (oauthTimeout) clearTimeout(oauthTimeout);
+    oauthTimeout = setTimeout(
+      () => {
+        if (oauthLoading === provider) {
+          oauthLoading = null;
+          localStorage.removeItem("oauth_pending_provider");
+          error = "Authentication timed out. Please try again.";
+        }
+        oauthTimeout = null;
+      },
+      2 * 60 * 1000,
+    );
+
     try {
       await startOAuthFlow(provider);
       // The browser will open and redirect back via deep link
@@ -299,6 +325,8 @@
       error = handleError(err, `${provider} authentication`);
       oauthLoading = null;
       localStorage.removeItem("oauth_pending_provider");
+      if (oauthTimeout) clearTimeout(oauthTimeout);
+      oauthTimeout = null;
     }
   }
 </script>
