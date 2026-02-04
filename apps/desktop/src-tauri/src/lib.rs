@@ -404,8 +404,8 @@ async fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
 
     // Set up OAuth state first to consume config fields without cloning
     let oauth_config = infra::services::oauth::OAuthConfig {
-        google_client_id: config.google_client_id,
-        github_client_id: config.github_client_id,
+        google_client_id: config.google_client_id.clone(),
+        github_client_id: config.github_client_id.clone(),
         redirect_uri: crate::constants::OAUTH_REDIRECT_URI.to_string(),
         google_auth_url: None,
         google_token_url: None,
