@@ -583,7 +583,7 @@ fn test_hash_email_for_logging_success() {
 #[test]
 fn test_hash_email_for_logging_invalid_key() {
     let email = "test@example.com";
-    let key = b"short"; // Too short for HMAC-SHA256
+    let key = b"too_short"; // Too short for HMAC-SHA256
 
     let result = hash_email_for_logging(email, key);
     assert!(result.is_err());
