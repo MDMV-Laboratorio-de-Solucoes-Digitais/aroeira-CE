@@ -55,6 +55,7 @@
   let isLogin = $state(true);
   let loading = $state(false);
   let oauthLoading = $state<OAuthProvider | null>(null);
+  let oauthTimeout: ReturnType<typeof setTimeout> | null = null;
   let error = $state("");
   let successMessage = $state("");
   let email = $state("");
@@ -101,7 +102,9 @@
     }
 
     const isOAuthCallback =
-      parsed.protocol === "aroeira:" && parsed.pathname === "/auth/callback";
+      parsed.protocol === "aroeira:" &&
+      ((parsed.hostname === "auth" && parsed.pathname === "/callback") ||
+        parsed.pathname === "/auth/callback");
 
     if (!isOAuthCallback) {
       // Ignore unrelated deep links; don't cancel an in-progress OAuth flow.
