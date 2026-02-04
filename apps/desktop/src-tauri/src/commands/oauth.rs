@@ -1,6 +1,6 @@
-//! OAuth2 Tauri Commands - TDD GREEN PHASE
+//! `OAuth2` Tauri Commands - TDD GREEN PHASE
 //!
-//! This module provides Tauri commands for OAuth2 authentication
+//! This module provides Tauri commands for `OAuth2` authentication
 //! with PKCE flow for Google and GitHub providers.
 //!
 //! # Security Notes
@@ -95,6 +95,13 @@ impl From<OAuthUser> for OAuthCallbackResponse {
 ///
 /// * `Ok(StartOAuthResponse)` - Authorization URL and state parameter
 /// * `Err(String)` - If provider is not configured
+///
+/// # Errors
+///
+/// Returns an error string if:
+/// - The provider is not configured (missing Client ID)
+/// - URL generation fails
+/// - Session storage fails
 #[tauri::command]
 pub async fn start_oauth_flow(
     provider: AuthProvider,
@@ -121,7 +128,7 @@ pub async fn start_oauth_flow(
     // Use underscore separator instead of colon (secure_storage doesn't allow colons in keys)
     // Hash state with SHA256 to ensure it's safe for storage keys and doesn't leak CSRF token
     let state_hash = hex::encode(Sha256::digest(state_param.as_bytes()));
-    let storage_key = format!("oauth_pkce_session_{}", state_hash);
+    let storage_key = format!("oauth_pkce_session_{state_hash}");
     let session_json = serde_json::to_string(&session).map_err(|e| {
         tracing::error!("Failed to serialize OAuth PKCE session: {e}");
         "Failed to start authentication. Please try again.".to_string()
@@ -153,12 +160,20 @@ pub async fn start_oauth_flow(
 ///
 /// # Arguments
 ///
-/// * `callback_url` - The full callback URL (e.g., "aroeira://auth/callback?code=...&state=...")
+/// * `callback_url` - The full callback URL (e.g., `<aroeira://auth/callback?code=...&state=...>`)
 ///
 /// # Returns
 ///
 /// * `Ok(OAuthCallbackResponse)` - Authenticated user information
 /// * `Err(String)` - If callback parsing fails, state mismatch, or exchange fails
+///
+/// # Errors
+///
+/// Returns an error string if:
+/// - Callback URL is invalid
+/// - Session is expired or invalid
+/// - Token exchange fails
+/// - User creation/retrieval fails
 #[tauri::command]
 pub async fn handle_oauth_callback(
     callback_url: String,
@@ -176,74 +191,7 @@ pub async fn handle_oauth_callback(
     })?;
 
     // Retrieve and consume session (CSRF protection)
-    // First try in-memory store (warm start), then fall back to secure storage (cold start)
-    let session = match oauth_state.session_store.take(&state_param) {
-        Some(s) => {
-            // Warm start: session found in memory.
-            // We should still clean up any persisted session that might exist (e.g. from start_oauth_flow)
-            // to avoid leaving stale data in secure storage.
-            let state_hash = hex::encode(Sha256::digest(state_param.as_bytes()));
-            let storage_key = format!("oauth_pkce_session_{}", state_hash);
-            if let Err(e) = state.secure_storage.delete(&storage_key).await {
-                tracing::warn!(
-                    target: "security",
-                    "Failed to delete persisted OAuth session from secure storage: {e}. \
-                     Session will expire naturally but cleanup is incomplete."
-                );
-            }
-            s
-        }
-        None => {
-            // Cold start: try to recover session from secure storage
-            let state_hash = hex::encode(Sha256::digest(state_param.as_bytes()));
-            let storage_key = format!("oauth_pkce_session_{}", state_hash);
-            let session_json = state
-                .secure_storage
-                .get(&storage_key)
-                .await
-                .map_err(|e| {
-                    tracing::error!("Failed to read persisted OAuth session: {e}");
-                    "Invalid or expired OAuth session. Please try again.".to_string()
-                })?
-                .ok_or_else(|| {
-                    tracing::warn!(
-                        target: "audit",
-                        outcome = "failure",
-                        reason = "session_not_found",
-                        "OAuth authentication failed: invalid or expired session"
-                    );
-                    "Invalid or expired OAuth session. Please try again.".to_string()
-                })?;
-
-            // Consume-once: delete regardless of parse outcome to prevent replay attempts.
-            // Log failures but don't block auth flow - session expiry provides secondary protection.
-            if let Err(e) = state.secure_storage.delete(&storage_key).await {
-                tracing::warn!(
-                    target: "security",
-                    "Failed to delete persisted OAuth session from secure storage: {e}. \
-                     Session will expire naturally but cleanup is incomplete."
-                );
-            }
-
-            let recovered =
-                serde_json::from_str::<OAuthPkceSession>(&session_json).map_err(|e| {
-                    tracing::error!("Failed to deserialize persisted OAuth session: {e}");
-                    "Invalid or expired OAuth session. Please try again.".to_string()
-                })?;
-
-            if !recovered.is_valid() || recovered.is_expired() {
-                tracing::warn!(
-                    target: "audit",
-                    outcome = "failure",
-                    reason = "session_invalid_or_expired",
-                    "OAuth authentication failed: invalid or expired session"
-                );
-                return Err("Invalid or expired OAuth session. Please try again.".to_string());
-            }
-
-            recovered
-        }
-    };
+    let session = retrieve_session(&state_param, &oauth_state, &state).await?;
 
     // Exchange code for user info
     let user = match oauth_state
@@ -276,13 +224,106 @@ pub async fn handle_oauth_callback(
     };
 
     // Application-Level Authentication
-    // 1. Look up user by email
-    // 2. Create user if not exists
-    // 3. Create session (JWT)
+    let user_id = authenticate_or_create_user(&user, &session, &state).await?;
 
+    // Get device ID for session binding
+    let device_id = get_device_id()?;
+
+    // Generate email hash for consistent rate limit clearing
+    let email_hash = hash_email_for_logging(
+        &user.email.trim().to_ascii_lowercase(),
+        state.rate_limit_key.expose_secret().as_bytes(),
+    )
+    .map_err(|_| "Internal security error".to_string())?;
+
+    // Create session (JWT), store it, and clear rate limits
+    handle_successful_login(user_id, &email_hash, &device_id, state.inner()).await?;
+
+    // Log successful OAuth login (audit trail)
+    log_oauth_success(user_id, &session, &user);
+
+    Ok(OAuthCallbackResponse::from(user))
+}
+
+async fn retrieve_session(
+    state_param: &str,
+    oauth_state: &OAuthState,
+    state: &AppState,
+) -> Result<OAuthPkceSession, String> {
+    // First try in-memory store (warm start), then fall back to secure storage (cold start)
+    if let Some(s) = oauth_state.session_store.take(state_param) {
+        // Warm start: session found in memory.
+        // We should still clean up any persisted session that might exist (e.g. from start_oauth_flow)
+        // to avoid leaving stale data in secure storage.
+        let state_hash = hex::encode(Sha256::digest(state_param.as_bytes()));
+        let storage_key = format!("oauth_pkce_session_{state_hash}");
+        if let Err(e) = state.secure_storage.delete(&storage_key).await {
+            tracing::warn!(
+                target: "security",
+                "Failed to delete persisted OAuth session from secure storage: {e}. \
+                 Session will expire naturally but cleanup is incomplete."
+            );
+        }
+        Ok(s)
+    } else {
+        // Cold start: try to recover session from secure storage
+        let state_hash = hex::encode(Sha256::digest(state_param.as_bytes()));
+        let storage_key = format!("oauth_pkce_session_{state_hash}");
+        let session_json = state
+            .secure_storage
+            .get(&storage_key)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to read persisted OAuth session: {e}");
+                "Invalid or expired OAuth session. Please try again.".to_string()
+            })?
+            .ok_or_else(|| {
+                tracing::warn!(
+                    target: "audit",
+                    outcome = "failure",
+                    reason = "session_not_found",
+                    "OAuth authentication failed: invalid or expired session"
+                );
+                "Invalid or expired OAuth session. Please try again.".to_string()
+            })?;
+
+        // Consume-once: delete regardless of parse outcome to prevent replay attempts.
+        // Log failures but don't block auth flow - session expiry provides secondary protection.
+        if let Err(e) = state.secure_storage.delete(&storage_key).await {
+            tracing::warn!(
+                target: "security",
+                "Failed to delete persisted OAuth session from secure storage: {e}. \
+                 Session will expire naturally but cleanup is incomplete."
+            );
+        }
+
+        let recovered = serde_json::from_str::<OAuthPkceSession>(&session_json).map_err(|e| {
+            tracing::error!("Failed to deserialize persisted OAuth session: {e}");
+            "Invalid or expired OAuth session. Please try again.".to_string()
+        })?;
+
+        if !recovered.is_valid() || recovered.is_expired() {
+            tracing::warn!(
+                target: "audit",
+                outcome = "failure",
+                reason = "session_invalid_or_expired",
+                "OAuth authentication failed: invalid or expired session"
+            );
+            return Err("Invalid or expired OAuth session. Please try again.".to_string());
+        }
+
+        Ok(recovered)
+    }
+}
+
+async fn authenticate_or_create_user(
+    user: &OAuthUser,
+    session: &OAuthPkceSession,
+    state: &AppState,
+) -> Result<Uuid, String> {
     let normalized_email = user.email.trim().to_ascii_lowercase();
 
-    let user_id = match state.user_repo.find_by_email(&normalized_email).await {
+    match state.user_repo.find_by_email(&normalized_email).await {
         Ok(Some(mut u)) => {
             if user.email_verified && !u.email_verified {
                 // SECURITY CRITICAL: When verifying an existing unverified account via OAuth,
@@ -314,7 +355,7 @@ pub async fn handle_oauth_callback(
                     "Authentication failed".to_string()
                 })?;
             }
-            u.id
+            Ok(u.id)
         }
         Ok(None) => {
             // Create new user for OAuth
@@ -347,44 +388,32 @@ pub async fn handle_oauth_callback(
             };
 
             match state.user_repo.save(&new_user).await {
-                Ok(saved) => saved.id,
+                Ok(saved) => Ok(saved.id),
                 Err(e) => {
                     // Concurrency safety: if another callback created the same email concurrently,
                     // re-fetch and proceed instead of failing the login.
                     tracing::warn!(
                         "User creation from OAuth failed (may be concurrent insert): {e}"
                     );
-                    match state.user_repo.find_by_email(&normalized_email).await {
-                        Ok(Some(existing)) => existing.id,
-                        _ => {
-                            tracing::error!(
-                                "Failed to recover user after OAuth create conflict: {e}"
-                            );
-                            return Err("Authentication failed".to_string());
-                        }
+                    if let Ok(Some(existing)) =
+                        state.user_repo.find_by_email(&normalized_email).await
+                    {
+                        Ok(existing.id)
+                    } else {
+                        tracing::error!("Failed to recover user after OAuth create conflict: {e}");
+                        Err("Authentication failed".to_string())
                     }
                 }
             }
         }
         Err(e) => {
             tracing::error!("Database error finding user: {e}");
-            return Err("Authentication failed".to_string());
+            Err("Authentication failed".to_string())
         }
-    };
+    }
+}
 
-    // Get device ID for session binding
-    let device_id = get_device_id()?;
-
-    // Generate email hash for consistent rate limit clearing
-    let email_hash = hash_email_for_logging(
-        &normalized_email,
-        state.rate_limit_key.expose_secret().as_bytes(),
-    )
-    .map_err(|_| "Internal security error".to_string())?;
-
-    // Create session (JWT), store it, and clear rate limits
-    handle_successful_login(user_id, &email_hash, &device_id, state.inner()).await?;
-
+fn log_oauth_success(user_id: Uuid, session: &OAuthPkceSession, user: &OAuthUser) {
     // Log successful OAuth login (audit trail) with essential context
     // Note: email and provider_user_id are hashed/redacted for privacy in logs
     let email_domain = user
@@ -392,7 +421,6 @@ pub async fn handle_oauth_callback(
         .rsplit_once('@')
         .map_or("unknown", |(_, domain)| domain);
 
-    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(user.provider_user_id.as_bytes());
     let hashed_user_id = hex::encode(hasher.finalize());
@@ -406,8 +434,6 @@ pub async fn handle_oauth_callback(
         outcome = "success",
         "OAuth authentication completed"
     );
-
-    Ok(OAuthCallbackResponse::from(user))
 }
 
 /// Thread-safe storage for OAuth PKCE sessions.
@@ -484,7 +510,7 @@ impl Default for OAuthSessionStore {
 ///
 /// # Arguments
 ///
-/// * `callback_url` - The full callback URL (e.g., "aroeira://auth/callback?code=...&state=...")
+/// * `callback_url` - The full callback URL (e.g., `<aroeira://auth/callback?code=...&state=...>`)
 ///
 /// # Returns
 ///

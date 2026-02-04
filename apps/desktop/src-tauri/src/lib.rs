@@ -31,9 +31,9 @@ pub struct AppConfig {
     pub jwt_audience: String,
     pub rate_limit_key: String,
     pub password_security_level: PasswordSecurityLevel,
-    /// Google OAuth2 client ID (optional)
+    /// Google `OAuth2` client ID (optional)
     pub google_client_id: Option<String>,
-    /// GitHub OAuth2 client ID (optional)
+    /// GitHub `OAuth2` client ID (optional)
     pub github_client_id: Option<String>,
 }
 
