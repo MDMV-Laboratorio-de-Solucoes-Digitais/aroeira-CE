@@ -503,9 +503,10 @@ impl OAuthService for OAuthServiceImpl {
             hasher.update(user_key.as_bytes());
             let user_key_hash = hex::encode(hasher.finalize());
 
-            // Create token payload. Prefer not storing refresh tokens unless explicitly required.
+            // Create token payload. Include refresh token for long-lived sessions if available.
             let token_payload = serde_json::json!({
-                "access_token": access_token
+                "access_token": access_token,
+                "refresh_token": token_result.refresh_token().map(oauth2::RefreshToken::secret),
             });
 
             // Prevent blocking async runtime with synchronous keyring operations
