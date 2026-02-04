@@ -138,9 +138,6 @@ pub async fn start_oauth_flow(
 
     let state_param = session.state.clone();
 
-    // Store session for callback verification (warm start)
-    oauth_state.session_store.store(session.clone());
-
     // Persist session for cold start recovery (deep link opens closed app)
     // One-time use: deleted after successful `take` on callback.
     // Use underscore separator instead of colon (secure_storage doesn't allow colons in keys)
@@ -159,6 +156,10 @@ pub async fn start_oauth_flow(
             tracing::error!("Failed to persist OAuth session: {e}");
             "Failed to start authentication. Please try again.".to_string()
         })?;
+
+    // Store session for callback verification (warm start)
+    // Store in memory ONLY after successful persistence to avoid leaks if persistence fails
+    oauth_state.session_store.store(session.clone());
 
     Ok(StartOAuthResponse {
         auth_url,
@@ -369,9 +370,22 @@ async fn authenticate_or_create_user(
 ) -> Result<Uuid, String> {
     let normalized_email = user.email.trim().to_ascii_lowercase();
 
+    // Fail closed: OAuth sign-in must only accept provider-verified emails.
+    if !user.email_verified {
+        tracing::warn!(
+            target: "audit",
+            outcome = "failure",
+            reason = "oauth_email_not_verified",
+            provider = %session.provider,
+            email_domain = %user.email.rsplit_once('@').map_or("unknown", |(_, d)| d),
+            "OAuth login rejected due to unverified email"
+        );
+        return Err("Authentication failed. Please use a verified email.".to_string());
+    }
+
     match state.user_repo.find_by_email(&normalized_email).await {
         Ok(Some(mut u)) => {
-            if user.email_verified && !u.email_verified {
+            if !u.email_verified {
                 // SECURITY CRITICAL: When verifying an existing unverified account via OAuth,
                 // we MUST invalidate the old password to prevent account takeover.
                 // Otherwise, an attacker who pre-registered the email could use the old password.
@@ -400,7 +414,7 @@ async fn authenticate_or_create_user(
                 id: Uuid::new_v4(),
                 email: normalized_email.clone(),
                 password_hash,
-                email_verified: user.email_verified, // Use provider verification status
+                email_verified: true, // We already verified this above
                 verification_token: None,
                 verification_token_expires_at: None,
             };
@@ -667,6 +681,18 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
             outcome = "failure",
             reason = "invalid_state_charset",
             "OAuth callback: state contains invalid characters"
+        );
+        return Err(GENERIC_ERROR.to_string());
+    }
+
+    // Security: Validate code charset to prevent injection attacks or anomalies
+    // Code should not contain control characters
+    if code.chars().any(|c| c.is_control()) {
+        tracing::warn!(
+            target: "audit",
+            outcome = "failure",
+            reason = "invalid_code_charset",
+            "OAuth callback: code contains control characters"
         );
         return Err(GENERIC_ERROR.to_string());
     }
