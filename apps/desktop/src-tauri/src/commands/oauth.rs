@@ -340,16 +340,6 @@ async fn retrieve_session(
         // Warm start: session found in memory.
         // We should still clean up any persisted session that might exist (e.g. from start_oauth_flow)
         // to avoid leaving stale data in secure storage.
-        let state_hash = hex::encode(Sha256::digest(state_param.as_bytes()));
-        let storage_key = format!("oauth_pkce_session_{state_hash}");
-        if let Err(e) = state.secure_storage.delete(&storage_key).await {
-            tracing::warn!(
-                target: "security",
-                "Failed to delete persisted OAuth session from secure storage: {e}. \
-                 Session will expire naturally but cleanup is incomplete."
-            );
-        }
-
         if session.state != state_param || !session.is_valid() || session.is_expired() {
             tracing::warn!(
                 target: "audit",
@@ -358,6 +348,18 @@ async fn retrieve_session(
                 "OAuth authentication failed: invalid or expired session"
             );
             return Err("Invalid or expired OAuth session. Please try again.".to_string());
+        }
+
+        // We should still clean up any persisted session that might exist (e.g. from start_oauth_flow)
+        // to avoid leaving stale data in secure storage.
+        let state_hash = hex::encode(Sha256::digest(state_param.as_bytes()));
+        let storage_key = format!("oauth_pkce_session_{state_hash}");
+        if let Err(e) = state.secure_storage.delete(&storage_key).await {
+            tracing::warn!(
+                target: "security",
+                "Failed to delete persisted OAuth session from secure storage: {e}. \
+                 Session will expire naturally but cleanup is incomplete."
+            );
         }
 
         Ok(session)
@@ -598,6 +600,11 @@ impl OAuthSessionStore {
 
         // Proactively clean up expired sessions to prevent memory leaks
         sessions.retain(|_, s| !s.is_expired());
+
+        if sessions.get(state).is_some_and(|s| !s.is_valid()) {
+            sessions.remove(state);
+            return None;
+        }
 
         // Remove and return (expiration already checked by retain)
         sessions.remove(state)
