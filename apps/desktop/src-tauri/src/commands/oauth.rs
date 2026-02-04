@@ -321,8 +321,7 @@ pub async fn handle_oauth_callback(
 /// Returns an error string if:
 /// - Configuration check fails
 #[tauri::command]
-#[allow(clippy::needless_pass_by_value)]
-pub fn get_oauth_availability(
+pub async fn get_oauth_availability(
     oauth_state: State<'_, OAuthState>,
 ) -> Result<OAuthAvailability, String> {
     Ok(OAuthAvailability {
