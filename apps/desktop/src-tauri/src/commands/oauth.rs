@@ -198,10 +198,10 @@ pub async fn handle_oauth_callback(
     oauth_state: State<'_, OAuthState>,
     state: State<'_, AppState>,
 ) -> Result<OAuthCallbackResponse, String> {
+    const MAX_CALLBACK_LEN: usize = 8192;
     let device_id = get_device_id().unwrap_or_else(|_| "unknown".to_string());
 
     // Prevent DoS via excessive URL length
-    const MAX_CALLBACK_LEN: usize = 8192;
     if callback_url.len() > MAX_CALLBACK_LEN {
         tracing::warn!(
             target: "audit",
