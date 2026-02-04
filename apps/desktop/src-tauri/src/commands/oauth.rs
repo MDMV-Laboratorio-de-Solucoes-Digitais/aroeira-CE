@@ -736,9 +736,14 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
         return Err("Authentication was denied or failed. Please try again.".to_string());
     }
 
-    // Helper to extract query parameters
+    // Helper to extract query parameters.
+    // NOTE: `Url::query_pairs()` treats '+' as space; preserve '+' by normalizing to %2B first.
+    let query = url.query().unwrap_or("").replace('+', "%2B");
+    let query_pairs = url::form_urlencoded::parse(query.as_bytes()).collect::<Vec<_>>();
+
     let get_query_param = |key: &str| -> Result<String, String> {
-        url.query_pairs()
+        query_pairs
+            .iter()
             .find(|(k, _)| k == key)
             .map(|(_, v)| v.to_string())
             .filter(|v| !v.is_empty())
