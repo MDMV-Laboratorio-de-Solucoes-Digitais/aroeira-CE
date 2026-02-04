@@ -121,7 +121,7 @@ impl TokenStorage for KeyringTokenStorage {
 /// - Exchanges authorization codes for tokens
 /// - Fetches user info from provider APIs
 pub struct OAuthServiceImpl {
-    config: OAuthConfig,
+    pub config: OAuthConfig,
     token_storage: std::sync::Arc<dyn TokenStorage>,
 }
 
@@ -340,14 +340,19 @@ impl OAuthServiceImpl {
             .await
             .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
 
-        // Security Critical: Only accept verified emails
+        // Security Critical: Only accept primary verified email
+        // This removes the fallback to any verified email and prevents potential account confusion
+        // (users can have multiple verified emails; picking a non-primary one can map to wrong account)
         let email_obj = emails
             .iter()
             .find(|e| e.primary && e.verified)
-            .or_else(|| emails.iter().find(|e| e.verified))
-            .ok_or_else(|| OAuthError::UserInfoFailed("No verified email found".to_string()))?;
+            .ok_or_else(|| {
+                OAuthError::UserInfoFailed("No primary verified email found".to_string())
+            })?;
 
-        Ok((email_obj.email.clone(), email_obj.verified))
+        // Security Critical: Enforce primary verified email flag to true
+        // This provides clearer intent and avoids ambiguity
+        Ok((email_obj.email.clone(), true))
     }
 }
 

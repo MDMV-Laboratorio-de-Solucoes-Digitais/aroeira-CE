@@ -70,6 +70,15 @@ pub struct OAuthCallbackResponse {
     pub avatar_url: Option<String>,
 }
 
+/// Response from `get_oauth_availability` command.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OAuthAvailability {
+    /// Whether Google provider is configured
+    pub google: bool,
+    /// Whether GitHub provider is configured
+    pub github: bool,
+}
+
 impl From<OAuthUser> for OAuthCallbackResponse {
     fn from(user: OAuthUser) -> Self {
         Self {
@@ -290,6 +299,35 @@ pub async fn handle_oauth_callback(
     log_oauth_success(user_id, &session, &user);
 
     Ok(OAuthCallbackResponse::from(user))
+}
+
+/// Checks which OAuth providers are available by querying the backend configuration.
+///
+/// This command:
+/// 1. Checks if Google client ID is configured
+/// 2. Checks if GitHub client ID is configured
+///
+/// # Arguments
+///
+/// * `oauth_state` - The OAuth managed state containing service configuration
+///
+/// # Returns
+///
+/// * `Ok(OAuthAvailability)` - Availability status for each provider
+/// * `Err(String)` - If backend check fails
+///
+/// # Errors
+///
+/// Returns an error string if:
+/// - Configuration check fails
+#[tauri::command]
+pub async fn get_oauth_availability(
+    oauth_state: State<'_, OAuthState>,
+) -> Result<OAuthAvailability, String> {
+    Ok(OAuthAvailability {
+        google: oauth_state.oauth_service.config.google_client_id.is_some(),
+        github: oauth_state.oauth_service.config.github_client_id.is_some(),
+    })
 }
 
 async fn retrieve_session(

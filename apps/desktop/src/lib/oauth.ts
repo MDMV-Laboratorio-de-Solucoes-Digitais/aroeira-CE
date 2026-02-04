@@ -2,7 +2,7 @@
  * OAuth utility module for handling OAuth2 authentication flows.
  *
  * This module provides functions to initiate OAuth flows with Google and GitHub,
- * opening the system browser for authentication and handling callbacks.
+ * opening system browser for authentication and handling callbacks.
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -22,28 +22,32 @@ export interface OAuthCallbackResponse {
   avatar_url: string | null;
 }
 
+export interface OAuthAvailability {
+  google: boolean;
+  github: boolean;
+}
+
 /**
- * Starts an OAuth authentication flow for the given provider.
+ * Starts an OAuth authentication flow for given provider.
  *
  * This function:
- * 1. Calls the Tauri backend to generate an authorization URL
- * 2. Opens the URL in the system default browser
- * 3. Returns the state parameter for callback verification
+ * 1. Calls Tauri backend to generate an authorization URL
+ * 2. Opens URL in system default browser
+ * 3. Returns state parameter for callback verification
  *
- * The actual callback handling happens via deep linking - the OS will
- * open the app with the aroeira://auth/callback URL when the provider
+ * The actual callback handling happens via deep linking - OS will
+ * open app with aroeira://auth/callback URL when provider
  * redirects back.
  *
  * @param provider - Either "google" or "github"
  * @returns The state parameter used for this flow
- * @throws Error if the provider is not configured or the flow fails
+ * @throws Error if provider is not configured or flow fails
  */
 export async function startOAuthFlow(provider: OAuthProvider): Promise<string> {
   const response = await invoke<StartOAuthResponse>("start_oauth_flow", {
     provider,
   });
 
-  // Open the authorization URL in the system browser
   await openUrl(response.auth_url);
 
   return response.state;
@@ -53,33 +57,42 @@ export async function startOAuthFlow(provider: OAuthProvider): Promise<string> {
  * Handles an OAuth callback URL from deep linking.
  *
  * This function should be called when the app receives a deep link
- * with the aroeira://auth/callback URL.
+ * with aroeira://auth/callback URL.
  *
- * @param callbackUrl - The full callback URL from the deep link
+ * @param callbackUrl - The full callback URL from deep link
  * @returns The authenticated user information
- * @throws Error if the callback is invalid or the exchange fails
+ * @throws Error if callback is invalid or exchange fails
  */
 export async function handleOAuthCallback(
   callbackUrl: string,
 ): Promise<OAuthCallbackResponse> {
-  // The backend performs robust validation of the callback URL.
-  // Rely on it as the single source of truth to avoid logic duplication.
   return invoke<OAuthCallbackResponse>("handle_oauth_callback", {
-    callback_url: callbackUrl,
+    callbackUrl: callbackUrl,
   });
 }
 
 /**
- * Checks if OAuth providers are available.
+ * Checks which OAuth providers are available by querying the backend.
  *
- * This is a simple check to determine if we should show OAuth buttons.
- * In production, you might want to check with the backend which providers
- * are configured.
+ * This provides a better user experience by only showing OAuth buttons
+ * for providers that are actually configured on the server.
+ *
+ * @returns Availability status for each provider
+ * @throws Error if backend query fails
+ */
+export async function getOAuthAvailability(): Promise<OAuthAvailability> {
+  return invoke<OAuthAvailability>("get_oauth_availability");
+}
+
+/**
+ * Checks if any OAuth provider is available.
+ *
+ * This is a simple check to determine if we should show OAuth section.
+ * Uses the availability check to provide accurate information.
  *
  * @returns True if at least one OAuth provider might be available
  */
-export function isOAuthAvailable(): boolean {
-  // OAuth is always potentially available - the backend will return
-  // an error if a specific provider is not configured
-  return true;
+export async function isOAuthAvailable(): Promise<boolean> {
+  const availability = await getOAuthAvailability();
+  return availability.google || availability.github;
 }
