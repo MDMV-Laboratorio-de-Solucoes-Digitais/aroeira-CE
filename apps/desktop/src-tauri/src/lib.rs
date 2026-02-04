@@ -402,31 +402,7 @@ async fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
         app.handle().clone(),
     ));
 
-    app.manage(AppState {
-        user_repo,
-        note_repo,
-        email_service,
-        secure_storage,
-        jwt_secret: SecretBox::from(config.jwt_secret.into_boxed_str()),
-        password_min_length: config.password_min_length,
-        jwt_expiration_hours: config.jwt_expiration_hours,
-        jwt_issuer: config.jwt_issuer.clone(),
-        jwt_audience: config.jwt_audience.clone(),
-        rate_limit_key: SecretBox::from(config.rate_limit_key.into_boxed_str()),
-        login_attempts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        register_attempts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        global_login_attempts: Arc::new(tokio::sync::Mutex::new(
-            crate::state::RateLimitEntry::new(),
-        )),
-        global_register_attempts: Arc::new(tokio::sync::Mutex::new(
-            crate::state::RateLimitEntry::new(),
-        )),
-        device_login_attempts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        device_register_attempts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        password_security_level: config.password_security_level,
-    });
-
-    // Set up OAuth state
+    // Set up OAuth state first to consume config fields without cloning
     let oauth_config = infra::services::oauth::OAuthConfig {
         google_client_id: config.google_client_id,
         github_client_id: config.github_client_id,
@@ -440,6 +416,30 @@ async fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
         github_emails_url: None,
     };
     app.manage(crate::commands::oauth::OAuthState::new(oauth_config));
+
+    app.manage(AppState {
+        user_repo,
+        note_repo,
+        email_service,
+        secure_storage,
+        jwt_secret: SecretBox::from(config.jwt_secret.into_boxed_str()),
+        password_min_length: config.password_min_length,
+        jwt_expiration_hours: config.jwt_expiration_hours,
+        jwt_issuer: config.jwt_issuer,
+        jwt_audience: config.jwt_audience,
+        rate_limit_key: SecretBox::from(config.rate_limit_key.into_boxed_str()),
+        login_attempts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        register_attempts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        global_login_attempts: Arc::new(tokio::sync::Mutex::new(
+            crate::state::RateLimitEntry::new(),
+        )),
+        global_register_attempts: Arc::new(tokio::sync::Mutex::new(
+            crate::state::RateLimitEntry::new(),
+        )),
+        device_login_attempts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        device_register_attempts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        password_security_level: config.password_security_level,
+    });
 
     Ok(())
 }
