@@ -18,14 +18,6 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
-fn get_test_rate_limit_key() -> [u8; 32] {
-    std::env::var("TEST_RATE_LIMIT_KEY")
-        .unwrap_or_else(|_| format!("rate_limit_key_{}", uuid::Uuid::new_v4()))
-        .as_bytes()
-        .try_into()
-        .unwrap_or([0u8; 32])
-}
-
 #[tokio::test]
 async fn test_request_ids_are_generated_and_propagated() {
     // In the auth module, we generate request IDs for tracing
