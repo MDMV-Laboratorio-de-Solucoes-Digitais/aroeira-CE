@@ -80,8 +80,28 @@ export async function startOAuthFlow(provider: OAuthProvider): Promise<string> {
 export async function handleOAuthCallback(
   callbackUrl: string,
 ): Promise<OAuthCallbackResponse> {
+  if (callbackUrl.length > 8192) {
+    throw new Error("Invalid callback URL");
+  }
+
+  let url: URL;
+  try {
+    url = new URL(callbackUrl);
+  } catch {
+    throw new Error("Invalid callback URL");
+  }
+
+  const isOAuthCallback =
+    url.protocol === "aroeira:" &&
+    ((url.hostname === "auth" && url.pathname === "/callback") ||
+      url.pathname === "/auth/callback");
+
+  if (!isOAuthCallback) {
+    throw new Error("Unexpected callback URL");
+  }
+
   return invoke<OAuthCallbackResponse>("handle_oauth_callback", {
-    callbackUrl: callbackUrl,
+    callbackUrl,
   });
 }
 
