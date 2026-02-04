@@ -188,7 +188,7 @@ async fn test_dummy_verification_prevents_timing_attacks() {
     let mut real_samples = Vec::with_capacity(10);
     for _ in 0..10 {
         let start_time = std::time::Instant::now();
-        let _ = verify_password(password, &hash);
+        let _ = verify_password(&password, &hash);
         real_samples.push(start_time.elapsed());
     }
     dummy_samples.sort();
@@ -214,7 +214,7 @@ async fn test_password_hashing_uses_strong_algorithms_bcrypt() {
     let password = Uuid::new_v4().to_string();
 
     // Hash the password using our utility function
-    let hashed = hash_password(password).expect("Should hash password");
+    let hashed = hash_password(&password).expect("Should hash password");
 
     // Verify it's a valid bcrypt hash
     assert!(hashed.starts_with("$2b$"), "Hash should be bcrypt format");
