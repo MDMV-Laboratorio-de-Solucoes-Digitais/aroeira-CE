@@ -431,9 +431,7 @@ impl DeviceIdentifier {
     /// Get device config directory
     fn get_device_config_dir() -> Result<PathBuf, anyhow::Error> {
         let config_dir = dirs::data_dir()
-            .ok_or_else(|| anyhow::anyhow!("Unable to determine data directory"))?
-            .join("Aroeira")
-            .join("device");
+            .ok_or_else(|| anyhow::anyhow!("Unable to determine data directory"))?;
 
         Ok(config_dir)
     }
@@ -580,7 +578,8 @@ mod tests {
         let (is_valid, _new_signature) =
             device_id.validate().expect("Failed to validate device ID");
         assert!(is_valid);
-        assert!(device_id.id.starts_with("dev_"));
+        let expected_prefix = hex::encode(sha2::Sha256::digest(b"Aroeira"));
+        assert!(device_id.id.starts_with(&format!("dev_{expected_prefix}")));
         assert!(device_id.id.len() > 10); // Should be a reasonable length
     }
 

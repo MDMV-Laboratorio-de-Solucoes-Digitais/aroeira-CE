@@ -27,13 +27,7 @@ static ASYNC_HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::Lazy
         .timeout(std::time::Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap_or_else(|e| {
-            warn!("Failed to build static reqwest client: {e}; falling back to default client with timeout");
-            reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .unwrap_or_default()
-        })
+        .expect("Failed to build reqwest client for OAuth")
 });
 
 /// Configuration for `OAuth2` providers.
@@ -519,6 +513,7 @@ impl OAuthService for OAuthServiceImpl {
             let user_key_hash_for_store = user_key_hash.clone();
 
             let store_result = tokio::task::spawn_blocking(move || {
+                let service_name = "aroeira-oauth".to_string();
                 storage.store(&service_name, &user_key_hash_for_store, &token_payload_str)
             })
             .await

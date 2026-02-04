@@ -235,7 +235,7 @@ pub async fn handle_oauth_callback(
     })?;
 
     // Retrieve and consume session (CSRF protection)
-    let session = retrieve_session(&state_param, &oauth_state, &state)
+    let session = retrieve_session(&state_param, oauth_state.inner(), state.inner())
         .await
         .inspect_err(|e| {
             tracing::warn!(
@@ -322,7 +322,7 @@ pub async fn handle_oauth_callback(
 /// - Configuration check fails
 #[tauri::command]
 pub fn get_oauth_availability(
-    oauth_state: &State<'_, OAuthState>,
+    oauth_state: State<'_, OAuthState>,
 ) -> Result<OAuthAvailability, String> {
     Ok(OAuthAvailability {
         google: oauth_state.oauth_service.config.google_client_id.is_some(),

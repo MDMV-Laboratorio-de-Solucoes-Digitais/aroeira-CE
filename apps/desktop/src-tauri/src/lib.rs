@@ -85,14 +85,14 @@ impl AppConfig {
         Self::validate_secret(&rate_limit_key, "RATE_LIMIT_KEY")?;
 
         // Load OAuth client IDs from environment (optional)
-        let google_client_id = std::env::var("GOOGLE_CLIENT_ID")
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-        let github_client_id = std::env::var("GITHUB_CLIENT_ID")
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+        let get_optional_env = |key: &str| -> Option<String> {
+            std::env::var(key)
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        };
+        let google_client_id = get_optional_env("GOOGLE_CLIENT_ID");
+        let github_client_id = get_optional_env("GITHUB_CLIENT_ID");
 
         if google_client_id.is_none() && github_client_id.is_none() {
             info!(
@@ -500,6 +500,7 @@ pub fn run() {
             commands::secure_storage::get_user_id_from_token,
             commands::oauth::start_oauth_flow,
             commands::oauth::handle_oauth_callback,
+            commands::oauth::get_oauth_availability,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

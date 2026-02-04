@@ -95,12 +95,13 @@ mod tests {
         // Use a low cost for testing.
         let _guard = EnvGuard::set("BCRYPT_COST", "4"); // Min valid bcrypt cost is 4
 
-        let password = "secure_password_123";
-        let hash = hash_password(password).unwrap();
+        let password = uuid::Uuid::new_v4().to_string();
+        let hash = hash_password(&password).unwrap();
 
         assert_ne!(password, hash);
-        assert!(verify_password(password, &hash).unwrap());
-        assert!(!verify_password("wrong_password", &hash).unwrap());
+        assert!(verify_password(&password, &hash).unwrap());
+        let wrong_password = uuid::Uuid::new_v4().to_string();
+        assert!(!verify_password(&wrong_password, &hash).unwrap());
     }
 
     #[test]
