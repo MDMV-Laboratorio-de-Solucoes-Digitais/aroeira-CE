@@ -442,10 +442,10 @@ impl OAuthService for OAuthServiceImpl {
                     .exchange_code(AuthorizationCode::new(code.clone()))
                     .set_pkce_verifier(verifier)
                     .request_async(&|mut req: oauth2::HttpRequest| async move {
-                        if let Ok(header_val) = "application/json".parse() {
-                            // "accept" implements IntoHeaderName
-                            req.headers_mut().insert("accept", header_val);
-                        }
+                        req.headers_mut().insert(
+                            reqwest::header::ACCEPT,
+                            reqwest::header::HeaderValue::from_static("application/json"),
+                        );
                         async_http_client(req).await
                     })
                     .await
