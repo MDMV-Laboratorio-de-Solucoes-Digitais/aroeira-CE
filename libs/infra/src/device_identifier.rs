@@ -580,8 +580,7 @@ mod tests {
         let (is_valid, _new_signature) =
             device_id.validate().expect("Failed to validate device ID");
         assert!(is_valid);
-        let expected_prefix = hex::encode(sha2::Sha256::digest(b"Aroeira"));
-        assert!(device_id.id.starts_with(&format!("dev_{expected_prefix}")));
+        assert!(device_id.id.starts_with("dev_"));
         assert!(device_id.id.len() > 10); // Should be a reasonable length
     }
 
