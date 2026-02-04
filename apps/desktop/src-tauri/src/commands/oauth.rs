@@ -687,7 +687,7 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
 
     // Security: Validate code charset to prevent injection attacks or anomalies
     // Code should not contain control characters
-    if code.chars().any(|c| c.is_control()) {
+    if code.chars().any(char::is_control) {
         tracing::warn!(
             target: "audit",
             outcome = "failure",
