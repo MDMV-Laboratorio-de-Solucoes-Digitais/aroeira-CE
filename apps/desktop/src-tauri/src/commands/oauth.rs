@@ -118,7 +118,16 @@ pub async fn start_oauth_flow(
     oauth_state: State<'_, OAuthState>,
     state: State<'_, AppState>,
 ) -> Result<StartOAuthResponse, String> {
-    let device_id = get_device_id().unwrap_or_else(|_| "unknown".to_string());
+    let device_id = get_device_id().map_err(|e| {
+        tracing::error!(
+            target: "security",
+            outcome = "failure",
+            reason = "device_id_unavailable",
+            error = %e,
+            "OAuth flow aborted: device ID unavailable"
+        );
+        "Authentication failed. Please try again.".to_string()
+    })?;
 
     // Generate authorization URL
     let (auth_url, session) = oauth_state
@@ -209,7 +218,16 @@ pub async fn handle_oauth_callback(
     state: State<'_, AppState>,
 ) -> Result<OAuthCallbackResponse, String> {
     const MAX_CALLBACK_LEN: usize = 8192;
-    let device_id = get_device_id().unwrap_or_else(|_| "unknown".to_string());
+    let device_id = get_device_id().map_err(|e| {
+        tracing::error!(
+            target: "security",
+            outcome = "failure",
+            reason = "device_id_unavailable",
+            error = %e,
+            "OAuth flow aborted: device ID unavailable"
+        );
+        "Authentication failed. Please try again.".to_string()
+    })?;
 
     // Prevent DoS via excessive URL length
     if callback_url.len() > MAX_CALLBACK_LEN {
@@ -338,17 +356,6 @@ async fn retrieve_session(
     // First try in-memory store (warm start), then fall back to secure storage (cold start)
     if let Some(session) = oauth_state.session_store.take(state_param) {
         // Warm start: session found in memory.
-        // We should still clean up any persisted session that might exist (e.g. from start_oauth_flow)
-        // to avoid leaving stale data in secure storage.
-        if session.state != state_param || !session.is_valid() || session.is_expired() {
-            tracing::warn!(
-                target: "audit",
-                outcome = "failure",
-                reason = "session_invalid_or_expired",
-                "OAuth authentication failed: invalid or expired session"
-            );
-            return Err("Invalid or expired OAuth session. Please try again.".to_string());
-        }
 
         // We should still clean up any persisted session that might exist (e.g. from start_oauth_flow)
         // to avoid leaving stale data in secure storage.
@@ -360,6 +367,16 @@ async fn retrieve_session(
                 "Failed to delete persisted OAuth session from secure storage: {e}. \
                  Session will expire naturally but cleanup is incomplete."
             );
+        }
+
+        if session.state != state_param || !session.is_valid() || session.is_expired() {
+            tracing::warn!(
+                target: "audit",
+                outcome = "failure",
+                reason = "session_invalid_or_expired",
+                "OAuth authentication failed: invalid or expired session"
+            );
+            return Err("Invalid or expired OAuth session. Please try again.".to_string());
         }
 
         Ok(session)
@@ -726,11 +743,13 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
         return Err(GENERIC_ERROR.to_string());
     }
 
-    // Security: Validate state charset to prevent injection attacks or anomalies
-    // State should only contain URL-safe characters (alphanumeric, -, _, ., ~) and common Base64 characters (+, /, =)
-    if !state
-        .chars()
-        .all(|c| c.is_alphanumeric() || "-_.~+/=".contains(c))
+    // Security: Validate state charset to prevent injection/ambiguity.
+    // Accept only unreserved URI characters (RFC 3986): ALPHA / DIGIT / "-" / "." / "_" / "~".
+    // Note: `Url::query_pairs()` decodes '+' as space, so disallow whitespace explicitly.
+    if state.chars().any(char::is_whitespace)
+        || !state
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-._~".contains(c))
     {
         tracing::warn!(
             target: "audit",
@@ -912,11 +931,14 @@ mod tests {
 
     #[test]
     fn parse_callback_url_handles_url_encoded_values() {
-        let url = "aroeira://auth/callback?code=abc%2B123&state=xyz%3D789";
+        // state uses only allowed unreserved characters (RFC 3986)
+        // code uses + which is allowed in code but not state (per our strict rule)
+        // %2B encodes +
+        let url = "aroeira://auth/callback?code=abc%2B123&state=xyz-789";
         let (code, state) = parse_oauth_callback_url(url).expect("Should parse URL-encoded values");
 
         assert_eq!(code, "abc+123");
-        assert_eq!(state, "xyz=789");
+        assert_eq!(state, "xyz-789");
     }
 
     #[test]
