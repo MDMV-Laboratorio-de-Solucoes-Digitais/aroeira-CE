@@ -13,6 +13,7 @@
 use crate::commands::auth::{get_device_id, handle_successful_login, hash_email_for_logging};
 use crate::state::AppState;
 use domain::modules::auth::oauth::{AuthProvider, OAuthPkceSession, OAuthService, OAuthUser};
+use hex;
 use infra::services::oauth::{OAuthConfig, OAuthServiceImpl};
 use infra::utils::hash_password;
 use parking_lot::Mutex;
@@ -108,15 +109,32 @@ pub async fn start_oauth_flow(
     oauth_state: State<'_, OAuthState>,
     state: State<'_, AppState>,
 ) -> Result<StartOAuthResponse, String> {
+    let device_id = get_device_id().unwrap_or_else(|_| "unknown".to_string());
+
     // Generate authorization URL
     let (auth_url, session) = oauth_state
         .oauth_service
         .generate_authorization_url(provider)
         .await
         .map_err(|e| {
-            tracing::error!("OAuth URL generation failed: {e}");
+            tracing::error!(
+                target: "audit",
+                outcome = "failure",
+                reason = "url_generation_failed",
+                device_id = %device_id,
+                error = %e,
+                "OAuth URL generation failed"
+            );
             "Failed to start authentication. Please try again.".to_string()
         })?;
+
+    tracing::info!(
+        target: "audit",
+        action = "oauth_start",
+        provider = %provider,
+        device_id = %device_id,
+        "Starting OAuth flow"
+    );
 
     let state_param = session.state.clone();
 
@@ -180,18 +198,45 @@ pub async fn handle_oauth_callback(
     oauth_state: State<'_, OAuthState>,
     state: State<'_, AppState>,
 ) -> Result<OAuthCallbackResponse, String> {
+    let device_id = get_device_id().unwrap_or_else(|_| "unknown".to_string());
+
+    // Prevent DoS via excessive URL length
+    const MAX_CALLBACK_LEN: usize = 8192;
+    if callback_url.len() > MAX_CALLBACK_LEN {
+        tracing::warn!(
+            target: "audit",
+            outcome = "failure",
+            reason = "callback_too_long",
+            device_id = %device_id,
+            "OAuth callback URL exceeded max length"
+        );
+        return Err("Invalid authentication request".to_string());
+    }
+
     // Parse callback URL
     let (code, state_param) = parse_oauth_callback_url(&callback_url).inspect_err(|_| {
         tracing::warn!(
             target: "audit",
             outcome = "failure",
             reason = "invalid_callback",
+            device_id = %device_id,
             "OAuth authentication failed: invalid callback URL"
         );
     })?;
 
     // Retrieve and consume session (CSRF protection)
-    let session = retrieve_session(&state_param, &oauth_state, &state).await?;
+    let session = retrieve_session(&state_param, &oauth_state, &state)
+        .await
+        .inspect_err(|e| {
+            tracing::warn!(
+                target: "audit",
+                outcome = "failure",
+                reason = "session_retrieval_failed",
+                device_id = %device_id,
+                error = %e,
+                "OAuth session retrieval failed"
+            );
+        })?;
 
     // Exchange code for user info
     let user = match oauth_state
@@ -206,6 +251,7 @@ pub async fn handle_oauth_callback(
                 target: "audit",
                 outcome = "failure",
                 reason = "code_exchange_failed",
+                device_id = %device_id,
                 "OAuth authentication failed: code exchange error"
             );
             // Log only error type/category, not full details which may contain tokens/PII
@@ -227,7 +273,7 @@ pub async fn handle_oauth_callback(
     let user_id = authenticate_or_create_user(&user, &session, &state).await?;
 
     // Get device ID for session binding
-    let device_id = get_device_id()?;
+    // already have device_id from start of function
 
     // Generate email hash for consistent rate limit clearing
     let email_hash = hash_email_for_logging(
@@ -329,21 +375,7 @@ async fn authenticate_or_create_user(
                 // SECURITY CRITICAL: When verifying an existing unverified account via OAuth,
                 // we MUST invalidate the old password to prevent account takeover.
                 // Otherwise, an attacker who pre-registered the email could use the old password.
-                let oauth_random_password =
-                    format!("oauth:{}:{}", session.provider, Uuid::new_v4());
-
-                let password_hash = tauri::async_runtime::spawn_blocking(move || {
-                    hash_password(&oauth_random_password)
-                })
-                .await
-                .map_err(|e| {
-                    tracing::error!("Task join error during password hashing: {e}");
-                    "Authentication failed".to_string()
-                })?
-                .map_err(|e| {
-                    tracing::error!("Failed to hash generated OAuth password: {e}");
-                    "Authentication failed".to_string()
-                })?;
+                let password_hash = generate_and_hash_oauth_password(session.provider).await?;
 
                 u.email_verified = true;
                 u.password_hash = password_hash; // Invalidate old password
@@ -362,21 +394,7 @@ async fn authenticate_or_create_user(
 
             // Generate a random high-entropy password that will never be shown to the user
             // This ensures the account cannot be accessed via password login unless explicitly reset
-            let oauth_random_password = format!("oauth:{}:{}", session.provider, Uuid::new_v4());
-
-            // Use infra's hash_password which handles security config correctly
-            // spawn_blocking is required because bcrypt is CPU-intensive and would block the async runtime
-            let password_hash =
-                tauri::async_runtime::spawn_blocking(move || hash_password(&oauth_random_password))
-                    .await
-                    .map_err(|e| {
-                        tracing::error!("Task join error during password hashing: {e}");
-                        "Authentication failed".to_string()
-                    })?
-                    .map_err(|e| {
-                        tracing::error!("Failed to hash generated OAuth password: {e}");
-                        "Authentication failed".to_string()
-                    })?;
+            let password_hash = generate_and_hash_oauth_password(session.provider).await?;
 
             let new_user = domain::modules::auth::User {
                 id: Uuid::new_v4(),
@@ -411,6 +429,24 @@ async fn authenticate_or_create_user(
             Err("Authentication failed".to_string())
         }
     }
+}
+
+async fn generate_and_hash_oauth_password(provider: AuthProvider) -> Result<String, String> {
+    // Generate a random high-entropy password that will never be shown to the user
+    let oauth_random_password = format!("oauth:{}:{}", provider, Uuid::new_v4());
+
+    // Use infra's hash_password which handles security config correctly
+    // spawn_blocking is required because bcrypt is CPU-intensive and would block the async runtime
+    tauri::async_runtime::spawn_blocking(move || hash_password(&oauth_random_password))
+        .await
+        .map_err(|e| {
+            tracing::error!("Task join error during password hashing: {e}");
+            "Authentication failed".to_string()
+        })?
+        .map_err(|e| {
+            tracing::error!("Failed to hash generated OAuth password: {e}");
+            "Authentication failed".to_string()
+        })
 }
 
 fn log_oauth_success(user_id: Uuid, session: &OAuthPkceSession, user: &OAuthUser) {
@@ -469,6 +505,11 @@ impl OAuthSessionStore {
 
         // Enforce a hard cap to prevent memory growth (DoS prevention)
         if sessions.len() >= MAX_SESSIONS {
+            tracing::warn!(
+                target: "security",
+                reason = "session_store_full",
+                "OAuth session store reached max capacity ({MAX_SESSIONS}). Evicting oldest session."
+            );
             // Remove oldest session directly
             if let Some(oldest_key) = sessions
                 .iter()
@@ -611,6 +652,21 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
             code_len = code.len(),
             state_len = state.len(),
             "OAuth callback: code/state too large"
+        );
+        return Err(GENERIC_ERROR.to_string());
+    }
+
+    // Security: Validate state charset to prevent injection attacks or anomalies
+    // State should only contain URL-safe characters (alphanumeric, -, _, ., ~) and common Base64 characters (+, /, =)
+    if !state
+        .chars()
+        .all(|c| c.is_alphanumeric() || "-_.~+/=".contains(c))
+    {
+        tracing::warn!(
+            target: "audit",
+            outcome = "failure",
+            reason = "invalid_state_charset",
+            "OAuth callback: state contains invalid characters"
         );
         return Err(GENERIC_ERROR.to_string());
     }
