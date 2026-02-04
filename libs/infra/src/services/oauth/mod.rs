@@ -62,9 +62,16 @@ impl OAuthConfig {
     /// - `GITHUB_CLIENT_ID`
     #[must_use]
     pub fn from_env(redirect_uri: String) -> Self {
+        let get_optional_env = |key: &str| -> Option<String> {
+            std::env::var(key)
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        };
+
         Self {
-            google_client_id: std::env::var("GOOGLE_CLIENT_ID").ok(),
-            github_client_id: std::env::var("GITHUB_CLIENT_ID").ok(),
+            google_client_id: get_optional_env("GOOGLE_CLIENT_ID"),
+            github_client_id: get_optional_env("GITHUB_CLIENT_ID"),
             redirect_uri,
             google_auth_url: None,
             google_token_url: None,
