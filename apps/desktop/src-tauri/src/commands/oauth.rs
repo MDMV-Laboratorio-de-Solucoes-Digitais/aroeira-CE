@@ -349,6 +349,17 @@ async fn retrieve_session(
                  Session will expire naturally but cleanup is incomplete."
             );
         }
+
+        if s.state != state_param || !s.is_valid() || s.is_expired() {
+            tracing::warn!(
+                target: "audit",
+                outcome = "failure",
+                reason = "session_invalid_or_expired",
+                "OAuth authentication failed: invalid or expired session"
+            );
+            return Err("Invalid or expired OAuth session. Please try again.".to_string());
+        }
+
         Ok(s)
     } else {
         // Cold start: try to recover session from secure storage
@@ -386,6 +397,16 @@ async fn retrieve_session(
             tracing::error!("Failed to deserialize persisted OAuth session: {e}");
             "Invalid or expired OAuth session. Please try again.".to_string()
         })?;
+
+        if recovered.state != state_param || !recovered.is_valid() || recovered.is_expired() {
+            tracing::warn!(
+                target: "audit",
+                outcome = "failure",
+                reason = "session_invalid_or_expired",
+                "OAuth authentication failed: invalid or expired session"
+            );
+            return Err("Invalid or expired OAuth session. Please try again.".to_string());
+        }
 
         if !recovered.is_valid() || recovered.is_expired() {
             tracing::warn!(
