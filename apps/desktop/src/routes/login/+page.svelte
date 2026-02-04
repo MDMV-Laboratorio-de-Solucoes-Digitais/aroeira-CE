@@ -93,16 +93,18 @@
       return Promise.resolve();
     }
 
-    // Cheap pre-filter: only handle our OAuth callback deep links
-    const isCanonical = rawUrl.startsWith("aroeira://auth/callback");
-    const isHostless = rawUrl.startsWith("aroeira:///auth/callback");
-    if (!isCanonical && !isHostless) {
-      // If we were expecting an OAuth callback, don't leave the UI spinning forever.
-      if (localStorage.getItem("oauth_pending_provider")) {
-        oauthLoading = null;
-        localStorage.removeItem("oauth_pending_provider");
-        error = "Authentication callback was invalid. Please try again.";
-      }
+    let parsed: URL | null = null;
+    try {
+      parsed = new URL(rawUrl);
+    } catch {
+      return Promise.resolve();
+    }
+
+    const isOAuthCallback =
+      parsed.protocol === "aroeira:" && parsed.pathname === "/auth/callback";
+
+    if (!isOAuthCallback) {
+      // Ignore unrelated deep links; don't cancel an in-progress OAuth flow.
       return Promise.resolve();
     }
 
