@@ -328,7 +328,7 @@ proptest! {
         local_part in "[a-z0-9]{1,20}",
         domain in "[a-z]{2,10}\\.[a-z]{2,4}",
     ) {
-        let email = format!("{}@{}", local_part, domain);
+        let email = format!("{local_part}@{domain}");
 
         let user = OAuthUser {
             provider: AuthProvider::Google,
