@@ -367,6 +367,16 @@ async fn retrieve_session(
     if let Some(session) = oauth_state.session_store.take(state_param) {
         // Warm start: session found in memory.
 
+        if session.state != state_param || !session.is_valid() || session.is_expired() {
+            tracing::warn!(
+                target: "audit",
+                outcome = "failure",
+                reason = "session_invalid_or_expired",
+                "OAuth authentication failed: invalid or expired session"
+            );
+            return Err("Invalid or expired OAuth session. Please try again.".to_string());
+        }
+
         // We should still clean up any persisted session that might exist (e.g. from start_oauth_flow)
         // to avoid leaving stale data in secure storage.
         let state_hash = hex::encode(Sha256::digest(state_param.as_bytes()));
@@ -377,16 +387,6 @@ async fn retrieve_session(
                 "Failed to delete persisted OAuth session from secure storage: {e}. \
                  Session will expire naturally but cleanup is incomplete."
             );
-        }
-
-        if session.state != state_param || !session.is_valid() || session.is_expired() {
-            tracing::warn!(
-                target: "audit",
-                outcome = "failure",
-                reason = "session_invalid_or_expired",
-                "OAuth authentication failed: invalid or expired session"
-            );
-            return Err("Invalid or expired OAuth session. Please try again.".to_string());
         }
 
         Ok(session)
@@ -500,17 +500,28 @@ async fn authenticate_or_create_user(
             match state.user_repo.save(&new_user).await {
                 Ok(saved) => Ok(saved.id),
                 Err(e) => {
-                    // Concurrency safety: if another callback created the same email concurrently,
-                    // re-fetch and proceed instead of failing the login.
-                    tracing::warn!(
-                        "User creation from OAuth failed (may be concurrent insert): {e}"
-                    );
-                    if let Ok(Some(existing)) =
-                        state.user_repo.find_by_email(&normalized_email).await
-                    {
-                        Ok(existing.id)
+                    // By checking for a unique constraint error, we can handle the race condition
+                    // specifically, while failing fast on other unexpected database issues.
+                    // The exact string may depend on the database backend (e.g., SQLite, PostgreSQL).
+                    // For SQLite/SQLx it often contains "UNIQUE constraint failed".
+                    if e.to_string().contains("UNIQUE constraint failed") {
+                        tracing::warn!(
+                            "User creation from OAuth failed (likely concurrent insert): {e}"
+                        );
+                        if let Ok(Some(existing)) =
+                            state.user_repo.find_by_email(&normalized_email).await
+                        {
+                            Ok(existing.id)
+                        } else {
+                            tracing::error!(
+                                "Failed to recover user after OAuth create conflict: {e}"
+                            );
+                            Err("Authentication failed".to_string())
+                        }
                     } else {
-                        tracing::error!("Failed to recover user after OAuth create conflict: {e}");
+                        tracing::error!(
+                            "Failed to save new OAuth user due to unexpected database error: {e}"
+                        );
                         Err("Authentication failed".to_string())
                     }
                 }
