@@ -57,6 +57,7 @@
   let loading = $state(false);
   let oauthLoading = $state<OAuthProvider | null>(null);
   let oauthTimeout: ReturnType<typeof setTimeout> | null = null;
+  let destroyed = false;
   let error = $state("");
   let successMessage = $state("");
   let email = $state("");
@@ -129,6 +130,8 @@
         // Keep the queue alive even if a previous callback failed
       })
       .then(async () => {
+        if (destroyed) return;
+
         // Restore loading state from localStorage if not already set
         if (!oauthLoading) {
           const savedProvider = localStorage.getItem("oauth_pending_provider");
@@ -237,6 +240,7 @@
   });
 
   onDestroy(() => {
+    destroyed = true;
     // Idempotent cleanup: capture and nullify reference before calling
     const unlisten = unlistenDeepLink;
     unlistenDeepLink = null;
@@ -340,11 +344,13 @@
 
     try {
       const { auth_url, state } = await startOAuthFlow(provider);
+      if (destroyed) return;
       localStorage.setItem("oauth_pending_state", state);
       await openOAuthAuthUrl(auth_url);
       // The browser will open and redirect back via deep link
       // The callback is handled by processOAuthCallback
     } catch (err: unknown) {
+      if (destroyed) return;
       logAuditEvent("oauth_start", false, {
         provider,
         error: sanitizeErrorForAudit(err),
