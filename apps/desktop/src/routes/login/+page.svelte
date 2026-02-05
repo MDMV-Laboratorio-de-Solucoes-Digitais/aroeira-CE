@@ -321,6 +321,12 @@
    */
   async function handleOAuthLogin(provider: OAuthProvider): Promise<void> {
     if (oauthLoading) return; // Prevent multiple clicks
+
+    if (!oauthAvailability || !oauthAvailability[provider]) {
+      error = "This sign-in method is not available.";
+      return;
+    }
+
     oauthLoading = provider;
     error = "";
 
@@ -556,29 +562,31 @@
 
           <!-- OAuth Buttons -->
           <div class="grid grid-cols-2 gap-3">
-            <Button
-              type="button"
-              variant="outline"
-              class="w-full"
-              disabled={oauthLoading !== null || loading}
-              onclick={() => handleOAuthLogin("google")}
-            >
-              {#if oauthLoading === "google"}
-                <Loader2 class="mr-2 h-4 w-4 animate-spin" />
-              {:else}
-                <svg
-                  class="mr-2 h-4 w-4"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                >
-                  <path
-                    fill="currentColor"
-                    d="M21.35 11.1H12v2.95h5.35c-.23 1.5-1.74 4.4-5.35 4.4-3.22 0-5.85-2.66-5.85-5.95S8.78 6.55 12 6.55c1.84 0 3.07.78 3.78 1.45l2.58-2.48C16.9 4.15 14.75 3 12 3 7.03 3 3 7.03 3 12s4.03 9 9 9c5.2 0 8.65-3.65 8.65-8.8 0-.6-.07-1.05-.15-1.1Z"
-                  />
-                </svg>
-              {/if}
-              Google
-            </Button>
+            {#if oauthAvailability.google}
+              <Button
+                type="button"
+                variant="outline"
+                class="w-full"
+                disabled={oauthLoading !== null || loading}
+                onclick={() => handleOAuthLogin("google")}
+              >
+                {#if oauthLoading === "google"}
+                  <Loader2 class="mr-2 h-4 w-4 animate-spin" />
+                {:else}
+                  <svg
+                    class="mr-2 h-4 w-4"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <path
+                      fill="currentColor"
+                      d="M21.35 11.1H12v2.95h5.35c-.23 1.5-1.74 4.4-5.35 4.4-3.22 0-5.85-2.66-5.85-5.95S8.78 6.55 12 6.55c1.84 0 3.07.78 3.78 1.45l2.58-2.48C16.9 4.15 14.75 3 12 3 7.03 3 3 7.03 3 12s4.03 9 9 9c5.2 0 8.65-3.65 8.65-8.8 0-.6-.07-1.05-.15-1.1Z"
+                    />
+                  </svg>
+                {/if}
+                Google
+              </Button>
+            {/if}
 
             {#if oauthAvailability.github}
               <Button
