@@ -172,6 +172,9 @@ pub async fn start_oauth_flow(
         tracing::error!("Failed to serialize OAuth PKCE session: {e}");
         "Failed to start authentication. Please try again.".to_string()
     })?;
+
+    // TODO: Move to Keyring for better security (encryption at rest) once compilation issues are resolved.
+    // Currently using file-based secure storage (0600 permissions).
     state
         .secure_storage
         .save(&storage_key, &session_json)
@@ -364,6 +367,8 @@ async fn retrieve_session(
     oauth_state: &OAuthState,
     state: &AppState,
 ) -> Result<OAuthPkceSession, String> {
+    const MAX_SESSION_JSON_BYTES: usize = 16 * 1024;
+
     // First try in-memory store (warm start), then fall back to secure storage (cold start)
     if let Some(session) = oauth_state.session_store.take(state_param) {
         // Warm start: session found in memory.
@@ -421,6 +426,16 @@ async fn retrieve_session(
                 "Failed to delete persisted OAuth session from secure storage: {e}. \
                  Session will expire naturally but cleanup is incomplete."
             );
+        }
+
+        if session_json.len() > MAX_SESSION_JSON_BYTES {
+            tracing::warn!(
+                target: "security",
+                reason = "persisted_session_too_large",
+                size = session_json.len(),
+                "Persisted OAuth session exceeded max size"
+            );
+            return Err("Invalid or expired OAuth session. Please try again.".to_string());
         }
 
         let recovered = serde_json::from_str::<OAuthPkceSession>(&session_json).map_err(|e| {
