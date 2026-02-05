@@ -125,6 +125,8 @@
       return Promise.resolve();
     }
 
+    const callbackUrl = parsed;
+
     oauthCallbackQueue = oauthCallbackQueue
       .catch(() => {
         // Keep the queue alive even if a previous callback failed
@@ -148,7 +150,7 @@
 
         // Validate state before invoking backend exchange
         const pendingState = localStorage.getItem("oauth_pending_state");
-        const callbackState = parsed.searchParams.get("state");
+        const callbackState = callbackUrl.searchParams.get("state");
         if (!pendingState || !callbackState || pendingState !== callbackState) {
           oauthLoading = null;
           localStorage.removeItem("oauth_pending_provider");
@@ -252,6 +254,12 @@
       clearTimeout(oauthTimeout);
       oauthTimeout = null;
     }
+
+    if (oauthLoading !== null) {
+      oauthLoading = null;
+      localStorage.removeItem("oauth_pending_provider");
+      localStorage.removeItem("oauth_pending_state");
+    }
   });
 
   // Derived state for password rules - use Array.from to count Unicode code points correctly
@@ -352,7 +360,7 @@
       const { auth_url, state } = await startOAuthFlow(provider);
       if (destroyed) return;
       localStorage.setItem("oauth_pending_state", state);
-      await openOAuthAuthUrl(auth_url);
+      await openOAuthAuthUrl(provider, auth_url);
       // The browser will open and redirect back via deep link
       // The callback is handled by processOAuthCallback
     } catch (err: unknown) {

@@ -125,18 +125,20 @@ export async function handleOAuthCallback(
   return { ...resp, provider: resp.provider as OAuthProvider };
 }
 
-export async function openOAuthAuthUrl(auth_url: string): Promise<void> {
+export async function openOAuthAuthUrl(
+  provider: OAuthProvider,
+  auth_url: string,
+): Promise<void> {
   const url = new URL(auth_url);
   if (url.protocol !== "https:") {
     throw new Error("Invalid authorization URL");
   }
 
   const hostname = url.hostname.replace(/\.$/, "").toLowerCase();
-  const allowedHostnames = new Set([
-    "accounts.google.com",
-    "github.com",
-    "www.github.com",
-  ]);
+  const allowedHostnames =
+    provider === "google"
+      ? new Set(["accounts.google.com"])
+      : new Set(["github.com", "www.github.com"]);
 
   if (!allowedHostnames.has(hostname)) {
     throw new Error("Unexpected authorization host");

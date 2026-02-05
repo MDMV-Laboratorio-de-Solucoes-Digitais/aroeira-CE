@@ -107,8 +107,6 @@ impl TokenStorage for KeyringTokenStorage {
         }
         #[cfg(test)]
         {
-            // In tests, just return Ok or store in memory if needed (for now no-op is fine for default)
-            // But ideally we use a mock in tests.
             let _ = (service, user_key, secret);
             Ok(())
         }
@@ -404,7 +402,6 @@ impl OAuthService for OAuthServiceImpl {
         Ok((auth_url.to_string(), session))
     }
 
-    #[allow(clippy::too_many_lines)]
     async fn exchange_code(
         &self,
         session: &OAuthPkceSession,
@@ -412,18 +409,7 @@ impl OAuthService for OAuthServiceImpl {
     ) -> Result<OAuthUser, OAuthError> {
         debug!("Exchanging code for {:?}", session.provider);
 
-        // Validate session
-        if !session.is_valid() {
-            warn!("Invalid PKCE session (failed validation)");
-            return Err(OAuthError::CodeExchangeFailed(
-                "Invalid PKCE session".to_string(),
-            ));
-        }
-
-        if session.is_expired() {
-            warn!("Session expired");
-            return Err(OAuthError::SessionNotFound);
-        }
+        validate_session(session)?;
 
         let (client_id, auth_url_str, token_url_str) =
             self.get_provider_config(session.provider)?;
@@ -436,63 +422,11 @@ impl OAuthService for OAuthServiceImpl {
         let redirect_url = RedirectUrl::new(self.config.redirect_uri.clone())
             .map_err(|e| OAuthError::CodeExchangeFailed(e.to_string()))?;
 
-        // Create OAuth2 client
-        let client = oauth2::basic::BasicClient::new(ClientId::new(client_id.to_string()))
-            .set_auth_uri(auth_url)
-            .set_token_uri(token_url)
-            .set_redirect_uri(redirect_url);
+        let client_id = ClientId::new(client_id.to_string());
 
-        // Perform token exchange with timeout and provider-specific adjustments
-        let exchange_future = async {
-            if session.provider == AuthProvider::GitHub {
-                let verifier = PkceCodeVerifier::new(session.pkce_verifier.clone());
-                let token_request = client
-                    .exchange_code(AuthorizationCode::new(code.clone()))
-                    .set_pkce_verifier(verifier);
-
-                // GitHub requires Accept: application/json
-                token_request
-                    .request_async(&|mut req: oauth2::HttpRequest| async move {
-                        req.headers_mut().insert(
-                            reqwest::header::ACCEPT,
-                            reqwest::header::HeaderValue::from_static("application/json"),
-                        );
-                        req.headers_mut().insert(
-                            reqwest::header::USER_AGENT,
-                            reqwest::header::HeaderValue::from_static("Aroeira-Desktop"),
-                        );
-                        async_http_client(req).await
-                    })
-                    .await
-            } else {
-                let verifier = PkceCodeVerifier::new(session.pkce_verifier.clone());
-                let token_request = client
-                    .exchange_code(AuthorizationCode::new(code.clone()))
-                    .set_pkce_verifier(verifier);
-
-                // Other providers (Google) work with default client
-                token_request.request_async(&async_http_client).await
-            }
-        };
-
-        // Execute with timeout
         let token_result =
-            tokio::time::timeout(std::time::Duration::from_secs(30), exchange_future)
-                .await
-                .map_err(|_| {
-                    OAuthError::TokenRequestFailed("Token exchange timed out".to_string())
-                })?
-                .map_err(|e| {
-                    // The `oauth2` crate's error types are designed not to leak secrets.
-                    // Logging the error at a debug level provides valuable diagnostic information.
-                    debug!(
-                        "Token exchange failed for provider {:?}: {:?}",
-                        session.provider, e
-                    );
-                    error!("Token exchange failed for provider {:?}", session.provider);
-                    // Return a generic error to the client.
-                    OAuthError::TokenRequestFailed("Provider rejected token request".to_string())
-                })?;
+            perform_token_exchange(client_id, auth_url, token_url, redirect_url, session, code)
+                .await?;
 
         let access_token = token_result.access_token().secret();
 
@@ -502,49 +436,7 @@ impl OAuthService for OAuthServiceImpl {
             AuthProvider::GitHub => self.fetch_github_user(access_token).await,
         }?;
 
-        // Securely store the token in the OS keyring (best effort).
-        // NOTE: The app session (JWT) is stored via tauri secure storage; provider token storage
-        // should not hard-fail the entire login on platforms where keyring is unavailable.
-        {
-            let user_key = format!("{}:{}", user.provider, user.provider_user_id);
-
-            // Hash user key for logging and storage to avoid PII leak in OS store/logs
-            let mut hasher = Sha256::new();
-            hasher.update(user_key.as_bytes());
-            let user_key_hash = hex::encode(hasher.finalize());
-
-            // Create token payload. Include refresh token for long-lived sessions if available.
-            let access_token = token_result.access_token().secret().clone();
-            let refresh_token = token_result.refresh_token().map(|t| t.secret().clone());
-
-            let token_payload = serde_json::json!({
-                "access_token": access_token,
-                "refresh_token": refresh_token,
-            });
-
-            // Prevent blocking async runtime with synchronous keyring operations
-            let storage = self.token_storage.clone();
-            let token_payload_str = token_payload.to_string();
-            let user_key_hash_for_store = user_key_hash.clone();
-
-            let store_result = tokio::task::spawn_blocking(move || {
-                let service_name = "aroeira-oauth".to_string();
-                storage.store(&service_name, &user_key_hash_for_store, &token_payload_str)
-            })
-            .await
-            .map_err(|e| format!("Task join error: {e}"))
-            .and_then(|r| r);
-
-            match store_result {
-                Ok(()) => debug!("Securely stored OAuth token for {}", user_key_hash),
-                Err(e) => {
-                    warn!(
-                        "OAuth token not stored in OS keyring (continuing without it): {}",
-                        e
-                    );
-                }
-            }
-        }
+        store_tokens(&self.token_storage, &user, &token_result).await;
 
         Ok(user)
     }
@@ -652,6 +544,136 @@ async fn async_http_client(
     *resp.status_mut() = status;
     *resp.headers_mut() = headers;
     Ok(resp)
+}
+
+fn validate_session(session: &OAuthPkceSession) -> Result<(), OAuthError> {
+    if !session.is_valid() {
+        warn!("Invalid PKCE session (failed validation)");
+        return Err(OAuthError::CodeExchangeFailed(
+            "Invalid PKCE session".to_string(),
+        ));
+    }
+
+    if session.is_expired() {
+        warn!("Session expired");
+        return Err(OAuthError::SessionNotFound);
+    }
+    Ok(())
+}
+
+async fn perform_token_exchange(
+    client_id: ClientId,
+    auth_url: AuthUrl,
+    token_url: TokenUrl,
+    redirect_url: RedirectUrl,
+    session: &OAuthPkceSession,
+    code: String,
+) -> Result<
+    oauth2::StandardTokenResponse<oauth2::EmptyExtraTokenFields, oauth2::basic::BasicTokenType>,
+    OAuthError,
+> {
+    // Create OAuth2 client
+    let client = oauth2::basic::BasicClient::new(client_id)
+        .set_auth_uri(auth_url)
+        .set_token_uri(token_url)
+        .set_redirect_uri(redirect_url);
+
+    // Perform token exchange with timeout and provider-specific adjustments
+    let exchange_future = async {
+        if session.provider == AuthProvider::GitHub {
+            let verifier = PkceCodeVerifier::new(session.pkce_verifier.clone());
+            let token_request = client
+                .exchange_code(AuthorizationCode::new(code.clone()))
+                .set_pkce_verifier(verifier);
+
+            // GitHub requires Accept: application/json and commonly expects a User-Agent
+            token_request
+                .request_async(&|mut req: oauth2::HttpRequest| async move {
+                    req.headers_mut().insert(
+                        reqwest::header::ACCEPT,
+                        reqwest::header::HeaderValue::from_static("application/json"),
+                    );
+                    req.headers_mut().insert(
+                        reqwest::header::USER_AGENT,
+                        reqwest::header::HeaderValue::from_static("Aroeira-Desktop"),
+                    );
+                    async_http_client(req).await
+                })
+                .await
+        } else {
+            let verifier = PkceCodeVerifier::new(session.pkce_verifier.clone());
+            let token_request = client
+                .exchange_code(AuthorizationCode::new(code.clone()))
+                .set_pkce_verifier(verifier);
+
+            // Other providers (Google) work with default client
+            token_request.request_async(&async_http_client).await
+        }
+    };
+
+    // Execute with timeout
+    tokio::time::timeout(std::time::Duration::from_secs(30), exchange_future)
+        .await
+        .map_err(|_| OAuthError::TokenRequestFailed("Token exchange timed out".to_string()))?
+        .map_err(|e| {
+            // The `oauth2` crate's error types are designed not to leak secrets.
+            // Logging the error at a debug level provides valuable diagnostic information.
+            debug!(
+                "Token exchange failed for provider {:?}: {:?}",
+                session.provider, e
+            );
+            error!("Token exchange failed for provider {:?}", session.provider);
+            // Return a generic error to the client.
+            OAuthError::TokenRequestFailed("Provider rejected token request".to_string())
+        })
+}
+
+async fn store_tokens(
+    storage: &std::sync::Arc<dyn TokenStorage>,
+    user: &OAuthUser,
+    token_result: &oauth2::StandardTokenResponse<
+        oauth2::EmptyExtraTokenFields,
+        oauth2::basic::BasicTokenType,
+    >,
+) {
+    let user_key = format!("{}:{}", user.provider, user.provider_user_id);
+
+    // Hash user key for logging and storage to avoid PII leak in OS store/logs
+    let mut hasher = Sha256::new();
+    hasher.update(user_key.as_bytes());
+    let user_key_hash = hex::encode(hasher.finalize());
+
+    // Create token payload. Include refresh token for long-lived sessions if available.
+    let access_token = token_result.access_token().secret().clone();
+    let refresh_token = token_result.refresh_token().map(|t| t.secret().clone());
+
+    let token_payload = serde_json::json!({
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+    });
+
+    // Prevent blocking async runtime with synchronous keyring operations
+    let storage = storage.clone();
+    let token_payload_str = token_payload.to_string();
+    let user_key_hash_for_store = user_key_hash.clone();
+
+    let store_result = tokio::task::spawn_blocking(move || {
+        let service_name = "aroeira-oauth".to_string();
+        storage.store(&service_name, &user_key_hash_for_store, &token_payload_str)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))
+    .and_then(|r| r);
+
+    match store_result {
+        Ok(()) => debug!("Securely stored OAuth token for {}", user_key_hash),
+        Err(e) => {
+            warn!(
+                "OAuth token not stored in OS keyring (continuing without it): {}",
+                e
+            );
+        }
+    }
 }
 
 #[cfg(test)]

@@ -713,6 +713,29 @@ impl Default for OAuthSessionStore {
     }
 }
 
+/// Helper to extract query parameters manually, preserving '+' signs.
+///
+/// `Url::query_pairs()` treats '+' as space (application/x-www-form-urlencoded).
+/// OAuth codes (and potentially state) are often base64-like and may contain '+'.
+/// We use `percent_encoding` directly to decode '%XX' but leave '+' as is.
+fn parse_query_preserving_plus(query: &str) -> Vec<(String, String)> {
+    let mut query_pairs = Vec::new();
+    for pair in query.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+        let k = percent_encoding::percent_decode_str(k)
+            .decode_utf8_lossy()
+            .to_string();
+        let v = percent_encoding::percent_decode_str(v)
+            .decode_utf8_lossy()
+            .to_string();
+        query_pairs.push((k, v));
+    }
+    query_pairs
+}
+
 /// Parses an OAuth callback URL to extract code and state.
 ///
 /// # Arguments
@@ -799,15 +822,14 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
     }
 
     // Helper to extract query parameters.
-    // NOTE: `Url::query_pairs()` treats '+' as space; preserve '+' by normalizing to %2B first.
-    let query = url.query().unwrap_or("").replace('+', "%2B");
-    let query_pairs = url::form_urlencoded::parse(query.as_bytes()).collect::<Vec<_>>();
+    let query = url.query().unwrap_or("");
+    let query_pairs = parse_query_preserving_plus(query);
 
     let get_unique_query_param = |key: &str| -> Result<String, String> {
         let mut values = query_pairs
             .iter()
             .filter(|(k, _)| k == key)
-            .map(|(_, v)| v.to_string())
+            .map(|(_, v)| v.clone())
             .filter(|v| !v.is_empty());
 
         let first = values.next().ok_or_else(|| {
