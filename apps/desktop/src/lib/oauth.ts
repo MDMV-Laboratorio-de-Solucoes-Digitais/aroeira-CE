@@ -16,7 +16,7 @@ export interface StartOAuthResponse {
 }
 
 export interface OAuthCallbackResponse {
-  provider: string;
+  provider: OAuthProvider;
   email: string;
   name: string | null;
   avatar_url: string | null;
@@ -63,6 +63,14 @@ export async function startOAuthFlow(
 
   if (!allowedHostnames.has(hostname)) {
     throw new Error("Unexpected authorization host");
+  }
+
+  if (
+    !response.state ||
+    response.state.length < 16 ||
+    response.state.length > 512
+  ) {
+    throw new Error("Invalid OAuth state");
   }
 
   return response;

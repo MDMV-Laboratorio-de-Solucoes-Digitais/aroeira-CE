@@ -10,7 +10,9 @@
 //! - Sessions expire after 10 minutes
 //! - Tokens stored in OS secure storage (not in this module)
 
-use crate::commands::auth::{get_device_id, handle_successful_login, hash_email_for_logging};
+use crate::commands::auth::{
+    generate_request_id, get_device_id, handle_successful_login, hash_email_for_logging,
+};
 use crate::state::AppState;
 use domain::modules::auth::AuthError;
 use domain::modules::auth::oauth::{AuthProvider, OAuthPkceSession, OAuthService, OAuthUser};
@@ -119,9 +121,11 @@ pub async fn start_oauth_flow(
     oauth_state: State<'_, OAuthState>,
     state: State<'_, AppState>,
 ) -> Result<StartOAuthResponse, String> {
+    let request_id = generate_request_id();
     let device_id = get_device_id().map_err(|e| {
         tracing::error!(
             target: "security",
+            request_id = %request_id,
             outcome = "failure",
             reason = "device_id_unavailable",
             error = %e,
@@ -143,6 +147,7 @@ pub async fn start_oauth_flow(
         .map_err(|e| {
             tracing::error!(
                 target: "audit",
+                request_id = %request_id,
                 outcome = "failure",
                 reason = "url_generation_failed",
                 device_id = %device_id_hash,
@@ -154,6 +159,7 @@ pub async fn start_oauth_flow(
 
     tracing::info!(
         target: "audit",
+        request_id = %request_id,
         action = "oauth_start",
         provider = %provider,
         device_id = %device_id_hash,
@@ -227,9 +233,11 @@ pub async fn handle_oauth_callback(
     state: State<'_, AppState>,
 ) -> Result<OAuthCallbackResponse, String> {
     const MAX_CALLBACK_LEN: usize = 8192;
+    let request_id = generate_request_id();
     let device_id = get_device_id().map_err(|e| {
         tracing::error!(
             target: "security",
+            request_id = %request_id,
             outcome = "failure",
             reason = "device_id_unavailable",
             error = %e,
@@ -247,6 +255,7 @@ pub async fn handle_oauth_callback(
     if callback_url.len() > MAX_CALLBACK_LEN {
         tracing::warn!(
             target: "audit",
+            request_id = %request_id,
             outcome = "failure",
             reason = "callback_too_long",
             device_id = %device_id_hash,
@@ -259,6 +268,7 @@ pub async fn handle_oauth_callback(
     let (code, state_param) = parse_oauth_callback_url(&callback_url).inspect_err(|_| {
         tracing::warn!(
             target: "audit",
+            request_id = %request_id,
             outcome = "failure",
             reason = "invalid_callback",
             device_id = %device_id_hash,
@@ -267,18 +277,24 @@ pub async fn handle_oauth_callback(
     })?;
 
     // Retrieve and consume session (CSRF protection)
-    let session = retrieve_session(&state_param, oauth_state.inner(), state.inner())
-        .await
-        .inspect_err(|e| {
-            tracing::warn!(
-                target: "audit",
-                outcome = "failure",
-                reason = "session_retrieval_failed",
-                device_id = %device_id_hash,
-                error = %e,
-                "OAuth session retrieval failed"
-            );
-        })?;
+    let session = retrieve_session(
+        &state_param,
+        oauth_state.inner(),
+        state.inner(),
+        &request_id,
+    )
+    .await
+    .inspect_err(|e| {
+        tracing::warn!(
+            target: "audit",
+            request_id = %request_id,
+            outcome = "failure",
+            reason = "session_retrieval_failed",
+            device_id = %device_id_hash,
+            error = %e,
+            "OAuth session retrieval failed"
+        );
+    })?;
 
     // Exchange code for user info
     let user = match oauth_state
@@ -291,6 +307,7 @@ pub async fn handle_oauth_callback(
             // Log failure with context - sanitize error to avoid leaking sensitive provider data
             tracing::warn!(
                 target: "audit",
+                request_id = %request_id,
                 outcome = "failure",
                 reason = "code_exchange_failed",
                 device_id = %device_id_hash,
@@ -298,6 +315,8 @@ pub async fn handle_oauth_callback(
             );
             // Log only error type/category, not full details which may contain tokens/PII
             tracing::error!(
+                target: "audit",
+                request_id = %request_id,
                 error_type = std::any::type_name_of_val(&e),
                 "OAuth code exchange failed for provider {:?}",
                 session.provider
@@ -312,7 +331,7 @@ pub async fn handle_oauth_callback(
     };
 
     // Application-Level Authentication
-    let user_id = authenticate_or_create_user(&user, &session, &state).await?;
+    let user_id = authenticate_or_create_user(&user, &session, &state, &request_id).await?;
 
     // Get device ID for session binding
     // already have device_id from start of function
@@ -328,7 +347,7 @@ pub async fn handle_oauth_callback(
     handle_successful_login(user_id, &email_hash, &device_id, state.inner()).await?;
 
     // Log successful OAuth login (audit trail)
-    log_oauth_success(user_id, &session, &user);
+    log_oauth_success(user_id, &session, &user, &request_id);
 
     Ok(OAuthCallbackResponse::from(user))
 }
@@ -366,22 +385,13 @@ async fn retrieve_session(
     state_param: &str,
     oauth_state: &OAuthState,
     state: &AppState,
+    request_id: &str,
 ) -> Result<OAuthPkceSession, String> {
     const MAX_SESSION_JSON_BYTES: usize = 16 * 1024;
 
     // First try in-memory store (warm start), then fall back to secure storage (cold start)
     if let Some(session) = oauth_state.session_store.take(state_param) {
         // Warm start: session found in memory.
-
-        if session.state != state_param || !session.is_valid() || session.is_expired() {
-            tracing::warn!(
-                target: "audit",
-                outcome = "failure",
-                reason = "session_invalid_or_expired",
-                "OAuth authentication failed: invalid or expired session"
-            );
-            return Err("Invalid or expired OAuth session. Please try again.".to_string());
-        }
 
         // We should still clean up any persisted session that might exist (e.g. from start_oauth_flow)
         // to avoid leaving stale data in secure storage.
@@ -390,9 +400,21 @@ async fn retrieve_session(
         if let Err(e) = state.secure_storage.delete(&storage_key).await {
             tracing::warn!(
                 target: "security",
+                request_id = %request_id,
                 "Failed to delete persisted OAuth session from secure storage: {e}. \
                  Session will expire naturally but cleanup is incomplete."
             );
+        }
+
+        if session.state != state_param || !session.is_valid() || session.is_expired() {
+            tracing::warn!(
+                target: "audit",
+                request_id = %request_id,
+                outcome = "failure",
+                reason = "session_invalid_or_expired",
+                "OAuth authentication failed: invalid or expired session"
+            );
+            return Err("Invalid or expired OAuth session. Please try again.".to_string());
         }
 
         Ok(session)
@@ -405,12 +427,13 @@ async fn retrieve_session(
             .get(&storage_key)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to read persisted OAuth session: {e}");
+                tracing::error!(request_id = %request_id, "Failed to read persisted OAuth session: {e}");
                 "Invalid or expired OAuth session. Please try again.".to_string()
             })?
             .ok_or_else(|| {
-                tracing::warn!(
-                    target: "audit",
+            tracing::warn!(
+                target: "audit",
+                request_id = %request_id,
                     outcome = "failure",
                     reason = "session_not_found",
                     "OAuth authentication failed: invalid or expired session"
@@ -423,6 +446,7 @@ async fn retrieve_session(
         if let Err(e) = state.secure_storage.delete(&storage_key).await {
             tracing::warn!(
                 target: "security",
+                request_id = %request_id,
                 "Failed to delete persisted OAuth session from secure storage: {e}. \
                  Session will expire naturally but cleanup is incomplete."
             );
@@ -431,6 +455,7 @@ async fn retrieve_session(
         if session_json.len() > MAX_SESSION_JSON_BYTES {
             tracing::warn!(
                 target: "security",
+                request_id = %request_id,
                 reason = "persisted_session_too_large",
                 size = session_json.len(),
                 "Persisted OAuth session exceeded max size"
@@ -439,13 +464,14 @@ async fn retrieve_session(
         }
 
         let recovered = serde_json::from_str::<OAuthPkceSession>(&session_json).map_err(|e| {
-            tracing::error!("Failed to deserialize persisted OAuth session: {e}");
+            tracing::error!(request_id = %request_id, "Failed to deserialize persisted OAuth session: {e}");
             "Invalid or expired OAuth session. Please try again.".to_string()
         })?;
 
         if recovered.state != state_param || !recovered.is_valid() || recovered.is_expired() {
             tracing::warn!(
                 target: "audit",
+                request_id = %request_id,
                 outcome = "failure",
                 reason = "session_invalid_or_expired",
                 "OAuth authentication failed: invalid or expired session"
@@ -461,6 +487,7 @@ async fn authenticate_or_create_user(
     user: &OAuthUser,
     session: &OAuthPkceSession,
     state: &AppState,
+    request_id: &str,
 ) -> Result<Uuid, String> {
     let normalized_email = user.email.trim().to_ascii_lowercase();
 
@@ -468,6 +495,7 @@ async fn authenticate_or_create_user(
     if !user.email_verified {
         tracing::warn!(
             target: "audit",
+            request_id = %request_id,
             outcome = "failure",
             reason = "oauth_email_not_verified",
             provider = %session.provider,
@@ -478,24 +506,27 @@ async fn authenticate_or_create_user(
     }
 
     match state.user_repo.find_by_email(&normalized_email).await {
-        Ok(Some(mut u)) => {
-            if !u.email_verified {
+        Ok(Some(mut user)) => {
+            if !user.email_verified {
                 // SECURITY CRITICAL: When verifying an existing unverified account via OAuth,
                 // we MUST invalidate the old password to prevent account takeover.
                 // Otherwise, an attacker who pre-registered the email could use the old password.
                 let password_hash = generate_and_hash_oauth_password(session.provider).await?;
 
-                u.email_verified = true;
-                u.password_hash = password_hash; // Invalidate old password
-                u.verification_token = None;
-                u.verification_token_expires_at = None;
+                user.email_verified = true;
+                user.password_hash = password_hash; // Invalidate old password
+                user.verification_token = None;
+                user.verification_token_expires_at = None;
 
-                state.user_repo.save(&u).await.map_err(|e| {
-                    tracing::error!("Failed to update user verification from OAuth: {e}");
+                state.user_repo.save(&user).await.map_err(|e| {
+                    tracing::error!(
+                        request_id = %request_id,
+                        "Failed to update user verification from OAuth: {e}"
+                    );
                     "Authentication failed".to_string()
                 })?;
             }
-            Ok(u.id)
+            Ok(user.id)
         }
         Ok(None) => {
             // Create new user for OAuth
@@ -519,6 +550,7 @@ async fn authenticate_or_create_user(
                     // Concurrency safety: if another callback created the same email concurrently,
                     // re-fetch and proceed instead of failing the login.
                     tracing::warn!(
+                        request_id = %request_id,
                         "User creation from OAuth failed due to concurrent insert (EmailAlreadyExists)"
                     );
                     if let Ok(Some(existing)) =
@@ -526,12 +558,16 @@ async fn authenticate_or_create_user(
                     {
                         Ok(existing.id)
                     } else {
-                        tracing::error!("Failed to recover user after OAuth create conflict");
+                        tracing::error!(
+                            request_id = %request_id,
+                            "Failed to recover user after OAuth create conflict"
+                        );
                         Err("Authentication failed".to_string())
                     }
                 }
                 Err(e) => {
                     tracing::error!(
+                        request_id = %request_id,
                         "Failed to save new OAuth user due to unexpected database error: {e}"
                     );
                     Err("Authentication failed".to_string())
@@ -539,7 +575,10 @@ async fn authenticate_or_create_user(
             }
         }
         Err(e) => {
-            tracing::error!("Database error finding user: {e}");
+            tracing::error!(
+                request_id = %request_id,
+                "Database error finding user: {e}"
+            );
             Err("Authentication failed".to_string())
         }
     }
@@ -563,7 +602,12 @@ async fn generate_and_hash_oauth_password(provider: AuthProvider) -> Result<Stri
         })
 }
 
-fn log_oauth_success(user_id: Uuid, session: &OAuthPkceSession, user: &OAuthUser) {
+fn log_oauth_success(
+    user_id: Uuid,
+    session: &OAuthPkceSession,
+    user: &OAuthUser,
+    request_id: &str,
+) {
     // Log successful OAuth login (audit trail) with essential context
     // Note: email and provider_user_id are hashed/redacted for privacy in logs
     let email_domain = user
@@ -577,6 +621,7 @@ fn log_oauth_success(user_id: Uuid, session: &OAuthPkceSession, user: &OAuthUser
 
     tracing::info!(
         target: "audit",
+        request_id = %request_id,
         user_id = %user_id,
         provider = %session.provider,
         provider_user_id_hash = %hashed_user_id,
