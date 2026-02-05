@@ -122,6 +122,10 @@ pub trait PkceSessionStorage: Send + Sync {
     /// * `Ok(Some(session_json))` - The session data if found
     /// * `Ok(None)` - If session not found
     /// * `Err(...)` - If retrieval fails
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the keyring is unavailable or access fails.
     fn get_session(&self, state_hash: &str) -> Result<Option<String>, String>;
 
     /// Deletes a PKCE session from secure storage.

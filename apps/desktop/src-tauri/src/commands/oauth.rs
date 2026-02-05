@@ -17,7 +17,7 @@ use crate::state::AppState;
 use domain::modules::auth::AuthError;
 use domain::modules::auth::oauth::{AuthProvider, OAuthPkceSession, OAuthService, OAuthUser};
 use hex;
-use infra::services::oauth::{OAuthConfig, OAuthServiceImpl};
+use infra::services::oauth::{OAuthConfig, OAuthServiceImpl, PkceSessionStorage};
 use infra::utils::hash_password;
 use parking_lot::Mutex;
 use secrecy::ExposeSecret;
@@ -38,6 +38,8 @@ pub struct OAuthState {
     pub session_store: OAuthSessionStore,
     /// OAuth service implementation
     pub oauth_service: Arc<OAuthServiceImpl>,
+    /// PKCE session storage using OS keyring
+    pkce_storage: Arc<dyn PkceSessionStorage>,
 }
 
 impl OAuthState {
@@ -47,6 +49,21 @@ impl OAuthState {
         Self {
             session_store: OAuthSessionStore::new(),
             oauth_service: Arc::new(OAuthServiceImpl::new(config)),
+            pkce_storage: Arc::new(infra::services::oauth::KeyringPkceStorage),
+        }
+    }
+
+    /// Creates new OAuth state with custom PKCE storage (for testing).
+    #[cfg(test)]
+    #[must_use]
+    pub fn new_with_storage(
+        config: OAuthConfig,
+        pkce_storage: Arc<dyn PkceSessionStorage>,
+    ) -> Self {
+        Self {
+            session_store: OAuthSessionStore::new(),
+            oauth_service: Arc::new(OAuthServiceImpl::new(config)),
+            pkce_storage,
         }
     }
 }
@@ -119,7 +136,7 @@ impl From<OAuthUser> for OAuthCallbackResponse {
 pub async fn start_oauth_flow(
     provider: AuthProvider,
     oauth_state: State<'_, OAuthState>,
-    state: State<'_, AppState>,
+    _state: State<'_, AppState>,
 ) -> Result<StartOAuthResponse, String> {
     let request_id = generate_request_id();
     let device_id = get_device_id().map_err(|e| {
@@ -170,25 +187,50 @@ pub async fn start_oauth_flow(
 
     // Persist session for cold start recovery (deep link opens closed app)
     // One-time use: deleted after successful `take` on callback.
-    // Use underscore separator instead of colon (secure_storage doesn't allow colons in keys)
     // Hash state with SHA256 to ensure it's safe for storage keys and doesn't leak CSRF token
     let state_hash = hex::encode(Sha256::digest(state_param.as_bytes()));
-    let storage_key = format!("oauth_pkce_session_{state_hash}");
     let session_json = serde_json::to_string(&session).map_err(|e| {
-        tracing::error!("Failed to serialize OAuth PKCE session: {e}");
+        tracing::error!(
+            target: "security",
+            request_id = %request_id,
+            outcome = "failure",
+            reason = "session_serialization_failed",
+            error = %e,
+            "Failed to serialize OAuth PKCE session"
+        );
         "Failed to start authentication. Please try again.".to_string()
     })?;
 
-    // TODO: Move to Keyring for better security (encryption at rest) once compilation issues are resolved.
-    // Currently using file-based secure storage (0600 permissions).
-    state
-        .secure_storage
-        .save(&storage_key, &session_json)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to persist OAuth session: {e}");
-            "Failed to start authentication. Please try again.".to_string()
-        })?;
+    // Store PKCE session in OS keyring for secure persistence (encryption at rest).
+    // This protects the PKCE verifier from unauthorized access.
+    let pkce_storage = oauth_state.pkce_storage.clone();
+    let state_hash_clone = state_hash.clone();
+    tokio::task::spawn_blocking(move || {
+        pkce_storage.save_session(&state_hash_clone, &session_json)
+    })
+    .await
+    .map_err(|e| {
+        tracing::error!(
+            target: "security",
+            request_id = %request_id,
+            outcome = "failure",
+            reason = "session_persistence_failed",
+            error = %e,
+            "Failed to persist OAuth session to keyring"
+        );
+        "Failed to start authentication. Please try again.".to_string()
+    })?
+    .map_err(|e| {
+        tracing::error!(
+            target: "security",
+            request_id = %request_id,
+            outcome = "failure",
+            reason = "session_persistence_failed",
+            error = %e,
+            "Failed to persist OAuth session to keyring"
+        );
+        "Failed to start authentication. Please try again.".to_string()
+    })?;
 
     // Store session for callback verification (warm start)
     // Store in memory ONLY after successful persistence to avoid leaks if persistence fails
@@ -381,59 +423,82 @@ pub async fn get_oauth_availability(
     })
 }
 
-async fn retrieve_session(
+/// Retrieves session from in-memory store (warm start).
+async fn retrieve_warm_session(
     state_param: &str,
     oauth_state: &OAuthState,
-    state: &AppState,
+    state_hash: &str,
+    request_id: &str,
+) -> Option<OAuthPkceSession> {
+    let session = oauth_state.session_store.take(state_param)?;
+
+    // Clean up any persisted session from keyring to prevent stale data.
+    let pkce_storage = oauth_state.pkce_storage.clone();
+    let state_hash_clone = state_hash.to_string();
+    if let Err(e) =
+        tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash_clone)).await
+    {
+        tracing::warn!(
+            target: "security",
+            request_id = %request_id,
+            "Failed to delete persisted OAuth session from keyring: {e}. Session will be cleaned up separately."
+        );
+    }
+
+    if session.state != state_param || !session.is_valid() || session.is_expired() {
+        tracing::warn!(
+            target: "audit",
+            request_id = %request_id,
+            outcome = "failure",
+            reason = "session_invalid_or_expired",
+            "OAuth authentication failed: invalid or expired session"
+        );
+        return None;
+    }
+
+    Some(session)
+}
+
+/// Retrieves session from keyring (cold start).
+async fn retrieve_cold_session(
+    state_param: &str,
+    oauth_state: &OAuthState,
+    state_hash: &str,
     request_id: &str,
 ) -> Result<OAuthPkceSession, String> {
     const MAX_SESSION_JSON_BYTES: usize = 16 * 1024;
 
-    // First try in-memory store (warm start), then fall back to secure storage (cold start)
-    if let Some(session) = oauth_state.session_store.take(state_param) {
-        // Warm start: session found in memory.
-
-        // We should still clean up any persisted session that might exist (e.g. from start_oauth_flow)
-        // to avoid leaving stale data in secure storage.
-        let state_hash = hex::encode(Sha256::digest(state_param.as_bytes()));
-        let storage_key = format!("oauth_pkce_session_{state_hash}");
-        if let Err(e) = state.secure_storage.delete(&storage_key).await {
-            tracing::warn!(
-                target: "security",
-                request_id = %request_id,
-                "Failed to delete persisted OAuth session from secure storage: {e}. \
-                 Session will expire naturally but cleanup is incomplete."
-            );
-        }
-
-        if session.state != state_param || !session.is_valid() || session.is_expired() {
-            tracing::warn!(
-                target: "audit",
-                request_id = %request_id,
-                outcome = "failure",
-                reason = "session_invalid_or_expired",
-                "OAuth authentication failed: invalid or expired session"
-            );
-            return Err("Invalid or expired OAuth session. Please try again.".to_string());
-        }
-
-        Ok(session)
-    } else {
-        // Cold start: try to recover session from secure storage
-        let state_hash = hex::encode(Sha256::digest(state_param.as_bytes()));
-        let storage_key = format!("oauth_pkce_session_{state_hash}");
-        let session_json = state
-            .secure_storage
-            .get(&storage_key)
+    let pkce_storage = oauth_state.pkce_storage.clone();
+    let state_hash_clone = state_hash.to_string();
+    let session_json =
+        tokio::task::spawn_blocking(move || pkce_storage.get_session(&state_hash_clone))
             .await
             .map_err(|e| {
-                tracing::error!(request_id = %request_id, "Failed to read persisted OAuth session: {e}");
+                tracing::error!(
+                    target: "security",
+                    request_id = %request_id,
+                    outcome = "failure",
+                    reason = "session_read_failed",
+                    error = %e,
+                    "Failed to read persisted OAuth session from keyring"
+                );
+                "Invalid or expired OAuth session. Please try again.".to_string()
+            })?
+            .map_err(|e| {
+                tracing::error!(
+                    target: "security",
+                    request_id = %request_id,
+                    outcome = "failure",
+                    reason = "session_read_failed",
+                    error = %e,
+                    "Failed to read persisted OAuth session from keyring"
+                );
                 "Invalid or expired OAuth session. Please try again.".to_string()
             })?
             .ok_or_else(|| {
-            tracing::warn!(
-                target: "audit",
-                request_id = %request_id,
+                tracing::warn!(
+                    target: "audit",
+                    request_id = %request_id,
                     outcome = "failure",
                     reason = "session_not_found",
                     "OAuth authentication failed: invalid or expired session"
@@ -441,45 +506,71 @@ async fn retrieve_session(
                 "Invalid or expired OAuth session. Please try again.".to_string()
             })?;
 
-        // Consume-once: delete regardless of parse outcome to prevent replay attempts.
-        // Log failures but don't block auth flow - session expiry provides secondary protection.
-        if let Err(e) = state.secure_storage.delete(&storage_key).await {
-            tracing::warn!(
-                target: "security",
-                request_id = %request_id,
-                "Failed to delete persisted OAuth session from secure storage: {e}. \
-                 Session will expire naturally but cleanup is incomplete."
-            );
-        }
+    // Consume-once: delete from keyring regardless of parse outcome to prevent replay.
+    let pkce_storage = oauth_state.pkce_storage.clone();
+    let state_hash_clone = state_hash.to_string();
+    if let Err(e) =
+        tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash_clone)).await
+    {
+        tracing::warn!(
+            target: "security",
+            request_id = %request_id,
+            "Failed to delete persisted OAuth session from keyring: {e}. Session will expire naturally but cleanup is incomplete."
+        );
+    }
 
-        if session_json.len() > MAX_SESSION_JSON_BYTES {
-            tracing::warn!(
-                target: "security",
-                request_id = %request_id,
-                reason = "persisted_session_too_large",
-                size = session_json.len(),
-                "Persisted OAuth session exceeded max size"
-            );
-            return Err("Invalid or expired OAuth session. Please try again.".to_string());
-        }
+    if session_json.len() > MAX_SESSION_JSON_BYTES {
+        tracing::warn!(
+            target: "security",
+            request_id = %request_id,
+            reason = "persisted_session_too_large",
+            size = session_json.len(),
+            "Persisted OAuth session exceeded max size"
+        );
+        return Err("Invalid or expired OAuth session. Please try again.".to_string());
+    }
 
-        let recovered = serde_json::from_str::<OAuthPkceSession>(&session_json).map_err(|e| {
-            tracing::error!(request_id = %request_id, "Failed to deserialize persisted OAuth session: {e}");
-            "Invalid or expired OAuth session. Please try again.".to_string()
-        })?;
+    let recovered = serde_json::from_str::<OAuthPkceSession>(&session_json).map_err(|e| {
+        tracing::error!(
+            target: "security",
+            request_id = %request_id,
+            outcome = "failure",
+            reason = "session_deserialization_failed",
+            error = %e,
+            "Failed to deserialize persisted OAuth session"
+        );
+        "Invalid or expired OAuth session. Please try again.".to_string()
+    })?;
 
-        if recovered.state != state_param || !recovered.is_valid() || recovered.is_expired() {
-            tracing::warn!(
-                target: "audit",
-                request_id = %request_id,
-                outcome = "failure",
-                reason = "session_invalid_or_expired",
-                "OAuth authentication failed: invalid or expired session"
-            );
-            return Err("Invalid or expired OAuth session. Please try again.".to_string());
-        }
+    if recovered.state != state_param || !recovered.is_valid() || recovered.is_expired() {
+        tracing::warn!(
+            target: "audit",
+            request_id = %request_id,
+            outcome = "failure",
+            reason = "session_invalid_or_expired",
+            "OAuth authentication failed: invalid or expired session"
+        );
+        return Err("Invalid or expired OAuth session. Please try again.".to_string());
+    }
 
-        Ok(recovered)
+    Ok(recovered)
+}
+
+async fn retrieve_session(
+    state_param: &str,
+    oauth_state: &OAuthState,
+    _state: &AppState,
+    request_id: &str,
+) -> Result<OAuthPkceSession, String> {
+    let state_hash = hex::encode(Sha256::digest(state_param.as_bytes()));
+
+    // Try warm start first, then cold start
+    if let Some(session) =
+        retrieve_warm_session(state_param, oauth_state, &state_hash, request_id).await
+    {
+        Ok(session)
+    } else {
+        retrieve_cold_session(state_param, oauth_state, &state_hash, request_id).await
     }
 }
 
