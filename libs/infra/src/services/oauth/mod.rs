@@ -649,16 +649,17 @@ async fn async_http_client(
 
 fn validate_session(session: &OAuthPkceSession) -> Result<(), OAuthError> {
     if !session.is_valid() {
+        // Check if it's expired (now included in is_valid)
+        if session.is_expired() {
+            warn!("Session expired");
+            return Err(OAuthError::SessionNotFound);
+        }
         warn!("Invalid PKCE session (failed validation)");
         return Err(OAuthError::CodeExchangeFailed(
             "Invalid PKCE session".to_string(),
         ));
     }
 
-    if session.is_expired() {
-        warn!("Session expired");
-        return Err(OAuthError::SessionNotFound);
-    }
     Ok(())
 }
 

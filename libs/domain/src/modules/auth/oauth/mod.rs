@@ -142,6 +142,11 @@ impl OAuthPkceSession {
     /// - PKCE verifier uses only unreserved URI characters (RFC 7636)
     #[must_use]
     pub fn is_valid(&self) -> bool {
+        // Expired sessions must never be considered valid
+        if self.is_expired() {
+            return false;
+        }
+
         // State must not be empty (CSRF protection)
         if self.state.is_empty() {
             return false;

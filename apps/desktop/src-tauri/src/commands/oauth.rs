@@ -46,10 +46,12 @@ impl OAuthState {
     /// Creates new OAuth state with given configuration.
     #[must_use]
     pub fn new(config: OAuthConfig) -> Self {
+        let pkce_storage: Arc<dyn PkceSessionStorage> =
+            Arc::new(infra::services::oauth::KeyringPkceStorage);
         Self {
-            session_store: OAuthSessionStore::new(),
+            session_store: OAuthSessionStore::new(pkce_storage.clone()),
             oauth_service: Arc::new(OAuthServiceImpl::new(config)),
-            pkce_storage: Arc::new(infra::services::oauth::KeyringPkceStorage),
+            pkce_storage,
         }
     }
 
@@ -61,7 +63,7 @@ impl OAuthState {
         pkce_storage: Arc<dyn PkceSessionStorage>,
     ) -> Self {
         Self {
-            session_store: OAuthSessionStore::new(),
+            session_store: OAuthSessionStore::new(pkce_storage.clone()),
             oauth_service: Arc::new(OAuthServiceImpl::new(config)),
             pkce_storage,
         }
@@ -435,14 +437,23 @@ async fn retrieve_warm_session(
     // Clean up any persisted session from keyring to prevent stale data.
     let pkce_storage = oauth_state.pkce_storage.clone();
     let state_hash_clone = state_hash.to_string();
-    if let Err(e) =
-        tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash_clone)).await
+    match tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash_clone)).await
     {
-        tracing::warn!(
-            target: "security",
-            request_id = %request_id,
-            "Failed to delete persisted OAuth session from keyring: {e}. Session will be cleaned up separately."
-        );
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            tracing::warn!(
+                target: "security",
+                request_id = %request_id,
+                "Failed to delete persisted OAuth session from keyring: {e}. Session will be cleaned up separately."
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "security",
+                request_id = %request_id,
+                "Failed to delete persisted OAuth session from keyring due to task failure: {e}. Session will be cleaned up separately."
+            );
+        }
     }
 
     if session.state != state_param || !session.is_valid() || session.is_expired() {
@@ -509,14 +520,23 @@ async fn retrieve_cold_session(
     // Consume-once: delete from keyring regardless of parse outcome to prevent replay.
     let pkce_storage = oauth_state.pkce_storage.clone();
     let state_hash_clone = state_hash.to_string();
-    if let Err(e) =
-        tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash_clone)).await
+    match tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash_clone)).await
     {
-        tracing::warn!(
-            target: "security",
-            request_id = %request_id,
-            "Failed to delete persisted OAuth session from keyring: {e}. Session will expire naturally but cleanup is incomplete."
-        );
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            tracing::warn!(
+                target: "security",
+                request_id = %request_id,
+                "Failed to delete persisted OAuth session from keyring: {e}. Session will expire naturally but cleanup is incomplete."
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "security",
+                request_id = %request_id,
+                "Failed to delete persisted OAuth session from keyring due to task failure: {e}. Session will expire naturally but cleanup is incomplete."
+            );
+        }
     }
 
     if session_json.len() > MAX_SESSION_JSON_BYTES {
@@ -730,22 +750,30 @@ fn log_oauth_success(
 ///
 /// Sessions are automatically cleaned up when expired.
 /// Uses `parking_lot::Mutex` for better async performance.
+///
+/// # Security Note
+///
+/// When evicting sessions due to capacity limits, also deletes from
+/// the persistent keyring storage to prevent stale data accumulation.
 pub struct OAuthSessionStore {
     sessions: Mutex<HashMap<String, OAuthPkceSession>>,
+    pkce_storage: Arc<dyn PkceSessionStorage>,
 }
 
 impl OAuthSessionStore {
-    /// Creates a new empty session store.
+    /// Creates a new empty session store with keyring storage.
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(pkce_storage: Arc<dyn PkceSessionStorage>) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
+            pkce_storage,
         }
     }
 
     /// Stores a session, keyed by its state value.
     ///
     /// Automatically cleans up expired sessions during this operation.
+    /// When evicting due to capacity limits, also deletes from keyring.
     pub fn store(&self, session: OAuthPkceSession) {
         const MAX_SESSIONS: usize = 512;
         let mut sessions = self.sessions.lock();
@@ -769,6 +797,39 @@ impl OAuthSessionStore {
                     "OAuth session store reached max capacity ({MAX_SESSIONS}). Evicting oldest session."
                 );
                 sessions.remove(&oldest_key);
+
+                // Also delete from keyring to prevent stale data accumulation
+                let pkce_storage = self.pkce_storage.clone();
+                let state_hash_clone = state_hash.clone();
+                tokio::spawn(async move {
+                    match tokio::task::spawn_blocking(move || {
+                        pkce_storage.delete_session(&state_hash_clone)
+                    })
+                    .await
+                    {
+                        Ok(Ok(())) => {
+                            tracing::debug!(
+                                target: "security",
+                                state_hash = %state_hash,
+                                "Evicted session deleted from keyring"
+                            );
+                        }
+                        Ok(Err(e)) => {
+                            tracing::warn!(
+                                target: "security",
+                                state_hash = %state_hash,
+                                "Failed to delete evicted session from keyring: {e}"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                target: "security",
+                                state_hash = %state_hash,
+                                "Task failed when deleting evicted session from keyring: {e}"
+                            );
+                        }
+                    }
+                });
             }
         }
 
@@ -800,7 +861,19 @@ impl OAuthSessionStore {
 
 impl Default for OAuthSessionStore {
     fn default() -> Self {
-        Self::new()
+        struct NoOpStorage;
+        impl PkceSessionStorage for NoOpStorage {
+            fn save_session(&self, _state_hash: &str, _session: &str) -> Result<(), String> {
+                Ok(())
+            }
+            fn get_session(&self, _state_hash: &str) -> Result<Option<String>, String> {
+                Ok(None)
+            }
+            fn delete_session(&self, _state_hash: &str) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        Self::new(Arc::new(NoOpStorage))
     }
 }
 
@@ -985,19 +1058,37 @@ mod tests {
     use super::*;
     use domain::modules::auth::oauth::{AuthProvider, OAuthPkceSession};
 
+    /// Mock PKCE storage for testing that does nothing (no-op).
+    struct MockPkceStorage;
+    impl PkceSessionStorage for MockPkceStorage {
+        fn save_session(&self, _state_hash: &str, _session: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn get_session(&self, _state_hash: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+        fn delete_session(&self, _state_hash: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    fn create_mock_store() -> OAuthSessionStore {
+        OAuthSessionStore::new(Arc::new(MockPkceStorage))
+    }
+
     // ===========================================
     // OAuthSessionStore Tests
     // ===========================================
 
     #[test]
     fn session_store_returns_none_for_unknown_state() {
-        let store = OAuthSessionStore::new();
+        let store = create_mock_store();
         assert!(store.take("unknown-state").is_none());
     }
 
     #[test]
     fn session_store_returns_session_once_then_removes() {
-        let store = OAuthSessionStore::new();
+        let store = create_mock_store();
         let session = OAuthPkceSession::new(
             "test-state".to_string(),
             "a".repeat(43),
@@ -1016,7 +1107,7 @@ mod tests {
 
     #[test]
     fn session_store_handles_multiple_sessions() {
-        let store = OAuthSessionStore::new();
+        let store = create_mock_store();
 
         let session1 =
             OAuthPkceSession::new("state-1".to_string(), "a".repeat(43), AuthProvider::Google);
@@ -1044,7 +1135,7 @@ mod tests {
     fn session_store_cleans_expired_sessions_on_store() {
         use chrono::{Duration as ChronoDuration, Utc};
 
-        let store = OAuthSessionStore::new();
+        let store = create_mock_store();
 
         // Store an expired session
         let mut old_session = OAuthPkceSession::new(
@@ -1073,7 +1164,7 @@ mod tests {
     fn session_store_preserves_unexpired_sessions() {
         use chrono::{Duration as ChronoDuration, Utc};
 
-        let store = OAuthSessionStore::new();
+        let store = create_mock_store();
 
         // Store a session that's 5 minutes old (not expired - TTL is 10 min)
         let mut recent_session = OAuthPkceSession::new(

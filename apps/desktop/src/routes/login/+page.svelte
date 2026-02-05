@@ -148,6 +148,19 @@
           }
         }
 
+        // Check for OAuth provider errors (user denied/cancelled)
+        const oauthError = callbackUrl.searchParams.get("error");
+        if (oauthError) {
+          oauthLoading = null;
+          localStorage.removeItem("oauth_pending_provider");
+          localStorage.removeItem("oauth_pending_state");
+          localStorage.removeItem("oauth_pending_started_at");
+          error = "Authentication was cancelled or denied. Please try again.";
+          if (oauthTimeout) clearTimeout(oauthTimeout);
+          oauthTimeout = null;
+          return;
+        }
+
         // Validate state before invoking backend exchange
         const pendingState = localStorage.getItem("oauth_pending_state");
         const callbackState = callbackUrl.searchParams.get("state");
@@ -155,6 +168,7 @@
           oauthLoading = null;
           localStorage.removeItem("oauth_pending_provider");
           localStorage.removeItem("oauth_pending_state");
+          localStorage.removeItem("oauth_pending_started_at");
           error = "Authentication session was invalid. Please try again.";
           if (oauthTimeout) clearTimeout(oauthTimeout);
           oauthTimeout = null;
@@ -172,6 +186,7 @@
           setSessionId();
           localStorage.removeItem("oauth_pending_provider");
           localStorage.removeItem("oauth_pending_state");
+          localStorage.removeItem("oauth_pending_started_at");
           await goto(resolve("/dashboard"), { replaceState: true });
         } catch (err: unknown) {
           logAuditEvent("oauth_login", false, {
@@ -182,6 +197,7 @@
           oauthLoading = null;
           localStorage.removeItem("oauth_pending_provider");
           localStorage.removeItem("oauth_pending_state");
+          localStorage.removeItem("oauth_pending_started_at");
           if (oauthTimeout) clearTimeout(oauthTimeout);
           oauthTimeout = null;
         }
@@ -340,6 +356,7 @@
 
     // Save provider to localStorage for cold start recovery
     localStorage.setItem("oauth_pending_provider", provider);
+    localStorage.setItem("oauth_pending_started_at", String(Date.now()));
 
     // Prevent the UI from getting stuck if the callback never arrives
     if (oauthTimeout) clearTimeout(oauthTimeout);
@@ -349,6 +366,7 @@
           oauthLoading = null;
           localStorage.removeItem("oauth_pending_provider");
           localStorage.removeItem("oauth_pending_state");
+          localStorage.removeItem("oauth_pending_started_at");
           error = "Authentication timed out. Please try again.";
         }
         oauthTimeout = null;
