@@ -404,6 +404,7 @@ impl OAuthService for OAuthServiceImpl {
         Ok((auth_url.to_string(), session))
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn exchange_code(
         &self,
         session: &OAuthPkceSession,
@@ -455,6 +456,10 @@ impl OAuthService for OAuthServiceImpl {
                         req.headers_mut().insert(
                             reqwest::header::ACCEPT,
                             reqwest::header::HeaderValue::from_static("application/json"),
+                        );
+                        req.headers_mut().insert(
+                            reqwest::header::USER_AGENT,
+                            reqwest::header::HeaderValue::from_static("Aroeira-Desktop"),
                         );
                         async_http_client(req).await
                     })
