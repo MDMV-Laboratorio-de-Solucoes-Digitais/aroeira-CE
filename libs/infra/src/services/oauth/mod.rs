@@ -203,8 +203,10 @@ impl PkceSessionStorage for KeyringPkceStorage {
         {
             let entry =
                 keyring::Entry::new("aroeira-oauth-pkce", state_hash).map_err(|e| e.to_string())?;
-            entry.delete_credential().map_err(|e| e.to_string())?;
-            Ok(())
+            match entry.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+                Err(e) => Err(e.to_string()),
+            }
         }
         #[cfg(test)]
         {

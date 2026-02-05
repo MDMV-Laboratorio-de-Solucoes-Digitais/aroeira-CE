@@ -801,35 +801,44 @@ impl OAuthSessionStore {
                 // Also delete from keyring to prevent stale data accumulation
                 let pkce_storage = self.pkce_storage.clone();
                 let state_hash_clone = state_hash.clone();
-                tokio::spawn(async move {
-                    match tokio::task::spawn_blocking(move || {
-                        pkce_storage.delete_session(&state_hash_clone)
-                    })
-                    .await
-                    {
-                        Ok(Ok(())) => {
-                            tracing::debug!(
-                                target: "security",
-                                state_hash = %state_hash,
-                                "Evicted session deleted from keyring"
-                            );
+
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.spawn(async move {
+                        match tokio::task::spawn_blocking(move || {
+                            pkce_storage.delete_session(&state_hash_clone)
+                        })
+                        .await
+                        {
+                            Ok(Ok(())) => {
+                                tracing::debug!(
+                                    target: "security",
+                                    state_hash = %state_hash,
+                                    "Evicted session deleted from keyring"
+                                );
+                            }
+                            Ok(Err(e)) => {
+                                tracing::warn!(
+                                    target: "security",
+                                    state_hash = %state_hash,
+                                    "Failed to delete evicted session from keyring: {e}"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    target: "security",
+                                    state_hash = %state_hash,
+                                    "Task failed when deleting evicted session from keyring: {e}"
+                                );
+                            }
                         }
-                        Ok(Err(e)) => {
-                            tracing::warn!(
-                                target: "security",
-                                state_hash = %state_hash,
-                                "Failed to delete evicted session from keyring: {e}"
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                target: "security",
-                                state_hash = %state_hash,
-                                "Task failed when deleting evicted session from keyring: {e}"
-                            );
-                        }
-                    }
-                });
+                    });
+                } else if let Err(e) = pkce_storage.delete_session(&state_hash_clone) {
+                    tracing::warn!(
+                        target: "security",
+                        state_hash = %state_hash,
+                        "Failed to delete evicted session from keyring: {e}"
+                    );
+                }
             }
         }
 

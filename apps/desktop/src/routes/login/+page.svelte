@@ -161,6 +161,35 @@
           return;
         }
 
+        // Validate callback contains authorization code
+        const code = callbackUrl.searchParams.get("code");
+        if (!code) {
+          oauthLoading = null;
+          localStorage.removeItem("oauth_pending_provider");
+          localStorage.removeItem("oauth_pending_state");
+          localStorage.removeItem("oauth_pending_started_at");
+          error = "Authentication callback was invalid. Please try again.";
+          if (oauthTimeout) clearTimeout(oauthTimeout);
+          oauthTimeout = null;
+          return;
+        }
+
+        // Expire stale OAuth pending state (> 2 minutes)
+        const startedAtStr = localStorage.getItem("oauth_pending_started_at");
+        const startedAt = startedAtStr ? Number(startedAtStr) : NaN;
+        const maxAgeMs = 2 * 60 * 1000;
+
+        if (!Number.isFinite(startedAt) || Date.now() - startedAt > maxAgeMs) {
+          oauthLoading = null;
+          localStorage.removeItem("oauth_pending_provider");
+          localStorage.removeItem("oauth_pending_state");
+          localStorage.removeItem("oauth_pending_started_at");
+          error = "Authentication session expired. Please try again.";
+          if (oauthTimeout) clearTimeout(oauthTimeout);
+          oauthTimeout = null;
+          return;
+        }
+
         // Validate state before invoking backend exchange
         const pendingState = localStorage.getItem("oauth_pending_state");
         const callbackState = callbackUrl.searchParams.get("state");
