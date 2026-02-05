@@ -69,6 +69,10 @@ export async function startOAuthFlow(
 }
 
 export async function openOAuthAuthUrl(auth_url: string): Promise<void> {
+  const url = new URL(auth_url);
+  if (url.protocol !== "https:") {
+    throw new Error("Invalid authorization URL");
+  }
   await openUrl(auth_url);
 }
 
