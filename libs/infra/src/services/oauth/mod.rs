@@ -31,7 +31,7 @@ static ASYNC_HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::Lazy
 });
 
 /// Maximum allowed size for OAuth HTTP response bodies (1 MB).
-/// Prevents DoS attacks via unbounded memory allocation.
+/// Prevents `DoS` attacks via unbounded memory allocation.
 /// Configuration for `OAuth2` providers.
 ///
 /// Client IDs are loaded from environment variables.
