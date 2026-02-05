@@ -93,6 +93,7 @@
       oauthLoading = null;
       localStorage.removeItem("oauth_pending_provider");
       localStorage.removeItem("oauth_pending_state");
+      localStorage.removeItem("oauth_pending_started_at");
       error = "Authentication callback was invalid. Please try again.";
       if (oauthTimeout) clearTimeout(oauthTimeout);
       oauthTimeout = null;
@@ -304,6 +305,7 @@
       oauthLoading = null;
       localStorage.removeItem("oauth_pending_provider");
       localStorage.removeItem("oauth_pending_state");
+      localStorage.removeItem("oauth_pending_started_at");
     }
   });
 
@@ -420,6 +422,7 @@
       oauthLoading = null;
       localStorage.removeItem("oauth_pending_provider");
       localStorage.removeItem("oauth_pending_state");
+      localStorage.removeItem("oauth_pending_started_at");
       if (oauthTimeout) clearTimeout(oauthTimeout);
       oauthTimeout = null;
     }

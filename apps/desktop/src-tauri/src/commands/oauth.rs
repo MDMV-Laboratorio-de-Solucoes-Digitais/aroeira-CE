@@ -776,73 +776,75 @@ impl OAuthSessionStore {
     /// When evicting due to capacity limits, also deletes from keyring.
     pub fn store(&self, session: OAuthPkceSession) {
         const MAX_SESSIONS: usize = 512;
-        let mut sessions = self.sessions.lock();
 
-        // Clean up expired sessions
-        sessions.retain(|_, s| !s.is_expired());
+        let (evicted_state_hash, pkce_storage) = {
+            let mut sessions = self.sessions.lock();
 
-        // Enforce a hard cap to prevent memory growth (DoS prevention)
-        if sessions.len() >= MAX_SESSIONS {
-            // Remove oldest session directly
-            if let Some(oldest_key) = sessions
-                .iter()
-                .min_by_key(|(_, s)| s.created_at)
-                .map(|(k, _)| k.clone())
-            {
-                let state_hash = hex::encode(Sha256::digest(oldest_key.as_bytes()));
+            // Clean up expired sessions
+            sessions.retain(|_, s| !s.is_expired());
+
+            // Enforce a hard cap to prevent memory growth (DoS prevention)
+            let evicted_state_hash = if sessions.len() >= MAX_SESSIONS {
+                sessions
+                    .iter()
+                    .min_by_key(|(_, s)| s.created_at)
+                    .map(|(k, _)| k.clone())
+                    .map(|oldest_key| {
+                        let state_hash = hex::encode(Sha256::digest(oldest_key.as_bytes()));
+                        tracing::warn!(
+                            target: "security",
+                            reason = "session_store_full",
+                            evicted_state_hash = %state_hash,
+                            "OAuth session store reached max capacity ({MAX_SESSIONS}). Evicting oldest session."
+                        );
+                        sessions.remove(&oldest_key);
+                        state_hash
+                    })
+            } else {
+                None
+            };
+
+            (evicted_state_hash, self.pkce_storage.clone())
+        };
+
+        if let Some(state_hash) = evicted_state_hash {
+            let state_hash_clone = state_hash.clone();
+
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    match tokio::task::spawn_blocking(move || {
+                        pkce_storage.delete_session(&state_hash_clone)
+                    })
+                    .await
+                    {
+                        Ok(Ok(())) => tracing::debug!(
+                            target: "security",
+                            state_hash = %state_hash,
+                            "Evicted session deleted from keyring"
+                        ),
+                        Ok(Err(e)) => tracing::warn!(
+                            target: "security",
+                            state_hash = %state_hash,
+                            "Failed to delete evicted session from keyring: {e}"
+                        ),
+                        Err(e) => tracing::warn!(
+                            target: "security",
+                            state_hash = %state_hash,
+                            "Task failed when deleting evicted session from keyring: {e}"
+                        ),
+                    }
+                });
+            } else if let Err(e) = pkce_storage.delete_session(&state_hash_clone) {
                 tracing::warn!(
                     target: "security",
-                    reason = "session_store_full",
-                    evicted_state_hash = %state_hash,
-                    "OAuth session store reached max capacity ({MAX_SESSIONS}). Evicting oldest session."
+                    state_hash = %state_hash,
+                    "Failed to delete evicted session from keyring: {e}"
                 );
-                sessions.remove(&oldest_key);
-
-                // Also delete from keyring to prevent stale data accumulation
-                let pkce_storage = self.pkce_storage.clone();
-                let state_hash_clone = state_hash.clone();
-
-                if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                    handle.spawn(async move {
-                        match tokio::task::spawn_blocking(move || {
-                            pkce_storage.delete_session(&state_hash_clone)
-                        })
-                        .await
-                        {
-                            Ok(Ok(())) => {
-                                tracing::debug!(
-                                    target: "security",
-                                    state_hash = %state_hash,
-                                    "Evicted session deleted from keyring"
-                                );
-                            }
-                            Ok(Err(e)) => {
-                                tracing::warn!(
-                                    target: "security",
-                                    state_hash = %state_hash,
-                                    "Failed to delete evicted session from keyring: {e}"
-                                );
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    target: "security",
-                                    state_hash = %state_hash,
-                                    "Task failed when deleting evicted session from keyring: {e}"
-                                );
-                            }
-                        }
-                    });
-                } else if let Err(e) = pkce_storage.delete_session(&state_hash_clone) {
-                    tracing::warn!(
-                        target: "security",
-                        state_hash = %state_hash,
-                        "Failed to delete evicted session from keyring: {e}"
-                    );
-                }
             }
         }
 
         // Store new session
+        let mut sessions = self.sessions.lock();
         sessions.insert(session.state.clone(), session);
     }
 

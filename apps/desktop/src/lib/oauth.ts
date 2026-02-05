@@ -109,6 +109,16 @@ export async function handleOAuthCallback(
     throw new Error("Unexpected callback URL");
   }
 
+  const code = url.searchParams.get("code");
+  const state = url.searchParams.get("state");
+
+  if (!code || code.length < 1 || code.length > 2048) {
+    throw new Error("Invalid callback URL");
+  }
+  if (!state || state.length < 8 || state.length > 512) {
+    throw new Error("Invalid callback URL");
+  }
+
   const resp = await invoke<{
     provider: string;
     email: string;

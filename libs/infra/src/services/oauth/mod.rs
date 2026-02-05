@@ -30,6 +30,8 @@ static ASYNC_HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::Lazy
         .expect("Failed to build reqwest client for OAuth")
 });
 
+/// Maximum allowed size for OAuth HTTP response bodies (1 MB).
+/// Prevents DoS attacks via unbounded memory allocation.
 /// Configuration for `OAuth2` providers.
 ///
 /// Client IDs are loaded from environment variables.
@@ -333,7 +335,7 @@ impl OAuthServiceImpl {
             .google_userinfo_url
             .as_deref()
             .unwrap_or(Self::GOOGLE_USERINFO_URL);
-        let response = ASYNC_HTTP_CLIENT
+        let mut response = ASYNC_HTTP_CLIENT
             .get(url)
             .bearer_auth(access_token)
             .send()
@@ -347,10 +349,31 @@ impl OAuthServiceImpl {
             )));
         }
 
-        let user_info: GoogleUserInfo = response
-            .json()
+        if response
+            .content_length()
+            .is_some_and(|len| len > MAX_OAUTH_HTTP_BODY_BYTES as u64)
+        {
+            return Err(OAuthError::UserInfoFailed(
+                "Google userinfo response too large".to_string(),
+            ));
+        }
+
+        let mut body = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
             .await
-            .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
+            .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?
+        {
+            if body.len().saturating_add(chunk.len()) > MAX_OAUTH_HTTP_BODY_BYTES {
+                return Err(OAuthError::UserInfoFailed(
+                    "Google userinfo response too large".to_string(),
+                ));
+            }
+            body.extend_from_slice(&chunk);
+        }
+
+        let user_info: GoogleUserInfo =
+            serde_json::from_slice(&body).map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
 
         // Security Critical: Ensure email is verified by Google
         if !user_info.email_verified {
@@ -377,7 +400,7 @@ impl OAuthServiceImpl {
             .github_user_url
             .as_deref()
             .unwrap_or(Self::GITHUB_USER_URL);
-        let user_response = ASYNC_HTTP_CLIENT
+        let mut user_response = ASYNC_HTTP_CLIENT
             .get(url)
             .header("User-Agent", "Aroeira-Desktop")
             .header("Accept", "application/vnd.github+json")
@@ -393,10 +416,31 @@ impl OAuthServiceImpl {
             )));
         }
 
-        let user_info: GitHubUserInfo = user_response
-            .json()
+        if user_response
+            .content_length()
+            .is_some_and(|len| len > MAX_OAUTH_HTTP_BODY_BYTES as u64)
+        {
+            return Err(OAuthError::UserInfoFailed(
+                "GitHub user response too large".to_string(),
+            ));
+        }
+
+        let mut body = Vec::new();
+        while let Some(chunk) = user_response
+            .chunk()
             .await
-            .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
+            .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?
+        {
+            if body.len().saturating_add(chunk.len()) > MAX_OAUTH_HTTP_BODY_BYTES {
+                return Err(OAuthError::UserInfoFailed(
+                    "GitHub user response too large".to_string(),
+                ));
+            }
+            body.extend_from_slice(&chunk);
+        }
+
+        let user_info: GitHubUserInfo =
+            serde_json::from_slice(&body).map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
 
         // Always fetch verified email from emails endpoint for security
         let (email, email_verified) = self.fetch_github_primary_email(access_token).await?;
@@ -421,7 +465,7 @@ impl OAuthServiceImpl {
             .github_emails_url
             .as_deref()
             .unwrap_or(Self::GITHUB_EMAILS_URL);
-        let response = ASYNC_HTTP_CLIENT
+        let mut response = ASYNC_HTTP_CLIENT
             .get(url)
             .header("User-Agent", "Aroeira-Desktop")
             .header("Accept", "application/vnd.github+json")
@@ -437,10 +481,31 @@ impl OAuthServiceImpl {
             )));
         }
 
-        let emails: Vec<GitHubEmail> = response
-            .json()
+        if response
+            .content_length()
+            .is_some_and(|len| len > MAX_OAUTH_HTTP_BODY_BYTES as u64)
+        {
+            return Err(OAuthError::UserInfoFailed(
+                "GitHub emails response too large".to_string(),
+            ));
+        }
+
+        let mut body = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
             .await
-            .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
+            .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?
+        {
+            if body.len().saturating_add(chunk.len()) > MAX_OAUTH_HTTP_BODY_BYTES {
+                return Err(OAuthError::UserInfoFailed(
+                    "GitHub emails response too large".to_string(),
+                ));
+            }
+            body.extend_from_slice(&chunk);
+        }
+
+        let emails: Vec<GitHubEmail> =
+            serde_json::from_slice(&body).map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
 
         // Security Critical: Only accept primary verified email
         // This removes the fallback to any verified email and prevents potential account confusion
