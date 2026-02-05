@@ -68,14 +68,6 @@ export async function startOAuthFlow(
   return response;
 }
 
-export async function openOAuthAuthUrl(auth_url: string): Promise<void> {
-  const url = new URL(auth_url);
-  if (url.protocol !== "https:") {
-    throw new Error("Invalid authorization URL");
-  }
-  await openUrl(auth_url);
-}
-
 /**
  * Handles an OAuth callback URL from deep linking.
  *
@@ -109,9 +101,40 @@ export async function handleOAuthCallback(
     throw new Error("Unexpected callback URL");
   }
 
-  return invoke<OAuthCallbackResponse>("handle_oauth_callback", {
+  const resp = await invoke<{
+    provider: string;
+    email: string;
+    name: string | null;
+    avatar_url: string | null;
+  }>("handle_oauth_callback", {
     callbackUrl,
   });
+
+  if (resp.provider !== "google" && resp.provider !== "github") {
+    throw new Error("Unexpected OAuth provider");
+  }
+
+  return { ...resp, provider: resp.provider as OAuthProvider };
+}
+
+export async function openOAuthAuthUrl(auth_url: string): Promise<void> {
+  const url = new URL(auth_url);
+  if (url.protocol !== "https:") {
+    throw new Error("Invalid authorization URL");
+  }
+
+  const hostname = url.hostname.replace(/\.$/, "").toLowerCase();
+  const allowedHostnames = new Set([
+    "accounts.google.com",
+    "github.com",
+    "www.github.com",
+  ]);
+
+  if (!allowedHostnames.has(hostname)) {
+    throw new Error("Unexpected authorization host");
+  }
+
+  await openUrl(auth_url);
 }
 
 /**

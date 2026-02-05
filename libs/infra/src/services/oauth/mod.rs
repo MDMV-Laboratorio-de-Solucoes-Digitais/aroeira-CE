@@ -504,9 +504,12 @@ impl OAuthService for OAuthServiceImpl {
             let user_key_hash = hex::encode(hasher.finalize());
 
             // Create token payload. Include refresh token for long-lived sessions if available.
+            let access_token = token_result.access_token().secret().clone();
+            let refresh_token = token_result.refresh_token().map(|t| t.secret().clone());
+
             let token_payload = serde_json::json!({
                 "access_token": access_token,
-                "refresh_token": token_result.refresh_token().map(oauth2::RefreshToken::secret),
+                "refresh_token": refresh_token,
             });
 
             // Prevent blocking async runtime with synchronous keyring operations
@@ -576,12 +579,23 @@ struct GitHubEmail {
     verified: bool,
 }
 
+/// Custom error type for OAuth HTTP client to handle both reqwest and IO errors
+#[derive(Debug, thiserror::Error)]
+pub enum OAuthHttpClientError {
+    #[error(transparent)]
+    Reqwest(#[from] reqwest::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+const MAX_OAUTH_HTTP_BODY_BYTES: usize = 1_048_576; // 1 MiB
+
 /// Custom async HTTP client for oauth2 crate with timeout and proper configuration.
 ///
 /// This replaces `oauth2::reqwest::async_http_client` which doesn't have a timeout by default.
 async fn async_http_client(
     request: oauth2::HttpRequest,
-) -> Result<oauth2::HttpResponse, reqwest::Error> {
+) -> Result<oauth2::HttpResponse, OAuthHttpClientError> {
     // Use static client for connection pooling
     let client = &*ASYNC_HTTP_CLIENT;
 
@@ -598,11 +612,31 @@ async fn async_http_client(
         request_builder = request_builder.header(name, value);
     }
 
-    let response = request_builder.send().await?;
+    let mut response = request_builder.send().await?;
 
     let status = response.status();
     let headers = response.headers().clone();
-    let body = response.bytes().await?.to_vec();
+
+    if response
+        .content_length()
+        .is_some_and(|len| len > MAX_OAUTH_HTTP_BODY_BYTES as u64)
+    {
+        return Err(OAuthHttpClientError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "OAuth HTTP response too large",
+        )));
+    }
+
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if body.len().saturating_add(chunk.len()) > MAX_OAUTH_HTTP_BODY_BYTES {
+            return Err(OAuthHttpClientError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "OAuth HTTP response too large",
+            )));
+        }
+        body.extend_from_slice(&chunk);
+    }
 
     let mut resp = oauth2::HttpResponse::new(body);
     *resp.status_mut() = status;

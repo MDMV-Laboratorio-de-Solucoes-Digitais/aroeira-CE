@@ -604,17 +604,19 @@ impl OAuthSessionStore {
 
         // Enforce a hard cap to prevent memory growth (DoS prevention)
         if sessions.len() >= MAX_SESSIONS {
-            tracing::warn!(
-                target: "security",
-                reason = "session_store_full",
-                "OAuth session store reached max capacity ({MAX_SESSIONS}). Evicting oldest session."
-            );
             // Remove oldest session directly
             if let Some(oldest_key) = sessions
                 .iter()
                 .min_by_key(|(_, s)| s.created_at)
                 .map(|(k, _)| k.clone())
             {
+                let state_hash = hex::encode(Sha256::digest(oldest_key.as_bytes()));
+                tracing::warn!(
+                    target: "security",
+                    reason = "session_store_full",
+                    evicted_state_hash = %state_hash,
+                    "OAuth session store reached max capacity ({MAX_SESSIONS}). Evicting oldest session."
+                );
                 sessions.remove(&oldest_key);
             }
         }
@@ -741,20 +743,28 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
     let query = url.query().unwrap_or("").replace('+', "%2B");
     let query_pairs = url::form_urlencoded::parse(query.as_bytes()).collect::<Vec<_>>();
 
-    let get_query_param = |key: &str| -> Result<String, String> {
-        query_pairs
+    let get_unique_query_param = |key: &str| -> Result<String, String> {
+        let mut values = query_pairs
             .iter()
-            .find(|(k, _)| k == key)
+            .filter(|(k, _)| k == key)
             .map(|(_, v)| v.to_string())
-            .filter(|v| !v.is_empty())
-            .ok_or_else(|| {
-                tracing::warn!("OAuth callback: missing or empty {} parameter", key);
-                GENERIC_ERROR.to_string()
-            })
+            .filter(|v| !v.is_empty());
+
+        let first = values.next().ok_or_else(|| {
+            tracing::warn!("OAuth callback: missing or empty {} parameter", key);
+            GENERIC_ERROR.to_string()
+        })?;
+
+        if values.next().is_some() {
+            tracing::warn!("OAuth callback: duplicate {} parameter", key);
+            return Err(GENERIC_ERROR.to_string());
+        }
+
+        Ok(first)
     };
 
-    let code = get_query_param("code")?;
-    let state = get_query_param("state")?;
+    let code = get_unique_query_param("code")?;
+    let state = get_unique_query_param("state")?;
 
     if code.len() > MAX_CODE_LEN || state.len() > MAX_STATE_LEN {
         tracing::warn!(
