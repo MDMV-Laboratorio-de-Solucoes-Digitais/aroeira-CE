@@ -931,6 +931,7 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
     const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
     const MAX_CODE_LEN: usize = 4096;
     const MAX_STATE_LEN: usize = 512;
+    const HOSTLESS_PATH: &str = "auth/callback";
 
     let url = Url::parse(callback_url).map_err(|e| {
         tracing::warn!("OAuth callback URL parse error: {e}");
@@ -952,13 +953,8 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
     // hostless: aroeira:///auth/callback (appears as path "//auth/callback" with no host)
     let is_canonical =
         url.host_str() == Some(OAUTH_CALLBACK_HOST) && url.path() == OAUTH_CALLBACK_PATH;
-    let is_hostless = url.host_str().is_none()
-        && url.path().trim_start_matches('/')
-            == format!(
-                "{}/{}",
-                OAUTH_CALLBACK_HOST,
-                OAUTH_CALLBACK_PATH.trim_start_matches('/')
-            );
+    let is_hostless =
+        url.host_str().is_none() && url.path().trim_start_matches('/') == HOSTLESS_PATH;
 
     // Note: OAUTH_CALLBACK_HOST is "auth" and OAUTH_CALLBACK_PATH is "/callback"
     // So hostless path check is against "/auth/callback"
