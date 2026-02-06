@@ -495,10 +495,24 @@ pub fn run() {
         .plugin(tauri_plugin_secure_storage::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // Handle deep link when a second instance is launched
-            // Find the deep link URL in argv (it starts with aroeira://)
             if let Some(url) = argv.iter().find(|arg| arg.starts_with("aroeira://")) {
+                // Defensive bounds to avoid forwarding huge/untrusted argv payloads
+                if url.len() > 8192 {
+                    tracing::warn!("Ignoring deep link argv: payload too large");
+                    return;
+                }
+
+                // Only forward expected callback URLs
+                let is_expected = url.starts_with("aroeira://auth/callback")
+                    || url.starts_with("aroeira://auth/callback?")
+                    || url.starts_with("aroeira://auth/callback/");
+
+                if !is_expected {
+                    tracing::warn!("Ignoring unexpected deep link argv");
+                    return;
+                }
+
                 tracing::info!("Received deep link in single-instance handler: {}", url);
-                // Emit event to frontend to process the deep link
                 let _ = app.emit("deep-link", url.clone());
             }
         }))
