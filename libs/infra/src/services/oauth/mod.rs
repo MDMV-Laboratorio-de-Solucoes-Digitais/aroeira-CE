@@ -18,6 +18,7 @@ use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge, PkceCodeVerifier,
     RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
+use secrecy::ExposeSecret;
 use sha2::{Digest, Sha256};
 use tracing::{debug, error, warn};
 
@@ -43,7 +44,7 @@ pub struct OAuthConfig {
     /// GitHub `OAuth2` client ID (optional)
     pub github_client_id: Option<String>,
     /// GitHub `OAuth2` client secret (required for token exchange)
-    pub github_client_secret: Option<String>,
+    pub github_client_secret: Option<secrecy::SecretString>,
     /// Redirect URI for OAuth callbacks (e.g., `<aroeira://auth/callback>`)
     pub redirect_uri: String,
 
@@ -77,7 +78,8 @@ impl OAuthConfig {
         Self {
             google_client_id: get_optional_env("GOOGLE_CLIENT_ID"),
             github_client_id: get_optional_env("GITHUB_CLIENT_ID"),
-            github_client_secret: get_optional_env("GITHUB_CLIENT_SECRET"),
+            github_client_secret: get_optional_env("GITHUB_CLIENT_SECRET")
+                .map(secrecy::SecretString::from),
             redirect_uri,
             google_auth_url: None,
             google_token_url: None,
@@ -307,13 +309,13 @@ impl OAuthServiceImpl {
                     .config
                     .github_client_secret
                     .as_ref()
-                    .filter(|s| !s.is_empty())
+                    .filter(|s| !s.expose_secret().is_empty())
                     .ok_or_else(|| OAuthError::ProviderNotConfigured(
                         "GitHub client secret is not configured. Please set GITHUB_CLIENT_SECRET in your .env file. Get it from https://github.com/settings/developers".to_string()
                     ))?;
                 Ok((
                     client_id.as_str(),
-                    Some(client_secret.as_str()),
+                    Some(client_secret.expose_secret()),
                     self.config
                         .github_auth_url
                         .as_deref()

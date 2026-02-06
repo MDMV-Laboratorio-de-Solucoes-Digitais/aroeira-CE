@@ -77,7 +77,9 @@ async fn generate_url_for_github_includes_required_params() {
     let service = OAuthServiceImpl::new(OAuthConfig {
         google_client_id: None,
         github_client_id: Some("test-github-client-id".to_string()),
-        github_client_secret: Some("test-github-client-secret".to_string()),
+        github_client_secret: Some(secrecy::SecretString::from(
+            "test-github-client-secret".to_string(),
+        )),
         redirect_uri: "aroeira://auth/callback".to_string(),
         google_auth_url: None,
         google_token_url: None,
@@ -458,7 +460,7 @@ async fn exchange_code_success_github() {
     let config = OAuthConfig {
         google_client_id: None,
         github_client_id: Some("client-id".to_string()),
-        github_client_secret: Some("client-secret".to_string()),
+        github_client_secret: Some(secrecy::SecretString::from("client-secret".to_string())),
         redirect_uri: "aroeira://auth/callback".to_string(),
         google_auth_url: None,
         google_token_url: None,

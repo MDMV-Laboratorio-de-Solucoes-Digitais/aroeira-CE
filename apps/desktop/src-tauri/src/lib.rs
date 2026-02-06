@@ -36,7 +36,7 @@ pub struct AppConfig {
     /// GitHub `OAuth2` client ID (optional)
     pub github_client_id: Option<String>,
     /// GitHub `OAuth2` client secret (required for token exchange)
-    pub github_client_secret: Option<String>,
+    pub github_client_secret: Option<secrecy::SecretString>,
 }
 
 impl AppConfig {
@@ -95,7 +95,7 @@ impl AppConfig {
         };
         let google_client_id = get_optional_env("GOOGLE_CLIENT_ID");
         let github_client_id = get_optional_env("GITHUB_CLIENT_ID");
-        let github_client_secret = get_optional_env("GITHUB_CLIENT_SECRET");
+        let github_client_secret = get_optional_env("GITHUB_CLIENT_SECRET").map(Into::into);
 
         if google_client_id.is_none() && github_client_id.is_none() {
             info!(
