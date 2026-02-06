@@ -100,15 +100,18 @@ export async function handleOAuthCallback(
     throw new Error("Invalid callback URL");
   }
 
-  // Support both aroeira:// protocol (production) and localhost (dev mode)
+  // Support aroeira:// protocol (production) and localhost only in dev mode
   const isAroeiraProtocol =
     url.protocol === "aroeira:" &&
     ((url.hostname === "auth" && url.pathname === "/callback") ||
       url.pathname === "/auth/callback");
+
   const isLocalhostDev =
+    import.meta.env.DEV &&
     url.protocol === "http:" &&
     url.hostname === "localhost" &&
     url.pathname === "/auth/callback";
+
   const isOAuthCallback = isAroeiraProtocol || isLocalhostDev;
 
   if (!isOAuthCallback) {

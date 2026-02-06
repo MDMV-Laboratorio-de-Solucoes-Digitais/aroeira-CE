@@ -124,6 +124,7 @@
         parsed.pathname === "/auth/callback");
 
     const isLocalhostDev =
+      import.meta.env.DEV &&
       parsed.protocol === "http:" &&
       parsed.hostname === "localhost" &&
       parsed.pathname === "/auth/callback";
