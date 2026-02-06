@@ -384,7 +384,7 @@ pub async fn handle_oauth_callback(
     tracing::info!(
         target: "oauth_debug",
         request_id = %request_id,
-        callback_url = %callback_url,
+        callback_path = "/auth/callback",
         "OAuth callback received"
     );
 
@@ -471,7 +471,19 @@ async fn retrieve_warm_session(
 ) -> Option<OAuthPkceSession> {
     let session = oauth_state.session_store.take(state_param)?;
 
-    // Clean up any persisted session from keyring to prevent stale data.
+    // Validate session immediately before deleting persisted session to prevent losing recoverable session.
+    if session.state != state_param || !session.is_valid() || session.is_expired() {
+        tracing::warn!(
+            target: "audit",
+            request_id = %request_id,
+            outcome = "failure",
+            reason = "session_invalid_or_expired",
+            "OAuth authentication failed: invalid or expired session"
+        );
+        return None;
+    }
+
+    // Session is valid - clean up persisted session from keyring.
     let pkce_storage = oauth_state.pkce_storage.clone();
     let state_hash_clone = state_hash.to_string();
     match tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash_clone)).await
@@ -491,17 +503,6 @@ async fn retrieve_warm_session(
                 "Failed to delete persisted OAuth session from keyring due to task failure: {e}. Session will be cleaned up separately."
             );
         }
-    }
-
-    if session.state != state_param || !session.is_valid() || session.is_expired() {
-        tracing::warn!(
-            target: "audit",
-            request_id = %request_id,
-            outcome = "failure",
-            reason = "session_invalid_or_expired",
-            "OAuth authentication failed: invalid or expired session"
-        );
-        return None;
     }
 
     Some(session)
@@ -871,12 +872,18 @@ impl OAuthSessionStore {
                         ),
                     }
                 });
-            } else if let Err(e) = pkce_storage.delete_session(&state_hash_clone) {
-                tracing::warn!(
-                    target: "security",
-                    state_hash = %state_hash,
-                    "Failed to delete evicted session from keyring: {e}"
-                );
+            } else {
+                // Fallback to a standard thread if not in a Tokio runtime context to avoid blocking.
+                let pkce_storage_clone = pkce_storage.clone();
+                std::thread::spawn(move || {
+                    if let Err(e) = pkce_storage_clone.delete_session(&state_hash_clone) {
+                        tracing::warn!(
+                            target: "security",
+                            state_hash = %state_hash_clone,
+                            "Failed to delete evicted session from keyring: {e}"
+                        );
+                    }
+                });
             }
         }
 
@@ -930,7 +937,9 @@ impl Default for OAuthSessionStore {
 /// `Url::query_pairs()` treats '+' as space (application/x-www-form-urlencoded).
 /// OAuth codes (and potentially state) are often base64-like and may contain '+'.
 /// We use `percent_encoding` directly to decode '%XX' but leave '+' as is.
-fn parse_query_preserving_plus(query: &str) -> Vec<(String, String)> {
+fn parse_query_preserving_plus(query: &str) -> Result<Vec<(String, String)>, String> {
+    const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
+
     let mut query_pairs = Vec::new();
     for pair in query.split('&') {
         if pair.is_empty() {
@@ -938,14 +947,16 @@ fn parse_query_preserving_plus(query: &str) -> Vec<(String, String)> {
         }
         let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
         let k = percent_encoding::percent_decode_str(k)
-            .decode_utf8_lossy()
+            .decode_utf8()
+            .map_err(|_| GENERIC_ERROR.to_string())?
             .to_string();
         let v = percent_encoding::percent_decode_str(v)
-            .decode_utf8_lossy()
+            .decode_utf8()
+            .map_err(|_| GENERIC_ERROR.to_string())?
             .to_string();
         query_pairs.push((k, v));
     }
-    query_pairs
+    Ok(query_pairs)
 }
 
 /// Parses an OAuth callback URL to extract code and state.
@@ -1034,7 +1045,7 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
 
     // Helper to extract query parameters.
     let query = url.query().unwrap_or("");
-    let query_pairs = parse_query_preserving_plus(query);
+    let query_pairs = parse_query_preserving_plus(query)?;
 
     let get_unique_query_param = |key: &str| -> Result<String, String> {
         let mut values = query_pairs
