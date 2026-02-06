@@ -244,6 +244,109 @@ pub async fn start_oauth_flow(
     })
 }
 
+/// Validates the OAuth callback URL and extracts code and state.
+fn validate_and_parse_callback(
+    callback_url: &str,
+    request_id: &str,
+    device_id_hash: &str,
+) -> Result<(String, String), String> {
+    const MAX_CALLBACK_LEN: usize = 8192;
+
+    // Prevent DoS via excessive URL length
+    if callback_url.len() > MAX_CALLBACK_LEN {
+        tracing::warn!(
+            target: "audit",
+            request_id = %request_id,
+            outcome = "failure",
+            reason = "callback_too_long",
+            device_id = %device_id_hash,
+            "OAuth callback URL exceeded max length"
+        );
+        return Err("Invalid authentication request".to_string());
+    }
+
+    // Parse callback URL
+    let (code, state_param) = parse_oauth_callback_url(callback_url).inspect_err(|e| {
+        tracing::error!(
+            target: "oauth_debug",
+            request_id = %request_id,
+            error = %e,
+            "Failed to parse OAuth callback URL"
+        );
+        tracing::warn!(
+            target: "audit",
+            request_id = %request_id,
+            outcome = "failure",
+            reason = "invalid_callback",
+            device_id = %device_id_hash,
+            "OAuth authentication failed: invalid callback URL"
+        );
+    })?;
+
+    tracing::info!(
+        target: "oauth_debug",
+        request_id = %request_id,
+        state_prefix = %state_param.chars().take(8).collect::<String>(),
+        "Callback parsed successfully"
+    );
+
+    Ok((code, state_param))
+}
+
+/// Exchanges OAuth code for user info with logging.
+async fn exchange_code_for_user(
+    oauth_state: &OAuthState,
+    session: &domain::modules::auth::oauth::OAuthPkceSession,
+    code: String,
+    request_id: &str,
+    device_id_hash: &str,
+) -> Result<OAuthUser, String> {
+    match oauth_state.oauth_service.exchange_code(session, code).await {
+        Ok(user) => Ok(user),
+        Err(e) => {
+            tracing::warn!(
+                target: "audit",
+                request_id = %request_id,
+                outcome = "failure",
+                reason = "code_exchange_failed",
+                device_id = %device_id_hash,
+                "OAuth authentication failed: code exchange error"
+            );
+            let error_msg = format!("{e}");
+            tracing::error!(
+                target: "audit",
+                request_id = %request_id,
+                error_details = %error_msg,
+                "OAuth code exchange failed for provider {:?}",
+                session.provider
+            );
+            Err("Authentication failed. Please try again.".to_string())
+        }
+    }
+}
+
+/// Finalizes OAuth login by creating user session and logging success.
+async fn finalize_oauth_login(
+    user: &OAuthUser,
+    session: &domain::modules::auth::oauth::OAuthPkceSession,
+    state: &AppState,
+    device_id: &str,
+    request_id: &str,
+) -> Result<OAuthCallbackResponse, String> {
+    let user_id = authenticate_or_create_user(user, session, state, request_id).await?;
+
+    let email_hash = hash_email_for_logging(
+        &user.email.trim().to_ascii_lowercase(),
+        state.rate_limit_key.expose_secret().as_bytes(),
+    )
+    .map_err(|_| "Internal security error".to_string())?;
+
+    handle_successful_login(user_id, &email_hash, device_id, state).await?;
+    log_oauth_success(user_id, session, user, request_id);
+
+    Ok(OAuthCallbackResponse::from(user.clone()))
+}
+
 /// Handles an OAuth callback URL from deep linking.
 ///
 /// This command:
@@ -276,8 +379,15 @@ pub async fn handle_oauth_callback(
     oauth_state: State<'_, OAuthState>,
     state: State<'_, AppState>,
 ) -> Result<OAuthCallbackResponse, String> {
-    const MAX_CALLBACK_LEN: usize = 8192;
     let request_id = generate_request_id();
+
+    tracing::info!(
+        target: "oauth_debug",
+        request_id = %request_id,
+        callback_url = %callback_url,
+        "OAuth callback received"
+    );
+
     let device_id = get_device_id().map_err(|e| {
         tracing::error!(
             target: "security",
@@ -290,110 +400,37 @@ pub async fn handle_oauth_callback(
         "Authentication failed. Please try again.".to_string()
     })?;
 
-    // Hash device_id for privacy in logs
     let mut hasher = Sha256::new();
     hasher.update(device_id.as_bytes());
     let device_id_hash = hex::encode(hasher.finalize());
 
-    // Prevent DoS via excessive URL length
-    if callback_url.len() > MAX_CALLBACK_LEN {
-        tracing::warn!(
-            target: "audit",
-            request_id = %request_id,
-            outcome = "failure",
-            reason = "callback_too_long",
-            device_id = %device_id_hash,
-            "OAuth callback URL exceeded max length"
-        );
-        return Err("Invalid authentication request".to_string());
-    }
+    let (code, state_param) =
+        validate_and_parse_callback(&callback_url, &request_id, &device_id_hash)?;
 
-    // Parse callback URL
-    let (code, state_param) = parse_oauth_callback_url(&callback_url).inspect_err(|_| {
-        tracing::warn!(
-            target: "audit",
-            request_id = %request_id,
-            outcome = "failure",
-            reason = "invalid_callback",
-            device_id = %device_id_hash,
-            "OAuth authentication failed: invalid callback URL"
-        );
-    })?;
-
-    // Retrieve and consume session (CSRF protection)
-    let session = retrieve_session(
-        &state_param,
-        oauth_state.inner(),
-        state.inner(),
-        &request_id,
-    )
-    .await
-    .inspect_err(|e| {
-        tracing::warn!(
-            target: "audit",
-            request_id = %request_id,
-            outcome = "failure",
-            reason = "session_retrieval_failed",
-            device_id = %device_id_hash,
-            error = %e,
-            "OAuth session retrieval failed"
-        );
-    })?;
-
-    // Exchange code for user info
-    let user = match oauth_state
-        .oauth_service
-        .exchange_code(&session, code)
+    let session = retrieve_session(&state_param, &oauth_state, &state, &request_id)
         .await
-    {
-        Ok(user) => user,
-        Err(e) => {
-            // Log failure with context - sanitize error to avoid leaking sensitive provider data
+        .inspect_err(|e| {
+            tracing::error!(
+                target: "oauth_debug",
+                request_id = %request_id,
+                error = %e,
+                "Session retrieval failed"
+            );
             tracing::warn!(
                 target: "audit",
                 request_id = %request_id,
                 outcome = "failure",
-                reason = "code_exchange_failed",
+                reason = "session_retrieval_failed",
                 device_id = %device_id_hash,
-                "OAuth authentication failed: code exchange error"
+                error = %e,
+                "OAuth session retrieval failed"
             );
-            // Log only error type/category, not full details which may contain tokens/PII
-            tracing::error!(
-                target: "audit",
-                request_id = %request_id,
-                error_type = std::any::type_name_of_val(&e),
-                "OAuth code exchange failed for provider {:?}",
-                session.provider
-            );
+        })?;
 
-            // Security: Do NOT restore session on failure.
-            // OAuth2 state/code should be one-time use to prevent replay attacks.
-            // Users must restart the flow if it fails.
+    let user =
+        exchange_code_for_user(&oauth_state, &session, code, &request_id, &device_id_hash).await?;
 
-            return Err("Authentication failed. Please try again.".to_string());
-        }
-    };
-
-    // Application-Level Authentication
-    let user_id = authenticate_or_create_user(&user, &session, &state, &request_id).await?;
-
-    // Get device ID for session binding
-    // already have device_id from start of function
-
-    // Generate email hash for consistent rate limit clearing
-    let email_hash = hash_email_for_logging(
-        &user.email.trim().to_ascii_lowercase(),
-        state.rate_limit_key.expose_secret().as_bytes(),
-    )
-    .map_err(|_| "Internal security error".to_string())?;
-
-    // Create session (JWT), store it, and clear rate limits
-    handle_successful_login(user_id, &email_hash, &device_id, state.inner()).await?;
-
-    // Log successful OAuth login (audit trail)
-    log_oauth_success(user_id, &session, &user, &request_id);
-
-    Ok(OAuthCallbackResponse::from(user))
+    finalize_oauth_login(&user, &session, &state, &device_id, &request_id).await
 }
 
 /// Checks which OAuth providers are available by querying the backend configuration.
@@ -949,36 +986,39 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
         GENERIC_ERROR.to_string()
     })?;
 
-    // Enforce expected deep-link callback origin using constants
-    if url.scheme() != OAUTH_CALLBACK_SCHEME {
+    // Handle both production (aroeira://) and dev mode (http://localhost) callbacks
+    let is_aroeira_protocol = url.scheme() == OAUTH_CALLBACK_SCHEME;
+    let is_localhost_dev = cfg!(debug_assertions)
+        && url.scheme() == "http"
+        && url.host_str() == Some("localhost")
+        && url.path() == "/auth/callback";
+
+    if !is_aroeira_protocol && !is_localhost_dev {
         tracing::warn!(
-            expected = OAUTH_CALLBACK_SCHEME,
-            actual = url.scheme(),
+            expected_scheme = OAUTH_CALLBACK_SCHEME,
+            actual_scheme = url.scheme(),
             "OAuth callback: invalid scheme"
         );
         return Err(GENERIC_ERROR.to_string());
     }
 
-    // Handle both canonical (with host) and hostless (deep link) formats
-    // canonical: aroeira://auth/callback
-    // hostless: aroeira:///auth/callback (appears as path "//auth/callback" with no host)
-    let is_canonical =
-        url.host_str() == Some(OAUTH_CALLBACK_HOST) && url.path() == OAUTH_CALLBACK_PATH;
-    let is_hostless =
-        url.host_str().is_none() && url.path().trim_start_matches('/') == HOSTLESS_PATH;
+    // For aroeira protocol, validate host/path
+    if is_aroeira_protocol {
+        let is_canonical =
+            url.host_str() == Some(OAUTH_CALLBACK_HOST) && url.path() == OAUTH_CALLBACK_PATH;
+        let is_hostless =
+            url.host_str().is_none() && url.path().trim_start_matches('/') == HOSTLESS_PATH;
 
-    // Note: OAUTH_CALLBACK_HOST is "auth" and OAUTH_CALLBACK_PATH is "/callback"
-    // So hostless path check is against "/auth/callback"
-
-    if !is_canonical && !is_hostless {
-        tracing::warn!(
-            expected_host = OAUTH_CALLBACK_HOST,
-            expected_path = OAUTH_CALLBACK_PATH,
-            actual_host = ?url.host_str(),
-            actual_path = url.path(),
-            "OAuth callback: invalid host or path"
-        );
-        return Err(GENERIC_ERROR.to_string());
+        if !is_canonical && !is_hostless {
+            tracing::warn!(
+                expected_host = OAUTH_CALLBACK_HOST,
+                expected_path = OAUTH_CALLBACK_PATH,
+                actual_host = ?url.host_str(),
+                actual_path = url.path(),
+                "OAuth callback: invalid host or path"
+            );
+            return Err(GENERIC_ERROR.to_string());
+        }
     }
 
     // Check for error response from OAuth provider
