@@ -20,7 +20,7 @@
     type OAuthAvailability,
   } from "$lib/oauth";
   import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
-  import type { UnlistenFn } from "@tauri-apps/api/event";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
   // Helper function to redact email addresses for audit logging
   function redactEmail(email: string): string {
@@ -65,6 +65,7 @@
   let confirmPassword = $state("");
   let isPasswordFocused = $state(false);
   let unlistenDeepLink: UnlistenFn | null = null;
+  let unlistenDeepLinkEvent: UnlistenFn | null = null;
 
   type PasswordSecurityLevel =
     | "none"
@@ -88,6 +89,7 @@
    * This handles the aroeira://auth/callback URLs.
    */
   function processOAuthCallback(rawUrl: string): Promise<void> {
+    console.log("Processing OAuth callback:", rawUrl.substring(0, 100) + "...");
     // Defensive bound to avoid processing extremely large deep-link payloads
     if (rawUrl.length > 8192) {
       oauthLoading = null;
@@ -121,8 +123,16 @@
       ((parsed.hostname === "auth" && parsed.pathname === "/callback") ||
         parsed.pathname === "/auth/callback");
 
+    console.log("Parsed URL:", {
+      protocol: parsed.protocol,
+      hostname: parsed.hostname,
+      pathname: parsed.pathname,
+      isOAuthCallback,
+    });
+
     if (!isOAuthCallback) {
       // Ignore unrelated deep links; don't cancel an in-progress OAuth flow.
+      console.log("Not an OAuth callback, ignoring");
       return Promise.resolve();
     }
 
@@ -164,6 +174,13 @@
 
         // Validate callback contains authorization code
         const code = callbackUrl.searchParams.get("code");
+        const state = callbackUrl.searchParams.get("state");
+        console.log("OAuth callback params:", {
+          hasCode: !!code,
+          hasState: !!state,
+          codeLength: code?.length,
+          stateLength: state?.length,
+        });
         if (!code) {
           oauthLoading = null;
           localStorage.removeItem("oauth_pending_provider");
@@ -194,6 +211,11 @@
         // Validate state before invoking backend exchange
         const pendingState = localStorage.getItem("oauth_pending_state");
         const callbackState = callbackUrl.searchParams.get("state");
+        console.log("State validation:", {
+          pendingState: pendingState?.substring(0, 20) + "...",
+          callbackState: callbackState?.substring(0, 20) + "...",
+          match: pendingState === callbackState,
+        });
         if (!pendingState || !callbackState || pendingState !== callbackState) {
           oauthLoading = null;
           localStorage.removeItem("oauth_pending_provider");
@@ -208,7 +230,12 @@
         error = "";
 
         try {
+          console.log("Calling handleOAuthCallback with backend...");
           const user = await handleOAuthCallback(rawUrl);
+          console.log("OAuth callback successful, user:", {
+            provider: user.provider,
+            email: redactEmail(user.email),
+          });
           logAuditEvent("oauth_login", true, {
             provider: user.provider,
             email: redactEmail(user.email),
@@ -219,6 +246,7 @@
           localStorage.removeItem("oauth_pending_started_at");
           await goto(resolve("/dashboard"), { replaceState: true });
         } catch (err: unknown) {
+          console.error("OAuth callback failed:", err);
           logAuditEvent("oauth_login", false, {
             error: sanitizeErrorForAudit(err),
           });
@@ -275,13 +303,32 @@
     // Listen for deep links while the app is running (warm start)
     try {
       unlistenDeepLink = await onOpenUrl(async (urls) => {
+        console.log("Deep link received:", urls);
         for (const url of urls) {
           await processOAuthCallback(url);
         }
       });
+      console.log("Deep link listener setup successfully");
     } catch (err) {
       console.error(
         "Failed to setup deep link listener",
+        sanitizeErrorForAudit(err),
+      );
+    }
+
+    // Listen for deep-link events from single-instance plugin
+    try {
+      unlistenDeepLinkEvent = await listen<string>(
+        "deep-link",
+        async (event) => {
+          console.log("Deep link event received:", event.payload);
+          await processOAuthCallback(event.payload);
+        },
+      );
+      console.log("Deep link event listener setup successfully");
+    } catch (err) {
+      console.error(
+        "Failed to setup deep link event listener",
         sanitizeErrorForAudit(err),
       );
     }
@@ -294,6 +341,12 @@
     unlistenDeepLink = null;
     if (unlisten) {
       unlisten();
+    }
+
+    const unlistenEvent = unlistenDeepLinkEvent;
+    unlistenDeepLinkEvent = null;
+    if (unlistenEvent) {
+      unlistenEvent();
     }
 
     if (oauthTimeout) {

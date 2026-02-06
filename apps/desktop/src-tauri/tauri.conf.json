@@ -7,7 +7,7 @@
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
-    "frontendDist": []
+    "frontendDist": "../build"
   },
   "app": {
     "windows": [
@@ -37,9 +37,6 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["aroeira"]
-      },
-      "mobile": {
         "schemes": ["aroeira"]
       }
     }

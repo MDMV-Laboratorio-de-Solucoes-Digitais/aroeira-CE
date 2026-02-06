@@ -7,8 +7,8 @@ use infra::security::{PathValidator, SecureFileCreator};
 use secrecy::SecretBox;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tauri::{Manager, Runtime};
-use tracing::{error, info};
+use tauri::{Emitter, Manager, Runtime};
+use tracing::{error, info, warn};
 
 pub mod auth_utils;
 pub mod commands;
@@ -35,6 +35,8 @@ pub struct AppConfig {
     pub google_client_id: Option<String>,
     /// GitHub `OAuth2` client ID (optional)
     pub github_client_id: Option<String>,
+    /// GitHub `OAuth2` client secret (required for token exchange)
+    pub github_client_secret: Option<String>,
 }
 
 impl AppConfig {
@@ -93,11 +95,23 @@ impl AppConfig {
         };
         let google_client_id = get_optional_env("GOOGLE_CLIENT_ID");
         let github_client_id = get_optional_env("GITHUB_CLIENT_ID");
+        let github_client_secret = get_optional_env("GITHUB_CLIENT_SECRET");
 
         if google_client_id.is_none() && github_client_id.is_none() {
             info!(
                 "No OAuth providers configured. Set GOOGLE_CLIENT_ID or GITHUB_CLIENT_ID to enable OAuth."
             );
+        }
+
+        // Log OAuth configuration status (without exposing secrets)
+        if github_client_id.is_some() {
+            if github_client_secret.is_some() {
+                info!("GitHub OAuth configured with client secret");
+            } else {
+                warn!(
+                    "GitHub OAuth client ID configured but CLIENT_SECRET is missing! OAuth will fail."
+                );
+            }
         }
 
         Ok(Self {
@@ -115,6 +129,7 @@ impl AppConfig {
             ),
             google_client_id,
             github_client_id,
+            github_client_secret,
         })
     }
 
@@ -364,6 +379,18 @@ fn greet(name: &str) -> String {
     format!("Hello, {name}! You've been greeted from Rust!")
 }
 
+#[cfg(target_os = "linux")]
+fn register_deep_links_for_linux(app: &mut tauri::App) {
+    use tauri_plugin_deep_link::DeepLinkExt;
+    match app.deep_link().register_all() {
+        Ok(()) => tracing::info!("Deep links registered for Linux development"),
+        Err(e) => tracing::warn!("Deep link registration failed: {}", e),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn register_deep_links_for_linux(_app: &mut tauri::App) {}
+
 async fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     use migration::{Migrator, MigratorTrait};
 
@@ -403,10 +430,17 @@ async fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
     ));
 
     // Set up OAuth state first to consume config fields without cloning
+    // Use localhost redirect in dev mode for better Linux compatibility
+    let redirect_uri = if cfg!(debug_assertions) {
+        crate::constants::OAUTH_REDIRECT_URI_DEV.to_string()
+    } else {
+        crate::constants::OAUTH_REDIRECT_URI.to_string()
+    };
     let oauth_config = infra::services::oauth::OAuthConfig {
         google_client_id: config.google_client_id.clone(),
         github_client_id: config.github_client_id.clone(),
-        redirect_uri: crate::constants::OAUTH_REDIRECT_URI.to_string(),
+        github_client_secret: config.github_client_secret.clone(),
+        redirect_uri,
         google_auth_url: None,
         google_token_url: None,
         google_userinfo_url: None,
@@ -459,8 +493,19 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_secure_storage::init())
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // Handle deep link when a second instance is launched
+            // Find the deep link URL in argv (it starts with aroeira://)
+            if let Some(url) = argv.iter().find(|arg| arg.starts_with("aroeira://")) {
+                tracing::info!("Received deep link in single-instance handler: {}", url);
+                // Emit event to frontend to process the deep link
+                let _ = app.emit("deep-link", url.clone());
+            }
+        }))
         .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
+            register_deep_links_for_linux(app);
+
             // Use block_on to await async setup within the synchronous setup hook.
             // Added timeout to prevent indefinite blocking during startup.
             // This is acceptable in the setup phase since it happens once during app initialization
