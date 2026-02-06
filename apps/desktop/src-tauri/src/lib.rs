@@ -429,13 +429,10 @@ async fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
         app.handle().clone(),
     ));
 
-    // Set up OAuth state first to consume config fields without cloning
-    // Use localhost redirect in dev mode for better Linux compatibility
-    let redirect_uri = if cfg!(debug_assertions) {
-        crate::constants::OAUTH_REDIRECT_URI_DEV.to_string()
-    } else {
-        crate::constants::OAUTH_REDIRECT_URI.to_string()
-    };
+    // Set up OAuth state first to consume config fields without cloning.
+    // Use the deep-link scheme in both dev and release; opening the flow in the system browser
+    // requires a custom-scheme callback (or an explicit loopback HTTP listener).
+    let redirect_uri = crate::constants::OAUTH_REDIRECT_URI.to_string();
     let oauth_config = infra::services::oauth::OAuthConfig {
         google_client_id: config.google_client_id.clone(),
         github_client_id: config.github_client_id.clone(),
