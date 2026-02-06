@@ -35,13 +35,15 @@ static ASYNC_HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::Lazy
 /// Configuration for `OAuth2` providers.
 ///
 /// Client IDs are loaded from environment variables.
-/// No client secrets are used (public client with PKCE).
+/// GitHub requires a client secret even for PKCE flows.
 #[derive(Debug, Clone)]
 pub struct OAuthConfig {
     /// Google `OAuth2` client ID (optional)
     pub google_client_id: Option<String>,
     /// GitHub `OAuth2` client ID (optional)
     pub github_client_id: Option<String>,
+    /// GitHub `OAuth2` client secret (required for token exchange)
+    pub github_client_secret: Option<String>,
     /// Redirect URI for OAuth callbacks (e.g., `<aroeira://auth/callback>`)
     pub redirect_uri: String,
 
@@ -62,6 +64,7 @@ impl OAuthConfig {
     /// Looks for:
     /// - `GOOGLE_CLIENT_ID`
     /// - `GITHUB_CLIENT_ID`
+    /// - `GITHUB_CLIENT_SECRET` (required for GitHub token exchange)
     #[must_use]
     pub fn from_env(redirect_uri: String) -> Self {
         let get_optional_env = |key: &str| -> Option<String> {
@@ -74,6 +77,7 @@ impl OAuthConfig {
         Self {
             google_client_id: get_optional_env("GOOGLE_CLIENT_ID"),
             github_client_id: get_optional_env("GITHUB_CLIENT_ID"),
+            github_client_secret: get_optional_env("GITHUB_CLIENT_SECRET"),
             redirect_uri,
             google_auth_url: None,
             google_token_url: None,
@@ -268,11 +272,11 @@ impl OAuthServiceImpl {
         }
     }
 
-    /// Gets client ID and URLs for a provider.
+    /// Gets client ID, secret (for GitHub), and URLs for a provider.
     fn get_provider_config(
         &self,
         provider: AuthProvider,
-    ) -> Result<(&str, &str, &str), OAuthError> {
+    ) -> Result<(&str, Option<&str>, &str, &str), OAuthError> {
         match provider {
             AuthProvider::Google => {
                 let client_id = self
@@ -282,6 +286,7 @@ impl OAuthServiceImpl {
                     .ok_or_else(|| OAuthError::ProviderNotConfigured("Google".to_string()))?;
                 Ok((
                     client_id.as_str(),
+                    None, // Google uses PKCE without client secret
                     self.config
                         .google_auth_url
                         .as_deref()
@@ -298,8 +303,17 @@ impl OAuthServiceImpl {
                     .github_client_id
                     .as_ref()
                     .ok_or_else(|| OAuthError::ProviderNotConfigured("GitHub".to_string()))?;
+                let client_secret = self
+                    .config
+                    .github_client_secret
+                    .as_ref()
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| OAuthError::ProviderNotConfigured(
+                        "GitHub client secret is not configured. Please set GITHUB_CLIENT_SECRET in your .env file. Get it from https://github.com/settings/developers".to_string()
+                    ))?;
                 Ok((
                     client_id.as_str(),
+                    Some(client_secret.as_str()),
                     self.config
                         .github_auth_url
                         .as_deref()
@@ -531,7 +545,8 @@ impl OAuthService for OAuthServiceImpl {
     ) -> Result<(String, OAuthPkceSession), OAuthError> {
         debug!("Generating authorization URL for {:?}", provider);
 
-        let (client_id, auth_url_str, token_url_str) = self.get_provider_config(provider)?;
+        let (client_id, _client_secret, auth_url_str, token_url_str) =
+            self.get_provider_config(provider)?;
 
         // Parse URLs
         let auth_url = AuthUrl::new(auth_url_str.to_string()).map_err(|e| {
@@ -579,7 +594,7 @@ impl OAuthService for OAuthServiceImpl {
 
         validate_session(session)?;
 
-        let (client_id, auth_url_str, token_url_str) =
+        let (client_id, client_secret, auth_url_str, token_url_str) =
             self.get_provider_config(session.provider)?;
 
         // Parse URLs
@@ -592,9 +607,16 @@ impl OAuthService for OAuthServiceImpl {
 
         let client_id = ClientId::new(client_id.to_string());
 
-        let token_result =
-            perform_token_exchange(client_id, auth_url, token_url, redirect_url, session, code)
-                .await?;
+        let token_result = perform_token_exchange(
+            client_id,
+            client_secret,
+            auth_url,
+            token_url,
+            redirect_url,
+            session,
+            code,
+        )
+        .await?;
 
         let access_token = token_result.access_token().secret();
 
@@ -732,6 +754,7 @@ fn validate_session(session: &OAuthPkceSession) -> Result<(), OAuthError> {
 
 async fn perform_token_exchange(
     client_id: ClientId,
+    client_secret: Option<&str>,
     auth_url: AuthUrl,
     token_url: TokenUrl,
     redirect_url: RedirectUrl,
@@ -750,6 +773,12 @@ async fn perform_token_exchange(
     // Perform token exchange with timeout and provider-specific adjustments
     let exchange_future = async {
         if session.provider == AuthProvider::GitHub {
+            // GitHub requires client secret even with PKCE
+            let client = if let Some(secret) = client_secret {
+                client.set_client_secret(oauth2::ClientSecret::new(secret.to_string()))
+            } else {
+                client
+            };
             let verifier = PkceCodeVerifier::new(session.pkce_verifier.clone());
             let token_request = client
                 .exchange_code(AuthorizationCode::new(code.clone()))
