@@ -118,7 +118,7 @@ Get-ItemProperty "Registry::HKEY_CLASSES_ROOT\aroeira"
    ```bash
    cargo tauri dev
    # ou
-   ./target/release/aroeira
+   ./target/release/aroeira`
    ```
 
 2. **Clicar em "Sign in with Google"** no frontend
