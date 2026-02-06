@@ -7,5 +7,7 @@ fn main() {
 }
 
 fn load_env_for_oauth_config() {
-    let _ = dotenvy::dotenv();
+    if cfg!(debug_assertions) {
+        let _ = dotenvy::dotenv();
+    }
 }
