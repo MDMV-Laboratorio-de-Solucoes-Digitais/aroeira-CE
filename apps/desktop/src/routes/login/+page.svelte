@@ -120,8 +120,8 @@
 
     const isAroeiraProtocol =
       parsed.protocol === "aroeira:" &&
-      ((parsed.hostname === "auth" && parsed.pathname === "/callback") ||
-        parsed.pathname === "/auth/callback");
+      parsed.hostname === "auth" &&
+      parsed.pathname === "/callback";
 
     const isLocalhostDev =
       import.meta.env.DEV &&
