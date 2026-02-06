@@ -68,6 +68,7 @@ tauri-plugin-shell = "2.3.4"
 tauri-plugin-opener = "2.5"
 tauri-plugin-secure-storage = "1.4"
 tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = "2"
 
 # Cryptography & Security
 bcrypt = "0.18.0"
@@ -105,6 +106,7 @@ libc = "0.2"
 rand = "0.9"
 winreg = "0.55"
 keyring = "3.6.3"
+dotenvy = "0.15"
 
 # Testing
 proptest = "1.9"
