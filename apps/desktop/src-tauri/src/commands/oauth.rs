@@ -873,17 +873,14 @@ impl OAuthSessionStore {
                     }
                 });
             } else {
-                // Fallback to a standard thread if not in a Tokio runtime context to avoid blocking.
-                let pkce_storage_clone = pkce_storage.clone();
-                std::thread::spawn(move || {
-                    if let Err(e) = pkce_storage_clone.delete_session(&state_hash_clone) {
-                        tracing::warn!(
-                            target: "security",
-                            state_hash = %state_hash_clone,
-                            "Failed to delete evicted session from keyring: {e}"
-                        );
-                    }
-                });
+                // No Tokio runtime available; avoid spawning unbounded OS threads.
+                if let Err(e) = pkce_storage.delete_session(&state_hash_clone) {
+                    tracing::warn!(
+                        target: "security",
+                        state_hash = %state_hash_clone,
+                        "Failed to delete evicted session from keyring: {e}"
+                    );
+                }
             }
         }
 
@@ -940,12 +937,38 @@ impl Default for OAuthSessionStore {
 fn parse_query_preserving_plus(query: &str) -> Result<Vec<(String, String)>, String> {
     const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
 
+    fn validate_strict_percent_encoding(s: &str) -> Result<(), String> {
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' {
+                if i + 2 >= bytes.len() {
+                    return Err(GENERIC_ERROR.to_string());
+                }
+                let h1 = bytes[i + 1];
+                let h2 = bytes[i + 2];
+                let is_hex = |c: u8| c.is_ascii_hexdigit();
+                if !is_hex(h1) || !is_hex(h2) {
+                    return Err(GENERIC_ERROR.to_string());
+                }
+                i += 3;
+                continue;
+            }
+            i += 1;
+        }
+        Ok(())
+    }
+
     let mut query_pairs = Vec::new();
     for pair in query.split('&') {
         if pair.is_empty() {
             continue;
         }
         let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+
+        validate_strict_percent_encoding(k)?;
+        validate_strict_percent_encoding(v)?;
+
         let k = percent_encoding::percent_decode_str(k)
             .decode_utf8()
             .map_err(|_| GENERIC_ERROR.to_string())?
