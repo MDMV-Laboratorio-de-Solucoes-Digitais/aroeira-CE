@@ -109,7 +109,7 @@ impl AppConfig {
                 info!("GitHub OAuth configured with client secret");
             } else {
                 warn!(
-                    "GitHub OAuth client ID configured but CLIENT_SECRET is missing! OAuth will fail."
+                    "GitHub OAuth client ID configured but GITHUB_CLIENT_SECRET is missing! OAuth will fail."
                 );
             }
         }
