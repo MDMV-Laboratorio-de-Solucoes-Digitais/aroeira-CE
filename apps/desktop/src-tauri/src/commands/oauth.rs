@@ -283,10 +283,11 @@ fn validate_and_parse_callback(
         );
     })?;
 
+    let state_hash_for_log = hex::encode(Sha256::digest(state_param.as_bytes()));
     tracing::info!(
         target: "oauth_debug",
         request_id = %request_id,
-        state_prefix = %state_param.chars().take(8).collect::<String>(),
+        state_hash = %state_hash_for_log,
         "Callback parsed successfully"
     );
 
@@ -555,28 +556,6 @@ async fn retrieve_cold_session(
                 "Invalid or expired OAuth session. Please try again.".to_string()
             })?;
 
-    // Consume-once: delete from keyring regardless of parse outcome to prevent replay.
-    let pkce_storage = oauth_state.pkce_storage.clone();
-    let state_hash_clone = state_hash.to_string();
-    match tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash_clone)).await
-    {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => {
-            tracing::warn!(
-                target: "security",
-                request_id = %request_id,
-                "Failed to delete persisted OAuth session from keyring: {e}. Session will expire naturally but cleanup is incomplete."
-            );
-        }
-        Err(e) => {
-            tracing::warn!(
-                target: "security",
-                request_id = %request_id,
-                "Failed to delete persisted OAuth session from keyring due to task failure: {e}. Session will expire naturally but cleanup is incomplete."
-            );
-        }
-    }
-
     if session_json.len() > MAX_SESSION_JSON_BYTES {
         tracing::warn!(
             target: "security",
@@ -609,6 +588,28 @@ async fn retrieve_cold_session(
             "OAuth authentication failed: invalid or expired session"
         );
         return Err("Invalid or expired OAuth session. Please try again.".to_string());
+    }
+
+    // Consume-once: delete from keyring only after successful validation.
+    let pkce_storage = oauth_state.pkce_storage.clone();
+    let state_hash_clone = state_hash.to_string();
+    match tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash_clone)).await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            tracing::warn!(
+                target: "security",
+                request_id = %request_id,
+                "Failed to delete persisted OAuth session from keyring: {e}. Session will expire naturally but cleanup is incomplete."
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "security",
+                request_id = %request_id,
+                "Failed to delete persisted OAuth session from keyring due to task failure: {e}. Session will expire naturally but cleanup is incomplete."
+            );
+        }
     }
 
     Ok(recovered)
@@ -873,14 +874,13 @@ impl OAuthSessionStore {
                     }
                 });
             } else {
-                // No Tokio runtime available; avoid spawning unbounded OS threads.
-                if let Err(e) = pkce_storage.delete_session(&state_hash_clone) {
-                    tracing::warn!(
-                        target: "security",
-                        state_hash = %state_hash_clone,
-                        "Failed to delete evicted session from keyring: {e}"
-                    );
-                }
+                // No Tokio runtime available; we can't spawn a blocking task without creating a new runtime.
+                // The evicted session will not be deleted from the keyring and will be left to expire naturally.
+                tracing::warn!(
+                    target: "security",
+                    state_hash = %state_hash_clone,
+                    "No Tokio runtime found to clean up evicted session from keyring. It will be left to expire."
+                );
             }
         }
 
