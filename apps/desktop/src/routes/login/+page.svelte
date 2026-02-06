@@ -1,26 +1,26 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
-  import { fly } from "svelte/transition";
+  import { goto } from "$app/navigation";
+  import { resolve } from "$app/paths";
+  import { logAuditEvent, setSessionId } from "$lib/audit";
   import { Button } from "$lib/components/ui/button";
   import * as Card from "$lib/components/ui/card";
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
-  import { invoke } from "@tauri-apps/api/core";
-  import { Lock, ShieldCheck, X, Check, Circle, Loader2 } from "lucide-svelte";
-  import { goto } from "$app/navigation";
-  import { resolve } from "$app/paths";
-  import { logAuditEvent, setSessionId } from "$lib/audit";
   import { handleError } from "$lib/logger";
   import {
-    startOAuthFlow,
-    handleOAuthCallback,
     getOAuthAvailability,
+    handleOAuthCallback,
     openOAuthAuthUrl,
-    type OAuthProvider,
+    startOAuthFlow,
     type OAuthAvailability,
+    type OAuthProvider,
   } from "$lib/oauth";
-  import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
+  import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
+  import { Check, Circle, Loader2, Lock, ShieldCheck, X } from "lucide-svelte";
+  import { onDestroy, onMount } from "svelte";
+  import { fly } from "svelte/transition";
 
   // Helper function to redact email addresses for audit logging
   function redactEmail(email: string): string {
@@ -118,10 +118,17 @@
       return Promise.resolve();
     }
 
-    const isOAuthCallback =
+    const isAroeiraProtocol =
       parsed.protocol === "aroeira:" &&
       ((parsed.hostname === "auth" && parsed.pathname === "/callback") ||
         parsed.pathname === "/auth/callback");
+
+    const isLocalhostDev =
+      parsed.protocol === "http:" &&
+      parsed.hostname === "localhost" &&
+      parsed.pathname === "/auth/callback";
+
+    const isOAuthCallback = isAroeiraProtocol || isLocalhostDev;
 
     console.log("Parsed URL:", {
       protocol: parsed.protocol,
