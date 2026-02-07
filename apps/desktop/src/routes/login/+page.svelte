@@ -53,6 +53,20 @@
     return "authentication_error";
   }
 
+  /**
+   * Reset OAuth pending state consistently.
+   * Clears loading state, localStorage items, timeout, and optionally sets error message.
+   */
+  function resetOAuthState(message?: string): void {
+    oauthLoading = null;
+    localStorage.removeItem("oauth_pending_provider");
+    localStorage.removeItem("oauth_pending_state");
+    localStorage.removeItem("oauth_pending_started_at");
+    if (message) error = message;
+    if (oauthTimeout) clearTimeout(oauthTimeout);
+    oauthTimeout = null;
+  }
+
   let isLogin = $state(true);
   let loading = $state(false);
   let oauthLoading = $state<OAuthProvider | null>(null);
@@ -95,13 +109,7 @@
     }
     // Defensive bound to avoid processing extremely large deep-link payloads
     if (rawUrl.length > 8192) {
-      oauthLoading = null;
-      localStorage.removeItem("oauth_pending_provider");
-      localStorage.removeItem("oauth_pending_state");
-      localStorage.removeItem("oauth_pending_started_at");
-      error = "Authentication callback was invalid. Please try again.";
-      if (oauthTimeout) clearTimeout(oauthTimeout);
-      oauthTimeout = null;
+      resetOAuthState("Authentication callback was invalid. Please try again.");
       return Promise.resolve();
     }
 
@@ -111,12 +119,9 @@
     } catch {
       // If this looks like our scheme but isn't parseable, treat as a failed callback
       if (rawUrl.startsWith("aroeira:")) {
-        oauthLoading = null;
-        localStorage.removeItem("oauth_pending_provider");
-        localStorage.removeItem("oauth_pending_state");
-        error = "Authentication callback was invalid. Please try again.";
-        if (oauthTimeout) clearTimeout(oauthTimeout);
-        oauthTimeout = null;
+        resetOAuthState(
+          "Authentication callback was invalid. Please try again.",
+        );
       }
       return Promise.resolve();
     }
@@ -177,13 +182,9 @@
         // Check for OAuth provider errors (user denied/cancelled)
         const oauthError = callbackUrl.searchParams.get("error");
         if (oauthError) {
-          oauthLoading = null;
-          localStorage.removeItem("oauth_pending_provider");
-          localStorage.removeItem("oauth_pending_state");
-          localStorage.removeItem("oauth_pending_started_at");
-          error = "Authentication was cancelled or denied. Please try again.";
-          if (oauthTimeout) clearTimeout(oauthTimeout);
-          oauthTimeout = null;
+          resetOAuthState(
+            "Authentication was cancelled or denied. Please try again.",
+          );
           return;
         }
 
@@ -199,13 +200,9 @@
           });
         }
         if (!code) {
-          oauthLoading = null;
-          localStorage.removeItem("oauth_pending_provider");
-          localStorage.removeItem("oauth_pending_state");
-          localStorage.removeItem("oauth_pending_started_at");
-          error = "Authentication callback was invalid. Please try again.";
-          if (oauthTimeout) clearTimeout(oauthTimeout);
-          oauthTimeout = null;
+          resetOAuthState(
+            "Authentication callback was invalid. Please try again.",
+          );
           return;
         }
 
@@ -215,13 +212,7 @@
         const maxAgeMs = 2 * 60 * 1000;
 
         if (!Number.isFinite(startedAt) || Date.now() - startedAt > maxAgeMs) {
-          oauthLoading = null;
-          localStorage.removeItem("oauth_pending_provider");
-          localStorage.removeItem("oauth_pending_state");
-          localStorage.removeItem("oauth_pending_started_at");
-          error = "Authentication session expired. Please try again.";
-          if (oauthTimeout) clearTimeout(oauthTimeout);
-          oauthTimeout = null;
+          resetOAuthState("Authentication session expired. Please try again.");
           return;
         }
 
@@ -236,23 +227,26 @@
           });
         }
         if (!pendingState || !callbackState || pendingState !== callbackState) {
-          oauthLoading = null;
-          localStorage.removeItem("oauth_pending_provider");
-          localStorage.removeItem("oauth_pending_state");
-          localStorage.removeItem("oauth_pending_started_at");
-          error = "Authentication session was invalid. Please try again.";
-          if (oauthTimeout) clearTimeout(oauthTimeout);
-          oauthTimeout = null;
+          resetOAuthState(
+            "Authentication session was invalid. Please try again.",
+          );
           return;
         }
 
         error = "";
 
+        // Normalize localhost dev callback to aroeira:// scheme for backend consistency
+        const callbackForBackend = isLocalhostDev
+          ? `aroeira://auth/callback${parsed.search}`
+          : rawUrl;
+
         try {
           if (import.meta.env.DEV) {
-            console.debug("Calling handleOAuthCallback with backend");
+            console.debug("Calling handleOAuthCallback with backend", {
+              normalized: isLocalhostDev,
+            });
           }
-          const user = await handleOAuthCallback(rawUrl);
+          const user = await handleOAuthCallback(callbackForBackend);
           console.log("OAuth callback successful, user:", {
             provider: user.provider,
             email: redactEmail(user.email),
@@ -262,9 +256,8 @@
             email: redactEmail(user.email),
           });
           setSessionId();
-          localStorage.removeItem("oauth_pending_provider");
-          localStorage.removeItem("oauth_pending_state");
-          localStorage.removeItem("oauth_pending_started_at");
+          // Clean up OAuth state on success
+          resetOAuthState();
           await goto(resolve("/dashboard"), { replaceState: true });
         } catch (err: unknown) {
           console.error("OAuth callback failed:", err);
@@ -273,12 +266,7 @@
           });
           error = handleError(err, "OAuth authentication");
         } finally {
-          oauthLoading = null;
-          localStorage.removeItem("oauth_pending_provider");
-          localStorage.removeItem("oauth_pending_state");
-          localStorage.removeItem("oauth_pending_started_at");
-          if (oauthTimeout) clearTimeout(oauthTimeout);
-          oauthTimeout = null;
+          resetOAuthState();
         }
       });
 
@@ -391,10 +379,7 @@
     }
 
     if (oauthLoading !== null) {
-      oauthLoading = null;
-      localStorage.removeItem("oauth_pending_provider");
-      localStorage.removeItem("oauth_pending_state");
-      localStorage.removeItem("oauth_pending_started_at");
+      resetOAuthState();
     }
   });
 
@@ -483,11 +468,7 @@
     oauthTimeout = setTimeout(
       () => {
         if (oauthLoading === provider) {
-          oauthLoading = null;
-          localStorage.removeItem("oauth_pending_provider");
-          localStorage.removeItem("oauth_pending_state");
-          localStorage.removeItem("oauth_pending_started_at");
-          error = "Authentication timed out. Please try again.";
+          resetOAuthState("Authentication timed out. Please try again.");
         }
         oauthTimeout = null;
       },
@@ -508,12 +489,7 @@
         error: sanitizeErrorForAudit(err),
       });
       error = handleError(err, `${provider} authentication`);
-      oauthLoading = null;
-      localStorage.removeItem("oauth_pending_provider");
-      localStorage.removeItem("oauth_pending_state");
-      localStorage.removeItem("oauth_pending_started_at");
-      if (oauthTimeout) clearTimeout(oauthTimeout);
-      oauthTimeout = null;
+      resetOAuthState();
     }
   }
 </script>
