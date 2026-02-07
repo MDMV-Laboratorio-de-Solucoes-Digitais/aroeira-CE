@@ -17,8 +17,8 @@ pub async fn github_token_exchange(
         .map_err(|e| AppError::BadRequest(format!("Validation failed: {e}")))?;
 
     tracing::info!(
-        "Processing GitHub token exchange for state: {}",
-        request.state
+        "Processing GitHub token exchange (state_len={})",
+        request.state.len()
     );
 
     let client_id = state.config.github_client_id.clone();
@@ -81,8 +81,8 @@ pub async fn github_token_exchange(
     })?;
 
     tracing::info!(
-        "GitHub token exchange successful for state: {}",
-        request.state
+        "GitHub token exchange successful (state_len={})",
+        request.state.len()
     );
 
     Ok(Json(GitHubTokenResponse {

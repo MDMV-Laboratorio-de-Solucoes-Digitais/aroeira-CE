@@ -2,7 +2,7 @@ use axum::{http::StatusCode, response::IntoResponse, Router};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower::ServiceBuilder;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
@@ -46,16 +46,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         http_client,
     };
 
-    // Parse allowed origins from config
-    let allowed_origins: Vec<axum::http::HeaderValue> = state
-        .config
-        .allowed_origins
-        .iter()
-        .filter_map(|o| o.parse().ok())
-        .collect::<Vec<_>>();
-
+    // Build CORS policy from config (supports exact origins and `*.` suffix entries)
+    let allowed = state.config.allowed_origins.clone();
     let cors = CorsLayer::new()
-        .allow_origin(allowed_origins)
+        .allow_origin(AllowOrigin::predicate(
+            move |origin: &axum::http::HeaderValue, _req: &axum::http::request::Parts| {
+                let Ok(origin_str) = origin.to_str() else {
+                    return false;
+                };
+                // `Origin` is a serialized scheme+host(+port) (no paths)
+                let Ok(origin_url) = url::Url::parse(origin_str) else {
+                    return false;
+                };
+
+                let host = origin_url
+                    .host_str()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                let scheme = origin_url.scheme();
+
+                // Only allow http/https origins
+                if scheme != "http" && scheme != "https" {
+                    return false;
+                }
+
+                allowed.iter().any(|rule| {
+                    let rule = rule.trim();
+                    if let Ok(rule_url) = url::Url::parse(rule) {
+                        // Exact match for fully-qualified origins
+                        origin_str.eq_ignore_ascii_case(rule_url.as_str().trim_end_matches('/'))
+                    } else if let Some(suffix) = rule.strip_prefix("https://*.") {
+                        // Controlled wildcard: https://*.example.com
+                        scheme == "https"
+                            && host.ends_with(&format!(".{}", suffix.to_ascii_lowercase()))
+                    } else if let Some(suffix) = rule.strip_prefix("http://*.") {
+                        scheme == "http"
+                            && host.ends_with(&format!(".{}", suffix.to_ascii_lowercase()))
+                    } else {
+                        false
+                    }
+                })
+            },
+        ))
         .allow_methods([axum::http::Method::POST])
         .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::ACCEPT]);
 
@@ -67,9 +99,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .layer(TraceLayer::new_for_http())
                 .layer(cors),
         )
-        .with_state(state);
+        .with_state(state.clone());
 
-    let addr: SocketAddr = "0.0.0.0:3000".parse()?;
+    let addr: SocketAddr = state.config.server_bind_address.parse()?;
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
     info!("Server listening on {}", addr);
