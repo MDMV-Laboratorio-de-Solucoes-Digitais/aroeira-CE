@@ -324,12 +324,20 @@
     // Listen for deep links while the app is running (warm start)
     try {
       unlistenDeepLink = await onOpenUrl(async (urls) => {
-        console.log("Deep link received:", urls);
+        // Never log raw URLs (may contain OAuth code/state)
+        if (import.meta.env.DEV) {
+          console.debug("Deep link received", {
+            count: urls.length,
+            lengths: urls.map((u) => u.length),
+          });
+        }
         for (const url of urls) {
           await processOAuthCallback(url);
         }
       });
-      console.log("Deep link listener setup successfully");
+      if (import.meta.env.DEV) {
+        console.debug("Deep link listener setup successfully");
+      }
     } catch (err) {
       console.error(
         "Failed to setup deep link listener",
@@ -342,11 +350,18 @@
       unlistenDeepLinkEvent = await listen<string>(
         "deep-link",
         async (event) => {
-          console.log("Deep link event received:", event.payload);
+          // Never log payload (may contain OAuth code/state)
+          if (import.meta.env.DEV) {
+            console.debug("Deep link event received", {
+              length: event.payload?.length ?? 0,
+            });
+          }
           await processOAuthCallback(event.payload);
         },
       );
-      console.log("Deep link event listener setup successfully");
+      if (import.meta.env.DEV) {
+        console.debug("Deep link event listener setup successfully");
+      }
     } catch (err) {
       console.error(
         "Failed to setup deep link event listener",

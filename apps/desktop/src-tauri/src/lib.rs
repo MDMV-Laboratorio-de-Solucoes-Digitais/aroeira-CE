@@ -502,12 +502,9 @@ pub fn run() {
                 }
 
                 // Strictly validate scheme/host/path to prevent prefix bypasses
-                let parsed = match url::Url::parse(url) {
-                    Ok(u) => u,
-                    Err(_) => {
-                        tracing::warn!("Ignoring malformed deep link argv");
-                        return;
-                    }
+                let Ok(parsed) = url::Url::parse(url) else {
+                    tracing::warn!("Ignoring malformed deep link argv");
+                    return;
                 };
 
                 let is_expected = parsed.scheme() == "aroeira"
