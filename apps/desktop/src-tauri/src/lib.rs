@@ -94,7 +94,7 @@ impl AppConfig {
                 .filter(|s| !s.is_empty())
         };
         let google_client_id = get_optional_env("GOOGLE_CLIENT_ID");
-        let github_client_id = get_optional_env("GITHUB_CLIENT_ID");
+        let mut github_client_id = get_optional_env("GITHUB_CLIENT_ID");
         let github_client_secret = get_optional_env("GITHUB_CLIENT_SECRET").map(Into::into);
 
         if google_client_id.is_none() && github_client_id.is_none() {
@@ -104,13 +104,15 @@ impl AppConfig {
         }
 
         // Log OAuth configuration status (without exposing secrets)
+        // If GitHub client secret is missing, disable GitHub OAuth to prevent broken flows
         if github_client_id.is_some() {
             if github_client_secret.is_some() {
                 info!("GitHub OAuth configured with client secret");
             } else {
                 warn!(
-                    "GitHub OAuth client ID configured but GITHUB_CLIENT_SECRET is missing! OAuth will fail."
+                    "GitHub OAuth client ID configured but GITHUB_CLIENT_SECRET is missing; disabling GitHub OAuth."
                 );
+                github_client_id = None;
             }
         }
 
@@ -509,7 +511,15 @@ pub fn run() {
                     return;
                 }
 
-                tracing::info!("Received deep link in single-instance handler: {}", url);
+                // Avoid logging full URL (may contain OAuth code/state)
+                let redacted = match url.split_once('?') {
+                    Some((base, _)) => format!("{base}?<redacted>"),
+                    None => url.clone(),
+                };
+                tracing::info!(
+                    "Received deep link in single-instance handler: {}",
+                    redacted
+                );
                 let _ = app.emit("deep-link", url.clone());
             }
         }))
