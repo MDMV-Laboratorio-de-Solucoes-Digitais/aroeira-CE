@@ -7,7 +7,9 @@ fn main() {
 }
 
 fn load_env_for_oauth_config() {
-    if cfg!(debug_assertions) {
-        let _ = dotenvy::dotenv();
+    #[cfg(debug_assertions)]
+    if let Err(e) = dotenvy::dotenv() {
+        // Using eprintln as tracing might not be initialized yet.
+        eprintln!("[WARN] Failed to load .env file: {e}");
     }
 }
