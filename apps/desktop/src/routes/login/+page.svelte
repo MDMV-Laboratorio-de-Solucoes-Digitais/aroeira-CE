@@ -89,7 +89,10 @@
    * This handles the aroeira://auth/callback URLs.
    */
   function processOAuthCallback(rawUrl: string): Promise<void> {
-    console.log("Processing OAuth callback:", rawUrl.substring(0, 100) + "...");
+    // Only emit minimal info; never include code/state/raw URL
+    if (import.meta.env.DEV) {
+      console.debug("Processing OAuth callback", { length: rawUrl.length });
+    }
     // Defensive bound to avoid processing extremely large deep-link payloads
     if (rawUrl.length > 8192) {
       oauthLoading = null;
@@ -131,16 +134,20 @@
 
     const isOAuthCallback = isAroeiraProtocol || isLocalhostDev;
 
-    console.log("Parsed URL:", {
-      protocol: parsed.protocol,
-      hostname: parsed.hostname,
-      pathname: parsed.pathname,
-      isOAuthCallback,
-    });
+    if (import.meta.env.DEV) {
+      console.debug("Parsed URL", {
+        protocol: parsed.protocol,
+        hostname: parsed.hostname,
+        pathname: parsed.pathname,
+        isOAuthCallback,
+      });
+    }
 
     if (!isOAuthCallback) {
       // Ignore unrelated deep links; don't cancel an in-progress OAuth flow.
-      console.log("Not an OAuth callback, ignoring");
+      if (import.meta.env.DEV) {
+        console.debug("Not an OAuth callback, ignoring");
+      }
       return Promise.resolve();
     }
 
@@ -183,12 +190,14 @@
         // Validate callback contains authorization code
         const code = callbackUrl.searchParams.get("code");
         const state = callbackUrl.searchParams.get("state");
-        console.log("OAuth callback params:", {
-          hasCode: !!code,
-          hasState: !!state,
-          codeLength: code?.length,
-          stateLength: state?.length,
-        });
+        if (import.meta.env.DEV) {
+          console.debug("OAuth callback params", {
+            hasCode: !!code,
+            hasState: !!state,
+            codeLength: code?.length,
+            stateLength: state?.length,
+          });
+        }
         if (!code) {
           oauthLoading = null;
           localStorage.removeItem("oauth_pending_provider");
@@ -219,11 +228,13 @@
         // Validate state before invoking backend exchange
         const pendingState = localStorage.getItem("oauth_pending_state");
         const callbackState = callbackUrl.searchParams.get("state");
-        console.log("State validation:", {
-          pendingState: pendingState?.substring(0, 20) + "...",
-          callbackState: callbackState?.substring(0, 20) + "...",
-          match: pendingState === callbackState,
-        });
+        if (import.meta.env.DEV) {
+          console.debug("State validation", {
+            hasPendingState: !!pendingState,
+            hasCallbackState: !!callbackState,
+            match: pendingState === callbackState,
+          });
+        }
         if (!pendingState || !callbackState || pendingState !== callbackState) {
           oauthLoading = null;
           localStorage.removeItem("oauth_pending_provider");
@@ -238,7 +249,9 @@
         error = "";
 
         try {
-          console.log("Calling handleOAuthCallback with backend...");
+          if (import.meta.env.DEV) {
+            console.debug("Calling handleOAuthCallback with backend");
+          }
           const user = await handleOAuthCallback(rawUrl);
           console.log("OAuth callback successful, user:", {
             provider: user.provider,
