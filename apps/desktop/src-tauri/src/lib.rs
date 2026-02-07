@@ -501,10 +501,18 @@ pub fn run() {
                     return;
                 }
 
-                // Only forward expected callback URLs
-                let is_expected = url.starts_with("aroeira://auth/callback")
-                    || url.starts_with("aroeira://auth/callback?")
-                    || url.starts_with("aroeira://auth/callback/");
+                // Strictly validate scheme/host/path to prevent prefix bypasses
+                let parsed = match url::Url::parse(url) {
+                    Ok(u) => u,
+                    Err(_) => {
+                        tracing::warn!("Ignoring malformed deep link argv");
+                        return;
+                    }
+                };
+
+                let is_expected = parsed.scheme() == "aroeira"
+                    && parsed.host_str() == Some("auth")
+                    && parsed.path() == "/callback";
 
                 if !is_expected {
                     tracing::warn!("Ignoring unexpected deep link argv");
@@ -512,8 +520,13 @@ pub fn run() {
                 }
 
                 // Avoid logging full URL (may contain OAuth code/state)
-                let redacted = match url.split_once('?') {
-                    Some((base, _)) => format!("{base}?<redacted>"),
+                let redacted = match parsed.query() {
+                    Some(_) => format!(
+                        "{}://{}{}?<redacted>",
+                        parsed.scheme(),
+                        parsed.host_str().unwrap_or(""),
+                        parsed.path()
+                    ),
                     None => url.clone(),
                 };
                 tracing::info!(
