@@ -313,14 +313,14 @@ async fn exchange_code_for_user(
                 device_id = %device_id_hash,
                 "OAuth authentication failed: code exchange error"
             );
-            // Log error details only in debug mode to avoid leaking sensitive data
-            if cfg!(debug_assertions) {
+            // Only log debug OAuth details when explicitly enabled
+            if cfg!(debug_assertions) && std::env::var_os("AROEIRA_OAUTH_DEBUG").is_some() {
                 tracing::debug!(
-                    target: "oauth_debug",
-                    request_id = %request_id,
-                    error_details = %e,
-                    "OAuth code exchange failed for provider {:?}",
-                    session.provider
+                        target: "oauth_debug",
+                        request_id = %request_id,
+                        error_details = %e,
+                        "OAuth code exchange failed for provider {:?}",
+                        session.provider
                 );
             }
             Err("Authentication failed. Please try again.".to_string())
