@@ -697,13 +697,22 @@ async fn async_http_client(
         .request(request.method().clone(), request.uri().to_string())
         .body(request.body().clone());
 
+    let mut has_content_type = false;
     for (name, value) in request.headers() {
-        // Skip Content-Length as reqwest calculates it automatically from the body.
-        // Forwarding it can cause mismatches (e.g. if compression is involved) or errors.
         if name.as_str().eq_ignore_ascii_case("content-length") {
             continue;
         }
+        if name.as_str().eq_ignore_ascii_case("content-type") {
+            has_content_type = true;
+        }
         request_builder = request_builder.header(name, value);
+    }
+
+    if !has_content_type {
+        request_builder = request_builder.header(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
     }
 
     let mut response = request_builder.send().await?;
