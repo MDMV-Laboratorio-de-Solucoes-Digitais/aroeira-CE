@@ -2,7 +2,7 @@ use axum::{http::StatusCode, response::IntoResponse, Router};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower::ServiceBuilder;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
@@ -46,10 +46,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         http_client,
     };
 
+    // Parse allowed origins from config
+    let allowed_origins: Vec<axum::http::HeaderValue> = state
+        .config
+        .allowed_origins
+        .iter()
+        .filter_map(|o| o.parse().ok())
+        .collect::<Vec<_>>();
+
     let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_origin(allowed_origins)
+        .allow_methods([axum::http::Method::POST])
+        .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::ACCEPT]);
 
     let app = Router::new()
         .route("/health", axum::routing::get(health_check))
