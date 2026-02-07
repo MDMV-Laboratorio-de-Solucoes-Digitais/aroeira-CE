@@ -52,6 +52,7 @@ pub async fn github_token_exchange(
         ("code", request.code.as_str()),
         ("redirect_uri", request.redirect_uri.as_str()),
         ("state", request.state.as_str()),
+        ("code_verifier", request.code_verifier.as_str()),
     ];
 
     let response = state
