@@ -718,7 +718,10 @@ async fn async_http_client(
         request_builder = request_builder.header(name, value);
     }
 
-    if !has_content_type {
+    if !has_content_type
+        && *request.method() != oauth2::http::Method::GET
+        && !request.body().is_empty()
+    {
         request_builder = request_builder.header(
             reqwest::header::CONTENT_TYPE,
             reqwest::header::HeaderValue::from_static("application/x-www-form-urlencoded"),

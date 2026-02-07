@@ -74,17 +74,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let rule = rule.trim();
                     if let Ok(rule_url) = url::Url::parse(rule) {
                         // Exact match for fully-qualified origins
-                        origin_str.eq_ignore_ascii_case(rule_url.as_str().trim_end_matches('/'))
-                    } else if let Some(suffix) = rule.strip_prefix("https://*.") {
-                        // Controlled wildcard: https://*.example.com
-                        scheme == "https"
-                            && host.ends_with(&format!(".{}", suffix.to_ascii_lowercase()))
-                    } else if let Some(suffix) = rule.strip_prefix("http://*.") {
-                        scheme == "http"
-                            && host.ends_with(&format!(".{}", suffix.to_ascii_lowercase()))
-                    } else {
-                        false
+                        return origin_str
+                            .eq_ignore_ascii_case(rule_url.as_str().trim_end_matches('/'));
                     }
+
+                    if let Some(suffix) = rule.strip_prefix("https://*.") {
+                        // Controlled wildcard: https://*.example.com
+                        return scheme == "https"
+                            && host.ends_with(&format!(".{}", suffix.to_ascii_lowercase()));
+                    }
+
+                    if let Some(suffix) = rule.strip_prefix("http://*.") {
+                        return scheme == "http"
+                            && host.ends_with(&format!(".{}", suffix.to_ascii_lowercase()));
+                    }
+
+                    false
                 })
             },
         ))
