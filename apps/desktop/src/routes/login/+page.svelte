@@ -260,7 +260,7 @@
           resetOAuthState();
           await goto(resolve("/dashboard"), { replaceState: true });
         } catch (err: unknown) {
-          console.error("OAuth callback failed:", err);
+          console.error("OAuth callback failed:", sanitizeErrorForAudit(err));
           logAuditEvent("oauth_login", false, {
             error: sanitizeErrorForAudit(err),
           });
