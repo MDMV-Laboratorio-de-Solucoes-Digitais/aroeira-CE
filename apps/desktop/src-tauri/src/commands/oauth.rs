@@ -726,9 +726,9 @@ async fn authenticate_or_create_user(
     }
 }
 
-async fn generate_and_hash_oauth_password(provider: AuthProvider) -> Result<String, String> {
+async fn generate_and_hash_oauth_password(_provider: AuthProvider) -> Result<String, String> {
     // Generate a random high-entropy password that will never be shown to the user
-    let oauth_random_password = format!("oauth:{}:{}", provider, Uuid::new_v4());
+    let oauth_random_password = Uuid::new_v4().to_string();
 
     // Use infra's hash_password which handles security config correctly
     // spawn_blocking is required because bcrypt is CPU-intensive and would block the async runtime
