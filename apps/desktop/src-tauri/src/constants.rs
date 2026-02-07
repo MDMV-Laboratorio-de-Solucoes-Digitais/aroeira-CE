@@ -29,8 +29,6 @@ pub const DEFAULT_SQLITE_DB_URL: &str = "sqlite:data/Aroeira_local.db?mode=rwc";
 
 /// `OAuth2` constants
 pub const OAUTH_REDIRECT_URI: &str = "aroeira://auth/callback";
-/// Development fallback using localhost (more reliable on Linux)
-pub const OAUTH_REDIRECT_URI_DEV: &str = "http://localhost:1420/auth/callback";
 pub const OAUTH_CALLBACK_SCHEME: &str = "aroeira";
 pub const OAUTH_CALLBACK_HOST: &str = "auth";
 pub const OAUTH_CALLBACK_PATH: &str = "/callback";
