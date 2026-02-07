@@ -313,6 +313,19 @@ impl OAuthServiceImpl {
                     .ok_or_else(|| OAuthError::ProviderNotConfigured(
                         "GitHub client secret is not configured. Please set GITHUB_CLIENT_SECRET in your .env file. Get it from https://github.com/settings/developers".to_string()
                     ))?;
+
+                // SECURITY WARNING: GitHub requires a client secret for token exchange,
+                // which violates the "no embedded secrets" security constraint for desktop apps.
+                // This implementation stores the secret in the binary and should only be used
+                // in controlled environments. For production use, implement a BFF proxy pattern
+                // where the desktop sends the auth code to a backend service that performs the
+                // token exchange with the secret, then returns tokens to the desktop.
+                // See: https://github.com/MDMV-Laboratorio-de-Solucoes-Digitais/aroeira-template/blob/main/docs/OAUTH_BFF_PROXY.md
+                warn!(
+                    target: "security",
+                    "SECURITY: GitHub OAuth is using embedded client secret. This violates the 'no embedded secrets' constraint. Consider using a BFF proxy for production."
+                );
+
                 Ok((
                     client_id.as_str(),
                     Some(client_secret.expose_secret()),
@@ -628,7 +641,7 @@ impl OAuthService for OAuthServiceImpl {
             AuthProvider::GitHub => self.fetch_github_user(access_token).await,
         }?;
 
-        store_tokens(&self.token_storage, &user, &token_result).await;
+        store_tokens(&self.token_storage, &user, &token_result).await?;
 
         Ok(user)
     }
@@ -693,9 +706,12 @@ async fn async_http_client(
     // Use static client for connection pooling
     let client = &*ASYNC_HTTP_CLIENT;
 
-    let mut request_builder = client
-        .request(request.method().clone(), request.uri().to_string())
-        .body(request.body().clone());
+    let mut request_builder = client.request(request.method().clone(), request.uri().to_string());
+    // Only set body for methods that typically have one (POST, PUT, PATCH)
+    // GET requests should not have a body per HTTP/1.1 spec
+    if *request.method() != oauth2::http::Method::GET && !request.body().is_empty() {
+        request_builder = request_builder.body(request.body().clone());
+    }
 
     let mut has_content_type = false;
     for (name, value) in request.headers() {
@@ -844,7 +860,7 @@ async fn store_tokens(
         oauth2::EmptyExtraTokenFields,
         oauth2::basic::BasicTokenType,
     >,
-) {
+) -> Result<(), OAuthError> {
     let user_key = format!("{}:{}", user.provider, user.provider_user_id);
 
     // Hash user key for logging and storage to avoid PII leak in OS store/logs
@@ -874,15 +890,17 @@ async fn store_tokens(
     .map_err(|e| format!("Task join error: {e}"))
     .and_then(|r| r);
 
-    match store_result {
-        Ok(()) => debug!("Securely stored OAuth token for {}", user_key_hash),
-        Err(e) => {
-            warn!(
-                "OAuth token not stored in OS keyring (continuing without it): {}",
-                e
-            );
-        }
+    if let Err(e) = store_result {
+        warn!(
+            "OAuth token not stored in OS keyring (failing login): {}",
+            e
+        );
+        return Err(OAuthError::TokenRequestFailed(
+            "Failed to persist session securely".to_string(),
+        ));
     }
+    debug!("Securely stored OAuth token for {}", user_key_hash);
+    Ok(())
 }
 
 #[cfg(test)]
