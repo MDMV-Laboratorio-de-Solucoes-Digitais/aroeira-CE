@@ -461,13 +461,7 @@ pub async fn get_oauth_availability(
 ) -> Result<OAuthAvailability, String> {
     Ok(OAuthAvailability {
         google: oauth_state.oauth_service.config.google_client_id.is_some(),
-        github: oauth_state.oauth_service.config.github_client_id.is_some()
-            && oauth_state
-                .oauth_service
-                .config
-                .github_client_secret
-                .as_ref()
-                .is_some_and(|s| !s.expose_secret().is_empty()),
+        github: oauth_state.oauth_service.config.github_client_id.is_some(),
     })
 }
 

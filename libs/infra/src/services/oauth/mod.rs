@@ -85,7 +85,7 @@ impl OAuthConfig {
             google_token_url: None,
             google_userinfo_url: None,
             github_auth_url: None,
-            github_token_url: None,
+            github_token_url: get_optional_env("GITHUB_TOKEN_URL"),
             github_user_url: None,
             github_emails_url: None,
         }
@@ -305,30 +305,24 @@ impl OAuthServiceImpl {
                     .github_client_id
                     .as_ref()
                     .ok_or_else(|| OAuthError::ProviderNotConfigured("GitHub".to_string()))?;
+
+                // Client secret is optional (e.g. when using BFF proxy or if GitHub App is public)
                 let client_secret = self
                     .config
                     .github_client_secret
                     .as_ref()
                     .filter(|s| !s.expose_secret().is_empty())
-                    .ok_or_else(|| OAuthError::ProviderNotConfigured(
-                        "GitHub client secret is not configured. Please set GITHUB_CLIENT_SECRET in your .env file. Get it from https://github.com/settings/developers".to_string()
-                    ))?;
+                    .map(secrecy::ExposeSecret::expose_secret);
 
-                // SECURITY WARNING: GitHub requires a client secret for token exchange,
-                // which violates the "no embedded secrets" security constraint for desktop apps.
-                // This implementation stores the secret in the binary and should only be used
-                // in controlled environments. For production use, implement a BFF proxy pattern
-                // where the desktop sends the auth code to a backend service that performs the
-                // token exchange with the secret, then returns tokens to the desktop.
-                // See: https://github.com/MDMV-Laboratorio-de-Solucoes-Digitais/aroeira-template/blob/main/docs/OAUTH_BFF_PROXY.md
-                warn!(
-                    target: "security",
-                    "SECURITY: GitHub OAuth is using embedded client secret. This violates the 'no embedded secrets' constraint. Consider using a BFF proxy for production."
-                );
+                if client_secret.is_none() {
+                    debug!(
+                        "GitHub OAuth is configured without a client secret (Public Client / Proxy mode)"
+                    );
+                }
 
                 Ok((
                     client_id.as_str(),
-                    Some(client_secret.expose_secret()),
+                    client_secret,
                     self.config
                         .github_auth_url
                         .as_deref()
