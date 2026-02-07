@@ -105,15 +105,13 @@ impl AppConfig {
 
         // Log OAuth configuration status (without exposing secrets)
         // If GitHub client secret is missing, disable GitHub OAuth to prevent broken flows
-        if github_client_id.is_some() {
-            if github_client_secret.is_some() {
-                info!("GitHub OAuth configured with client secret");
-            } else {
-                warn!(
-                    "GitHub OAuth client ID configured but GITHUB_CLIENT_SECRET is missing; disabling GitHub OAuth."
-                );
-                github_client_id = None;
-            }
+        if github_client_id.is_some() && github_client_secret.is_some() {
+            info!("GitHub OAuth configured with client secret");
+        } else if github_client_id.is_some() {
+            warn!(
+                "GitHub OAuth client ID configured but GITHUB_CLIENT_SECRET is missing; disabling GitHub OAuth."
+            );
+            github_client_id = None;
         }
 
         Ok(Self {
@@ -530,7 +528,9 @@ pub fn run() {
                     "Received deep link in single-instance handler: {}",
                     redacted
                 );
-                let _ = app.emit("deep-link", url.clone());
+                if let Err(e) = app.emit("deep-link", url.clone()) {
+                    tracing::warn!("Failed to emit deep-link event: {}", e);
+                }
             }
         }))
         .plugin(tauri_plugin_deep_link::init())

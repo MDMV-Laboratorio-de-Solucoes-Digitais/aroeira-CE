@@ -846,22 +846,24 @@ impl OAuthSessionStore {
             sessions.retain(|_, s| !s.is_expired());
 
             // Enforce a hard cap to prevent memory growth (DoS prevention)
+            // Find oldest first, then remove in separate step to avoid borrow checker issues
+            let oldest_key = sessions
+                .iter()
+                .min_by_key(|(_, s)| s.created_at)
+                .map(|(k, _)| k.clone());
+
             let evicted_state_hash = if sessions.len() >= MAX_SESSIONS {
-                sessions
-                    .iter()
-                    .min_by_key(|(_, s)| s.created_at)
-                    .map(|(k, _)| k.clone())
-                    .map(|oldest_key| {
-                        let state_hash = hex::encode(Sha256::digest(oldest_key.as_bytes()));
-                        tracing::warn!(
-                            target: "security",
-                            reason = "session_store_full",
-                            evicted_state_hash = %state_hash,
-                            "OAuth session store reached max capacity ({MAX_SESSIONS}). Evicting oldest session."
-                        );
-                        sessions.remove(&oldest_key);
-                        state_hash
-                    })
+                oldest_key.map(|key| {
+                    let state_hash = hex::encode(Sha256::digest(key.as_bytes()));
+                    tracing::warn!(
+                        target: "security",
+                        reason = "session_store_full",
+                        evicted_state_hash = %state_hash,
+                        "OAuth session store reached max capacity ({MAX_SESSIONS}). Evicting oldest session."
+                    );
+                    sessions.remove(&key);
+                    state_hash
+                })
             } else {
                 None
             };
