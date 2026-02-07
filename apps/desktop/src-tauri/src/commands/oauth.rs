@@ -461,7 +461,13 @@ pub async fn get_oauth_availability(
 ) -> Result<OAuthAvailability, String> {
     Ok(OAuthAvailability {
         google: oauth_state.oauth_service.config.google_client_id.is_some(),
-        github: oauth_state.oauth_service.config.github_client_id.is_some(),
+        github: oauth_state.oauth_service.config.github_client_id.is_some()
+            && oauth_state
+                .oauth_service
+                .config
+                .github_client_secret
+                .as_ref()
+                .is_some_and(|s| !s.expose_secret().is_empty()),
     })
 }
 
@@ -825,7 +831,23 @@ impl OAuthSessionStore {
                 "OAuth authentication failed: invalid or expired session"
             );
             // If present but invalid, remove it to prevent reuse.
-            sessions.remove(state);
+            let removed = sessions.remove(state);
+
+            // Best-effort cleanup of persisted session to avoid stale sensitive data.
+            if removed.is_some() {
+                let pkce_storage = self.pkce_storage.clone();
+                let state_hash = hex::encode(Sha256::digest(state.as_bytes()));
+
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.spawn(async move {
+                        let _ = tokio::task::spawn_blocking(move || {
+                            pkce_storage.delete_session(&state_hash)
+                        })
+                        .await;
+                    });
+                }
+            }
+
             return None;
         }
 
@@ -1037,6 +1059,7 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
     let is_localhost_dev = cfg!(debug_assertions)
         && url.scheme() == "http"
         && url.host_str() == Some("localhost")
+        && url.port() == Some(1420)
         && url.path() == "/auth/callback";
 
     if !is_aroeira_protocol && !is_localhost_dev {
