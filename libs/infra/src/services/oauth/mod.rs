@@ -863,8 +863,18 @@ async fn store_tokens(
     let user_key_hash = hex::encode(hasher.finalize());
 
     // Create token payload. Include refresh token for long-lived sessions if available.
+    // Validate tokens before creating payload
     let access_token = token_result.access_token().secret().clone();
-    let refresh_token = token_result.refresh_token().map(|t| t.secret().clone());
+    if access_token.trim().is_empty() {
+        return Err(OAuthError::TokenRequestFailed(
+            "Provider returned an empty access token".to_string(),
+        ));
+    }
+
+    let refresh_token = token_result
+        .refresh_token()
+        .map(|t| t.secret().clone())
+        .filter(|t| !t.trim().is_empty());
 
     let token_payload = serde_json::json!({
         "access_token": access_token,
