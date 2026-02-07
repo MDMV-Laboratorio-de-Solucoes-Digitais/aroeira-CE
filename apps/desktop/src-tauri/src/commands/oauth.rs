@@ -472,19 +472,9 @@ async fn retrieve_warm_session(
     state_hash: &str,
     request_id: &str,
 ) -> Option<OAuthPkceSession> {
-    let session = oauth_state.session_store.take(state_param)?;
-
-    // Validate session immediately before deleting persisted session to prevent losing recoverable session.
-    if session.state != state_param || !session.is_valid() || session.is_expired() {
-        tracing::warn!(
-            target: "audit",
-            request_id = %request_id,
-            outcome = "failure",
-            reason = "session_invalid_or_expired",
-            "OAuth authentication failed: invalid or expired session"
-        );
-        return None;
-    }
+    let session = oauth_state
+        .session_store
+        .take_valid(state_param, request_id)?;
 
     // Session is valid - clean up persisted session from keyring.
     let pkce_storage = oauth_state.pkce_storage.clone();
@@ -811,6 +801,37 @@ impl OAuthSessionStore {
         }
     }
 
+    /// Takes a session by its state value, validating it before removal.
+    ///
+    /// Returns `None` if:
+    /// - Session doesn't exist
+    /// - Session state doesn't match
+    /// - Session is invalid or has expired
+    #[must_use]
+    pub fn take_valid(&self, state: &str, request_id: &str) -> Option<OAuthPkceSession> {
+        let mut sessions = self.sessions.lock();
+        sessions.retain(|_, s| !s.is_expired());
+
+        let is_valid = sessions
+            .get(state)
+            .is_some_and(|s| s.state == state && s.is_valid() && !s.is_expired());
+
+        if !is_valid {
+            tracing::warn!(
+                target: "audit",
+                request_id = %request_id,
+                outcome = "failure",
+                reason = "session_invalid_or_expired",
+                "OAuth authentication failed: invalid or expired session"
+            );
+            // If present but invalid, remove it to prevent reuse.
+            sessions.remove(state);
+            return None;
+        }
+
+        sessions.remove(state)
+    }
+
     /// Stores a session, keyed by its state value.
     ///
     /// Automatically cleans up expired sessions during this operation.
@@ -912,19 +933,9 @@ impl OAuthSessionStore {
 
 impl Default for OAuthSessionStore {
     fn default() -> Self {
-        struct NoOpStorage;
-        impl PkceSessionStorage for NoOpStorage {
-            fn save_session(&self, _state_hash: &str, _session: &str) -> Result<(), String> {
-                Ok(())
-            }
-            fn get_session(&self, _state_hash: &str) -> Result<Option<String>, String> {
-                Ok(None)
-            }
-            fn delete_session(&self, _state_hash: &str) -> Result<(), String> {
-                Ok(())
-            }
-        }
-        Self::new(Arc::new(NoOpStorage))
+        let pkce_storage: Arc<dyn PkceSessionStorage> =
+            Arc::new(infra::services::oauth::KeyringPkceStorage);
+        Self::new(pkce_storage)
     }
 }
 
