@@ -313,14 +313,16 @@ async fn exchange_code_for_user(
                 device_id = %device_id_hash,
                 "OAuth authentication failed: code exchange error"
             );
-            let error_msg = format!("{e}");
-            tracing::error!(
-                target: "audit",
-                request_id = %request_id,
-                error_details = %error_msg,
-                "OAuth code exchange failed for provider {:?}",
-                session.provider
-            );
+            // Log error details only in debug mode to avoid leaking sensitive data
+            if cfg!(debug_assertions) {
+                tracing::debug!(
+                    target: "oauth_debug",
+                    request_id = %request_id,
+                    error_details = %e,
+                    "OAuth code exchange failed for provider {:?}",
+                    session.provider
+                );
+            }
             Err("Authentication failed. Please try again.".to_string())
         }
     }
@@ -843,6 +845,9 @@ impl OAuthSessionStore {
                 None
             };
 
+            // Store new session while still holding the lock to preserve the cap invariant.
+            sessions.insert(session.state.clone(), session);
+
             (evicted_state_hash, self.pkce_storage.clone())
         };
 
@@ -874,8 +879,6 @@ impl OAuthSessionStore {
                     }
                 });
             } else {
-                // No Tokio runtime available; we can't spawn a blocking task without creating a new runtime.
-                // The evicted session will not be deleted from the keyring and will be left to expire naturally.
                 tracing::warn!(
                     target: "security",
                     state_hash = %state_hash_clone,
@@ -883,10 +886,6 @@ impl OAuthSessionStore {
                 );
             }
         }
-
-        // Store new session
-        let mut sessions = self.sessions.lock();
-        sessions.insert(session.state.clone(), session);
     }
 
     /// Takes a session by its state value, removing it from storage.
@@ -1055,8 +1054,12 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
         }
     }
 
+    // Helper to extract query parameters.
+    let query = url.query().unwrap_or("");
+    let query_pairs = parse_query_preserving_plus(query)?;
+
     // Check for error response from OAuth provider
-    if let Some((_, error_code)) = url.query_pairs().find(|(k, _)| k == "error") {
+    if let Some((_, error_code)) = query_pairs.iter().find(|(k, _)| k == "error") {
         // Log only the error code (standard OAuth error codes like "access_denied")
         // Do NOT log error_description as it may contain sensitive user-specific details
         tracing::info!(
@@ -1065,10 +1068,6 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
         );
         return Err("Authentication was denied or failed. Please try again.".to_string());
     }
-
-    // Helper to extract query parameters.
-    let query = url.query().unwrap_or("");
-    let query_pairs = parse_query_preserving_plus(query)?;
 
     let get_unique_query_param = |key: &str| -> Result<String, String> {
         let mut values = query_pairs

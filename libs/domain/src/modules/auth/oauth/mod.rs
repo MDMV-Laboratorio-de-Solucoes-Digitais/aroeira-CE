@@ -1,4 +1,4 @@
-//! `OAuth2` Domain Types - TDD GREEN PHASE
+//! `OAuth2` Domain Types
 //!
 //! This module contains `OAuth2` authentication types for PKCE flow.
 //! Implements the types required by the test suite defined in `tests.rs`.
