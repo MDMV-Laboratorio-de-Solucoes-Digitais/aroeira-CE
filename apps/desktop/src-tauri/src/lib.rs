@@ -105,13 +105,15 @@ impl AppConfig {
 
         // Log OAuth configuration status (without exposing secrets)
         // If GitHub client secret is missing, disable GitHub OAuth to prevent broken flows
-        if github_client_id.is_some() && github_client_secret.is_some() {
-            info!("GitHub OAuth configured with client secret");
-        } else if github_client_id.is_some() {
-            warn!(
-                "GitHub OAuth client ID configured but GITHUB_CLIENT_SECRET is missing; disabling GitHub OAuth."
-            );
-            github_client_id = None;
+        if github_client_id.is_some() {
+            if github_client_secret.is_none() {
+                warn!(
+                    "GitHub OAuth client ID is set, but GITHUB_CLIENT_SECRET is missing. Disabling GitHub provider."
+                );
+                github_client_id = None;
+            } else {
+                info!("GitHub OAuth configured with client ID and secret.");
+            }
         }
 
         Ok(Self {
