@@ -138,15 +138,6 @@ export function processOAuthCallback(
 
   const isOAuthCallback = isAroeiraProtocol || isLocalhostDev;
 
-  if (import.meta.env.DEV) {
-    console.debug("Parsed URL", {
-      protocol: parsed.protocol,
-      hostname: parsed.hostname,
-      pathname: parsed.pathname,
-      isOAuthCallback,
-    });
-  }
-
   if (!isOAuthCallback) {
     // Ignore unrelated deep links; don't cancel an in-progress OAuth flow.
     if (import.meta.env.DEV) {
@@ -191,14 +182,6 @@ export function processOAuthCallback(
       // Validate callback contains authorization code
       const code = callbackUrl.searchParams.get("code");
       const state = callbackUrl.searchParams.get("state");
-      if (import.meta.env.DEV) {
-        console.debug("OAuth callback params", {
-          hasCode: !!code,
-          hasState: !!state,
-          codeLength: code?.length,
-          stateLength: state?.length,
-        });
-      }
       if (!code) {
         callbacks.resetState(
           "Authentication callback was invalid. Please try again.",
@@ -221,13 +204,6 @@ export function processOAuthCallback(
       // Validate state before invoking backend exchange
       const pendingState = localStorage.getItem("oauth_pending_state");
       const callbackState = callbackUrl.searchParams.get("state");
-      if (import.meta.env.DEV) {
-        console.debug("State validation", {
-          hasPendingState: !!pendingState,
-          hasCallbackState: !!callbackState,
-          match: pendingState === callbackState,
-        });
-      }
       if (!pendingState || !callbackState || pendingState !== callbackState) {
         callbacks.resetState(
           "Authentication session was invalid. Please try again.",
