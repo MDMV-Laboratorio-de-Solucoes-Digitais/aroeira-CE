@@ -79,11 +79,8 @@ impl OAuthConfig {
         Self {
             google_client_id: get_optional_env("GOOGLE_CLIENT_ID"),
             github_client_id: get_optional_env("GITHUB_CLIENT_ID"),
-            #[cfg(debug_assertions)]
             github_client_secret: get_optional_env("GITHUB_CLIENT_SECRET")
                 .map(secrecy::SecretString::from),
-            #[cfg(not(debug_assertions))]
-            github_client_secret: None,
             redirect_uri,
             google_auth_url: None,
             google_token_url: None,
