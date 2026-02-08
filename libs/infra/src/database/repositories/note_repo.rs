@@ -2,6 +2,7 @@ use crate::database::entities::notes;
 use crate::database::utils::{is_foreign_key_violation, is_unique_constraint_violation};
 use domain::modules::notes::{Note, NoteError, NoteRepository};
 use sea_orm::prelude::Expr;
+use sea_orm::sea_query::IdenList;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 use uuid::Uuid;
