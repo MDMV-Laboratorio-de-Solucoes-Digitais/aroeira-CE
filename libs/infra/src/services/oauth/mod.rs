@@ -746,6 +746,7 @@ async fn async_http_client(
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await? {
         if body.len().saturating_add(chunk.len()) > MAX_OAUTH_HTTP_BODY_BYTES {
+            error!("OAuth HTTP response body exceeded maximum allowed size");
             return Err(OAuthHttpClientError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "OAuth HTTP response too large",
