@@ -519,7 +519,7 @@ impl OAuthService for OAuthServiceImpl {
             .and_then(|p| p.parse().ok())
             .unwrap_or(1420);
         let is_dev =
-            cfg!(debug_assertions) && ru == format!("http://localhost:{}/auth/callback", dev_port);
+            cfg!(debug_assertions) && ru == format!("http://localhost:{dev_port}/auth/callback");
         if !is_prod && !is_dev {
             return Err(OAuthError::ProviderNotConfigured(
                 "Invalid redirect URI: not allowlisted".to_string(),
@@ -655,7 +655,7 @@ pub enum OAuthHttpClientError {
 
 const MAX_OAUTH_HTTP_BODY_BYTES: usize = 1_048_576; // 1 MiB
 
-/// Helper to read response body with a size limit to prevent DoS.
+/// Helper to read response body with a size limit to prevent `DoS`.
 async fn read_response_body_with_limit(
     mut response: reqwest::Response,
     limit: usize,
@@ -727,7 +727,7 @@ async fn async_http_client(
                 error!("OAuth HTTP response body exceeded maximum allowed size");
                 OAuthHttpClientError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
             } else {
-                OAuthHttpClientError::Io(std::io::Error::new(std::io::ErrorKind::Other, e))
+                OAuthHttpClientError::Io(std::io::Error::other(e))
             }
         })?;
 
