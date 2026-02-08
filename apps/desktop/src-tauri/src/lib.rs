@@ -37,6 +37,8 @@ pub struct AppConfig {
     pub github_client_id: Option<String>,
     /// GitHub `OAuth2` client secret (required for token exchange)
     pub github_client_secret: Option<secrecy::SecretString>,
+    /// Configurable GitHub token URL (e.g. for Proxy)
+    pub github_token_url: Option<String>,
 }
 
 impl AppConfig {
@@ -94,8 +96,14 @@ impl AppConfig {
                 .filter(|s| !s.is_empty())
         };
         let google_client_id = get_optional_env("GOOGLE_CLIENT_ID");
-        let mut github_client_id = get_optional_env("GITHUB_CLIENT_ID");
+        let github_client_id = get_optional_env("GITHUB_CLIENT_ID");
         let github_client_secret = get_optional_env("GITHUB_CLIENT_SECRET").map(Into::into);
+
+        // Proxy configuration for secret-less OAuth
+        let auth_proxy_url = get_optional_env("AUTH_PROXY_URL")
+            .or_else(|| get_optional_env("AROEIRA_AUTH_PROXY_URL"));
+
+        let mut github_token_url = None;
 
         if google_client_id.is_none() && github_client_id.is_none() {
             info!(
@@ -104,15 +112,19 @@ impl AppConfig {
         }
 
         // Log OAuth configuration status (without exposing secrets)
-        // If GitHub client secret is missing, disable GitHub OAuth to prevent broken flows
         if github_client_id.is_some() {
-            if github_client_secret.is_none() {
-                warn!(
-                    "GitHub OAuth client ID is set, but GITHUB_CLIENT_SECRET is missing. Disabling GitHub provider."
-                );
-                github_client_id = None;
+            if github_client_secret.is_some() {
+                info!("GitHub OAuth configured with client secret (Direct Mode).");
+            } else if let Some(ref proxy_url) = auth_proxy_url {
+                info!("GitHub OAuth configured with Proxy Mode via {}.", proxy_url);
+                // Configure token URL to point to the proxy
+                // Proxy expects: POST /oauth/github/token
+                let base = proxy_url.trim_end_matches('/');
+                github_token_url = Some(format!("{base}/oauth/github/token"));
             } else {
-                info!("GitHub OAuth configured with client ID and secret.");
+                warn!(
+                    "GitHub OAuth client ID is set, but GITHUB_CLIENT_SECRET is missing and no AUTH_PROXY_URL provided. GitHub OAuth may fail if not using a public client."
+                );
             }
         }
 
@@ -132,6 +144,7 @@ impl AppConfig {
             google_client_id,
             github_client_id,
             github_client_secret,
+            github_token_url,
         })
     }
 
@@ -444,7 +457,7 @@ async fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
         google_token_url: None,
         google_userinfo_url: None,
         github_auth_url: None,
-        github_token_url: None,
+        github_token_url: config.github_token_url.clone(),
         github_user_url: None,
         github_emails_url: None,
     };

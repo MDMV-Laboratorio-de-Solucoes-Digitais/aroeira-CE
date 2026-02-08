@@ -809,13 +809,6 @@ async fn perform_token_exchange(
     // Perform token exchange with timeout and provider-specific adjustments
     let exchange_future = async {
         if session.provider == AuthProvider::GitHub {
-            // Enforce client secret for GitHub unless explicitly running in debug/proxy mode.
-            if client_secret.is_none() && !cfg!(debug_assertions) {
-                return Err(OAuthError::ProviderNotConfigured(
-                    "GitHub client secret is required".to_string(),
-                ));
-            }
-
             // GitHub requires client secret even with PKCE
             let client = if let Some(secret) = client_secret {
                 client.set_client_secret(oauth2::ClientSecret::new(secret.to_string()))
