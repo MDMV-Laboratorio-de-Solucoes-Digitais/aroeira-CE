@@ -16,6 +16,9 @@ pub enum AppError {
 
     #[error("Configuration error: {0}")]
     ConfigError(String),
+
+    #[error("Internal server error")]
+    InternalServerError,
 }
 
 impl IntoResponse for AppError {
@@ -29,6 +32,10 @@ impl IntoResponse for AppError {
             Self::ConfigError(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Service configuration error".to_string(),
+            ),
+            Self::InternalServerError => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal server error".to_string(),
             ),
         };
 

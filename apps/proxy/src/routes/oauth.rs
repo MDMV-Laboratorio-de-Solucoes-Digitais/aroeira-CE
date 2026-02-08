@@ -12,9 +12,10 @@ pub async fn github_token_exchange(
     State(state): State<AppState>,
     Json(request): Json<GitHubTokenRequest>,
 ) -> Result<Json<GitHubTokenResponse>, AppError> {
-    request
-        .validate()
-        .map_err(|e| AppError::BadRequest(format!("Validation failed: {e}")))?;
+    request.validate().map_err(|e| {
+        tracing::warn!("GitHub token exchange validation failed: {}", e);
+        AppError::BadRequest("Invalid request parameters".to_string())
+    })?;
 
     tracing::info!(
         "Processing GitHub token exchange (state_len={})",
@@ -27,7 +28,7 @@ pub async fn github_token_exchange(
     // Validate GitHub token URL before making request (SSRF protection)
     let parsed_url = Url::parse(&state.config.github_token_url).map_err(|e| {
         tracing::error!("Invalid GitHub token URL in configuration: {}", e);
-        AppError::BadRequest(format!("Validation failed: {e}"))
+        AppError::InternalServerError
     })?;
 
     let scheme = parsed_url.scheme();
@@ -67,10 +68,11 @@ pub async fn github_token_exchange(
 
     if !status.is_success() {
         let error_body = response.text().await.unwrap_or_default();
+        // Redact body in logs to avoid leaking sensitive data, log only status and length
         tracing::warn!(
-            "GitHub token exchange failed: status={}, body={}",
+            "GitHub token exchange failed: status={}, body_len={}",
             status,
-            error_body
+            error_body.len()
         );
         return Err(AppError::GitHubError("Token exchange failed".to_string()));
     }
