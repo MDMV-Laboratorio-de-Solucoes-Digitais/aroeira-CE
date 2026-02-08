@@ -20,6 +20,7 @@ use oauth2::{
 };
 use secrecy::ExposeSecret;
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 use tracing::{debug, error, warn};
 
 // Static HTTP client for async_http_client callback (connection pooling)
@@ -78,8 +79,11 @@ impl OAuthConfig {
         Self {
             google_client_id: get_optional_env("GOOGLE_CLIENT_ID"),
             github_client_id: get_optional_env("GITHUB_CLIENT_ID"),
+            #[cfg(debug_assertions)]
             github_client_secret: get_optional_env("GITHUB_CLIENT_SECRET")
                 .map(secrecy::SecretString::from),
+            #[cfg(not(debug_assertions))]
+            github_client_secret: None,
             redirect_uri,
             google_auth_url: None,
             google_token_url: None,
@@ -567,7 +571,11 @@ impl OAuthService for OAuthServiceImpl {
         // Fail-closed allowlist for redirect URI to prevent token/code exfiltration via misconfig.
         let ru = self.config.redirect_uri.as_str();
         let is_prod = ru == "aroeira://auth/callback";
-        let is_dev = cfg!(debug_assertions) && ru == "http://localhost:1420/auth/callback";
+        let dev_port: u16 = std::env::var("AROEIRA_DEV_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(1420);
+        let is_dev = cfg!(debug_assertions) && ru == format!("http://localhost:{}/auth/callback", dev_port);
         if !is_prod && !is_dev {
             return Err(OAuthError::ProviderNotConfigured(
                 "Invalid redirect URI: not allowlisted".to_string(),
@@ -587,7 +595,8 @@ impl OAuthService for OAuthServiceImpl {
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
         // Build authorization URL with scopes and PKCE
-        let mut auth_request = client.authorize_url(CsrfToken::new_random);
+        let state = hex::encode(Sha256::digest(Uuid::new_v4().as_bytes()));
+        let mut auth_request = client.authorize_url(|| CsrfToken::new(state.clone()));
         for scope in Self::get_scopes(provider) {
             auth_request = auth_request.add_scope(scope);
         }

@@ -97,7 +97,10 @@ impl AppConfig {
         };
         let google_client_id = get_optional_env("GOOGLE_CLIENT_ID");
         let github_client_id = get_optional_env("GITHUB_CLIENT_ID");
+        #[cfg(debug_assertions)]
         let github_client_secret = get_optional_env("GITHUB_CLIENT_SECRET").map(Into::into);
+        #[cfg(not(debug_assertions))]
+        let github_client_secret = None;
 
         // Proxy configuration for secret-less OAuth
         let auth_proxy_url = get_optional_env("AUTH_PROXY_URL")
@@ -515,20 +518,17 @@ pub fn run() {
         .plugin(tauri_plugin_secure_storage::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // Handle deep link when a second instance is launched
-            if let Some(url) = argv.iter().find(|arg| arg.starts_with("aroeira://")) {
-                // Defensive bounds to avoid forwarding huge/untrusted argv payloads
-                if url.len() > 8192 {
-                    tracing::warn!("Ignoring deep link argv: payload too large");
-                    return;
-                }
-
+            if let Some(url) = argv
+                .iter()
+                .find(|arg| arg.len() <= 8192 && arg.to_ascii_lowercase().starts_with("aroeira://"))
+            {
                 // Strictly validate scheme/host/path to prevent prefix bypasses
                 let Ok(parsed) = url::Url::parse(url) else {
                     tracing::warn!("Ignoring malformed deep link argv");
                     return;
                 };
 
-                let is_expected = parsed.scheme() == "aroeira"
+                let is_expected = parsed.scheme().eq_ignore_ascii_case("aroeira")
                     && parsed.host_str() == Some("auth")
                     && parsed.path() == "/callback";
 
@@ -554,6 +554,8 @@ pub fn run() {
                 if let Err(e) = app.emit("deep-link", url.clone()) {
                     tracing::warn!("Failed to emit deep-link event: {}", e);
                 }
+            } else if argv.iter().any(|arg| arg.len() > 8192) {
+                tracing::warn!("Ignoring deep link argv: payload too large");
             }
         }))
         .plugin(tauri_plugin_deep_link::init())
