@@ -102,7 +102,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(
             ServiceBuilder::new()
                 .layer(TraceLayer::new_for_http())
-                .layer(cors),
+                .layer(cors)
+                .layer(tower_http::limit::RequestBodyLimitLayer::new(16 * 1024))
+                .layer(tower::limit::RateLimitLayer::new(
+                    state.config.rate_limit_requests,
+                    std::time::Duration::from_secs(state.config.rate_limit_window_secs),
+                )),
         )
         .with_state(state.clone());
 
