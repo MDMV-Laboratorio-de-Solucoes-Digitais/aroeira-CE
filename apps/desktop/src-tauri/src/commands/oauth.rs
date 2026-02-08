@@ -1075,18 +1075,23 @@ fn parse_query_preserving_plus(query: &str) -> Result<Vec<(String, String)>, Str
 /// This function returns generic error messages to prevent leaking internal
 /// validation logic. Specific details are logged internally for debugging.
 pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), String> {
-    use crate::constants::{OAUTH_CALLBACK_HOST, OAUTH_CALLBACK_PATH, OAUTH_CALLBACK_SCHEME};
-
     // Generic error message for all validation failures
     const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
-    const MAX_CODE_LEN: usize = 4096;
-    const MAX_STATE_LEN: usize = 512;
-    const HOSTLESS_PATH: &str = "auth/callback";
 
     let url = Url::parse(callback_url).map_err(|e| {
         tracing::warn!("OAuth callback URL parse error: {e}");
         GENERIC_ERROR.to_string()
     })?;
+
+    validate_callback_url_base(&url)?;
+    extract_and_validate_params(&url)
+}
+
+/// Validates the basic structure (scheme, host, path) of the callback URL.
+fn validate_callback_url_base(url: &Url) -> Result<(), String> {
+    use crate::constants::{OAUTH_CALLBACK_HOST, OAUTH_CALLBACK_PATH, OAUTH_CALLBACK_SCHEME};
+    const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
+    const HOSTLESS_PATH: &str = "auth/callback";
 
     // Handle both production (aroeira://) and dev mode (http://localhost) callbacks
     let dev_port: u16 = std::env::var("AROEIRA_DEV_PORT")
@@ -1128,6 +1133,15 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
             return Err(GENERIC_ERROR.to_string());
         }
     }
+
+    Ok(())
+}
+
+/// Extracts and performs security validation on the OAuth code and state parameters.
+fn extract_and_validate_params(url: &Url) -> Result<(String, String), String> {
+    const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
+    const MAX_CODE_LEN: usize = 4096;
+    const MAX_STATE_LEN: usize = 512;
 
     // Helper to extract query parameters.
     let query = url.query().unwrap_or("");
