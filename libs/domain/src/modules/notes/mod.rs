@@ -24,6 +24,8 @@ pub enum NoteError {
     Unauthorized,
     #[error("Resource conflict: the requested operation conflicts with existing data")]
     Conflict,
+    #[error("User not found: {0}")]
+    UserNotFound(String),
     #[error("Repository error: {0}")]
     RepositoryError(String),
 }

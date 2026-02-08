@@ -359,7 +359,7 @@ impl OAuthServiceImpl {
             .google_userinfo_url
             .as_deref()
             .unwrap_or(Self::GOOGLE_USERINFO_URL);
-        let mut response = ASYNC_HTTP_CLIENT
+        let response = ASYNC_HTTP_CLIENT
             .get(url)
             .bearer_auth(access_token)
             .send()
@@ -406,7 +406,7 @@ impl OAuthServiceImpl {
             .github_user_url
             .as_deref()
             .unwrap_or(Self::GITHUB_USER_URL);
-        let mut user_response = ASYNC_HTTP_CLIENT
+        let user_response = ASYNC_HTTP_CLIENT
             .get(url)
             .header("User-Agent", "Aroeira-Desktop")
             .header("Accept", "application/vnd.github+json")
@@ -453,7 +453,7 @@ impl OAuthServiceImpl {
             .github_emails_url
             .as_deref()
             .unwrap_or(Self::GITHUB_EMAILS_URL);
-        let mut response = ASYNC_HTTP_CLIENT
+        let response = ASYNC_HTTP_CLIENT
             .get(url)
             .header("User-Agent", "Aroeira-Desktop")
             .header("Accept", "application/vnd.github+json")
@@ -715,7 +715,7 @@ async fn async_http_client(
         );
     }
 
-    let mut response = request_builder.send().await?;
+    let response = request_builder.send().await?;
 
     let status = response.status();
     let headers = response.headers().clone();

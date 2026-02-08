@@ -1,5 +1,5 @@
 use crate::database::entities::notes;
-use crate::database::utils::is_unique_constraint_violation;
+use crate::database::utils::{is_foreign_key_violation, is_unique_constraint_violation};
 use domain::modules::notes::{Note, NoteError, NoteRepository};
 use sea_orm::prelude::Expr;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
@@ -83,7 +83,14 @@ impl NoteRepository for NoteRepositoryImpl {
         {
             Ok(_) => Ok(note.clone()),
             Err(e) => {
-                // Check if the error is due to a unique constraint violation (ID already exists)
+                if is_foreign_key_violation(&e) {
+                    tracing::warn!(
+                        user_id = %note.user_id,
+                        "Failed to insert note: User not found (FK violation)"
+                    );
+                    return Err(NoteError::UserNotFound(note.user_id.to_string()));
+                }
+
                 if is_unique_constraint_violation(&e) {
                     tracing::warn!(
                         note_id = %note.id,
@@ -93,7 +100,7 @@ impl NoteRepository for NoteRepositoryImpl {
                     Err(NoteError::Conflict)
                 } else {
                     tracing::error!(
-                        error = %e,
+                        error = %e.to_string(),
                         "Database error inserting note"
                     );
                     Err(NoteError::RepositoryError(e.to_string()))
