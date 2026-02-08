@@ -51,11 +51,19 @@ pub async fn github_token_exchange(
         .filter(|v: &Vec<String>| !v.is_empty())
         .unwrap_or_else(|| vec!["github.com".to_string(), "api.github.com".to_string()]);
 
-    if scheme != "https" || !allowed_hosts.iter().any(|h| h == &host) {
+    let expected_path = "/login/oauth/access_token";
+    let has_userinfo = !parsed_url.username().is_empty() || parsed_url.password().is_some();
+
+    if scheme != "https"
+        || has_userinfo
+        || parsed_url.path() != expected_path
+        || !allowed_hosts.iter().any(|h| h == &host)
+    {
         tracing::error!(
-            "Blocked GitHub token exchange due to untrusted URL: scheme='{}', host='{}'",
+            "Blocked GitHub token exchange due to untrusted URL: scheme='{}', host='{}', path='{}'",
             scheme,
-            host
+            host,
+            parsed_url.path()
         );
         return Err(AppError::GitHubError(
             "Untrusted OAuth provider URL".to_string(),
