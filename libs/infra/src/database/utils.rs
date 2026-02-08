@@ -10,7 +10,6 @@ pub const MYSQL_ERROR_UNIQUE_VIOLATION: &str = "1062";
 pub const POSTGRES_ERROR_FOREIGNKEY_VIOLATION: &str = "23503";
 pub const MYSQL_ERROR_FOREIGNKEY_VIOLATION: &str = "1452";
 
-
 /// Helper function to determine if the error is a unique constraint violation.
 ///
 /// This function handles different database backends and their specific error formats.

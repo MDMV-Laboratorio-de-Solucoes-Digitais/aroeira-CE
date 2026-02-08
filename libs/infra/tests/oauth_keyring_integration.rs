@@ -159,7 +159,8 @@ async fn test_consume_once_pattern() {
     tokio::task::spawn_blocking(|| {
         let storage = KeyringPkceStorage;
         let state_hash = test_state_hash();
-        let session_data = r#"{"verifier":"sensitive-data","state":"csrf-token","provider":"Google"}"#;
+        let session_data =
+            r#"{"verifier":"sensitive-data","state":"csrf-token","provider":"Google"}"#;
 
         storage
             .save_session(&state_hash, session_data)
@@ -196,8 +197,9 @@ async fn test_large_session_data() {
         let state_hash = test_state_hash();
 
         let large_verifier = "x".repeat(4000);
-        let session_data =
-            format!(r#"{{"verifier":"{large_verifier}","state":"test-state","provider":"Google"}}"#);
+        let session_data = format!(
+            r#"{{"verifier":"{large_verifier}","state":"test-state","provider":"Google"}}"#
+        );
 
         storage.delete_session(&state_hash).ok();
 

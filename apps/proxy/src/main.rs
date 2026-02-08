@@ -110,7 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .layer(HandleErrorLayer::new(|err: BoxError| async move {
                     (
                         StatusCode::TOO_MANY_REQUESTS,
-                        format!("Too many requests: {}", err),
+                        format!("Too many requests: {err}"),
                     )
                 }))
                 .layer(BufferLayer::new(1024))
