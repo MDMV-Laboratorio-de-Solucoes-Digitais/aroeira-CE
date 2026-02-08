@@ -1005,37 +1005,12 @@ impl Default for OAuthSessionStore {
 fn parse_query_preserving_plus(query: &str) -> Result<Vec<(String, String)>, String> {
     const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
 
-    fn validate_strict_percent_encoding(s: &str) -> Result<(), String> {
-        let bytes = s.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == b'%' {
-                if i + 2 >= bytes.len() {
-                    return Err(GENERIC_ERROR.to_string());
-                }
-                let h1 = bytes[i + 1];
-                let h2 = bytes[i + 2];
-                let is_hex = |c: u8| c.is_ascii_hexdigit();
-                if !is_hex(h1) || !is_hex(h2) {
-                    return Err(GENERIC_ERROR.to_string());
-                }
-                i += 3;
-                continue;
-            }
-            i += 1;
-        }
-        Ok(())
-    }
-
     let mut query_pairs = Vec::new();
     for pair in query.split('&') {
         if pair.is_empty() {
             continue;
         }
         let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
-
-        validate_strict_percent_encoding(k)?;
-        validate_strict_percent_encoding(v)?;
 
         let k = percent_encoding::percent_decode_str(k)
             .decode_utf8()
@@ -1191,13 +1166,9 @@ fn extract_and_validate_params(url: &Url) -> Result<(String, String), String> {
     }
 
     // Security: Validate state charset to prevent injection/ambiguity.
-    // Accept only unreserved URI characters (RFC 3986): ALPHA / DIGIT / "-" / "." / "_" / "~".
-    // Note: `Url::query_pairs()` decodes '+' as space, so disallow whitespace explicitly.
-    if state.chars().any(char::is_whitespace)
-        || !state
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "-._~".contains(c))
-    {
+    // This implementation expects a hex-encoded state (generated server-side),
+    // so enforce a strict hex charset to fail closed and avoid ambiguity.
+    if state.is_empty() || !state.as_bytes().iter().all(|b| b.is_ascii_hexdigit()) {
         tracing::warn!(
             target: "audit",
             outcome = "failure",
