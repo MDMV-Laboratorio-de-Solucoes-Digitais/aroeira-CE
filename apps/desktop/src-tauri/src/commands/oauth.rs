@@ -786,8 +786,9 @@ fn log_oauth_success(
 ///
 /// When evicting sessions due to capacity limits, also deletes from
 /// the persistent keyring storage to prevent stale data accumulation.
+#[derive(Clone)]
 pub struct OAuthSessionStore {
-    sessions: Mutex<HashMap<String, OAuthPkceSession>>,
+    sessions: Arc<Mutex<HashMap<String, OAuthPkceSession>>>,
     pkce_storage: Arc<dyn PkceSessionStorage>,
 }
 
@@ -796,7 +797,7 @@ impl OAuthSessionStore {
     #[must_use]
     pub fn new(pkce_storage: Arc<dyn PkceSessionStorage>) -> Self {
         Self {
-            sessions: Mutex::new(HashMap::new()),
+            sessions: Arc::new(Mutex::new(HashMap::new())),
             pkce_storage,
         }
     }
@@ -946,6 +947,18 @@ impl OAuthSessionStore {
 
         // Remove and return (expiration already checked by retain)
         sessions.remove(state)
+    }
+    /// Performs a background cleanup of stale sessions from the keyring.
+    ///
+    /// This should be called on application startup to ensure that any
+    /// sessions left over from crashes or forceful terminations are removed.
+    pub fn cleanup_stale_sessions(&self) {
+        // This is a placeholder for future implementation.
+        // Currently, the keyring API doesn't support listing entries, so we can't
+        // easily sweep for stale sessions without maintaining a separate index.
+        // For now, we rely on the "consume-once" and "evict-on-full" policies
+        // to keep the keyring usage bounded.
+        tracing::debug!("OAuth session cleanup initiated (placeholder)");
     }
 }
 

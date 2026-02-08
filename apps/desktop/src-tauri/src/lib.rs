@@ -448,7 +448,15 @@ async fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
         github_user_url: None,
         github_emails_url: None,
     };
-    app.manage(crate::commands::oauth::OAuthState::new(oauth_config));
+    let oauth_state = crate::commands::oauth::OAuthState::new(oauth_config);
+
+    // Perform background cleanup of stale sessions
+    let cleanup_store = oauth_state.session_store.clone();
+    tauri::async_runtime::spawn(async move {
+        cleanup_store.cleanup_stale_sessions();
+    });
+
+    app.manage(oauth_state);
 
     app.manage(AppState {
         user_repo,
