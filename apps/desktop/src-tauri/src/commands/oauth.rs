@@ -1118,6 +1118,12 @@ fn extract_and_validate_params(url: &Url) -> Result<(String, String), String> {
     const MAX_CODE_LEN: usize = 4096;
     const MAX_STATE_LEN: usize = 512;
 
+    // Security: Validate state charset to prevent injection/ambiguity.
+    // Accept RFC3986 "unreserved" characters: ALPHA / DIGIT / "-" / "." / "_" / "~".
+    fn is_unreserved(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~')
+    }
+
     // Helper to extract query parameters.
     let query = url.query().unwrap_or("");
     let query_pairs = parse_query_preserving_plus(query)?;
@@ -1163,12 +1169,6 @@ fn extract_and_validate_params(url: &Url) -> Result<(String, String), String> {
             "OAuth callback: code/state too large"
         );
         return Err(GENERIC_ERROR.to_string());
-    }
-
-    // Security: Validate state charset to prevent injection/ambiguity.
-    // Accept RFC3986 "unreserved" characters: ALPHA / DIGIT / "-" / "." / "_" / "~".
-    fn is_unreserved(b: u8) -> bool {
-        b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~')
     }
 
     if state.is_empty() || !state.as_bytes().iter().copied().all(is_unreserved) {
