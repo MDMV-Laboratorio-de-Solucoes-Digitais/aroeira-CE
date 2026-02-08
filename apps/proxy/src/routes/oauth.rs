@@ -38,9 +38,20 @@ pub async fn github_token_exchange(
         .trim_end_matches('.')
         .to_ascii_lowercase();
 
-    // Only allow HTTPS requests to trusted GitHub hosts
-    let allowed_hosts = ["github.com", "api.github.com"];
-    if scheme != "https" || !allowed_hosts.iter().any(|h| *h == host) {
+    // Only allow HTTPS requests to trusted GitHub hosts.
+    // Prefer an explicit allowlist from config; fall back to public GitHub.
+    let allowed_hosts: Vec<String> = std::env::var("GITHUB_ALLOWED_HOSTS")
+        .ok()
+        .map(|s| {
+            s.split(',')
+                .map(|h| h.trim().trim_end_matches('.').to_ascii_lowercase())
+                .filter(|h| !h.is_empty())
+                .collect()
+        })
+        .filter(|v: &Vec<String>| !v.is_empty())
+        .unwrap_or_else(|| vec!["github.com".to_string(), "api.github.com".to_string()]);
+
+    if scheme != "https" || !allowed_hosts.iter().any(|h| h == &host) {
         tracing::error!(
             "Blocked GitHub token exchange due to untrusted URL: scheme='{}', host='{}'",
             scheme,
