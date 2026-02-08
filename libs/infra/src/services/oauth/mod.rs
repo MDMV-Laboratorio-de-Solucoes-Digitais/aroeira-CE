@@ -20,8 +20,8 @@ use oauth2::{
 };
 use secrecy::ExposeSecret;
 use sha2::{Digest, Sha256};
-use uuid::Uuid;
 use tracing::{debug, error, warn};
+use uuid::Uuid;
 
 // Static HTTP client for async_http_client callback (connection pooling)
 static ASYNC_HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(|| {
@@ -376,28 +376,10 @@ impl OAuthServiceImpl {
             )));
         }
 
-        if response
-            .content_length()
-            .is_some_and(|len| len > MAX_OAUTH_HTTP_BODY_BYTES as u64)
-        {
-            return Err(OAuthError::UserInfoFailed(
-                "Google userinfo response too large".to_string(),
-            ));
-        }
-
-        let mut body = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?
-        {
-            if body.len().saturating_add(chunk.len()) > MAX_OAUTH_HTTP_BODY_BYTES {
-                return Err(OAuthError::UserInfoFailed(
-                    "Google userinfo response too large".to_string(),
-                ));
-            }
-            body.extend_from_slice(&chunk);
-        }
+        let body =
+            read_response_body_with_limit(response, MAX_OAUTH_HTTP_BODY_BYTES, "Google userinfo")
+                .await
+                .map_err(OAuthError::UserInfoFailed)?;
 
         let user_info: GoogleUserInfo =
             serde_json::from_slice(&body).map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
@@ -443,28 +425,10 @@ impl OAuthServiceImpl {
             )));
         }
 
-        if user_response
-            .content_length()
-            .is_some_and(|len| len > MAX_OAUTH_HTTP_BODY_BYTES as u64)
-        {
-            return Err(OAuthError::UserInfoFailed(
-                "GitHub user response too large".to_string(),
-            ));
-        }
-
-        let mut body = Vec::new();
-        while let Some(chunk) = user_response
-            .chunk()
-            .await
-            .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?
-        {
-            if body.len().saturating_add(chunk.len()) > MAX_OAUTH_HTTP_BODY_BYTES {
-                return Err(OAuthError::UserInfoFailed(
-                    "GitHub user response too large".to_string(),
-                ));
-            }
-            body.extend_from_slice(&chunk);
-        }
+        let body =
+            read_response_body_with_limit(user_response, MAX_OAUTH_HTTP_BODY_BYTES, "GitHub user")
+                .await
+                .map_err(OAuthError::UserInfoFailed)?;
 
         let user_info: GitHubUserInfo =
             serde_json::from_slice(&body).map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
@@ -508,28 +472,10 @@ impl OAuthServiceImpl {
             )));
         }
 
-        if response
-            .content_length()
-            .is_some_and(|len| len > MAX_OAUTH_HTTP_BODY_BYTES as u64)
-        {
-            return Err(OAuthError::UserInfoFailed(
-                "GitHub emails response too large".to_string(),
-            ));
-        }
-
-        let mut body = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?
-        {
-            if body.len().saturating_add(chunk.len()) > MAX_OAUTH_HTTP_BODY_BYTES {
-                return Err(OAuthError::UserInfoFailed(
-                    "GitHub emails response too large".to_string(),
-                ));
-            }
-            body.extend_from_slice(&chunk);
-        }
+        let body =
+            read_response_body_with_limit(response, MAX_OAUTH_HTTP_BODY_BYTES, "GitHub emails")
+                .await
+                .map_err(OAuthError::UserInfoFailed)?;
 
         let emails: Vec<GitHubEmail> =
             serde_json::from_slice(&body).map_err(|e| OAuthError::UserInfoFailed(e.to_string()))?;
@@ -575,7 +521,8 @@ impl OAuthService for OAuthServiceImpl {
             .ok()
             .and_then(|p| p.parse().ok())
             .unwrap_or(1420);
-        let is_dev = cfg!(debug_assertions) && ru == format!("http://localhost:{}/auth/callback", dev_port);
+        let is_dev =
+            cfg!(debug_assertions) && ru == format!("http://localhost:{}/auth/callback", dev_port);
         if !is_prod && !is_dev {
             return Err(OAuthError::ProviderNotConfigured(
                 "Invalid redirect URI: not allowlisted".to_string(),
@@ -711,6 +658,29 @@ pub enum OAuthHttpClientError {
 
 const MAX_OAUTH_HTTP_BODY_BYTES: usize = 1_048_576; // 1 MiB
 
+/// Helper to read response body with a size limit to prevent DoS.
+async fn read_response_body_with_limit(
+    mut response: reqwest::Response,
+    limit: usize,
+    error_context: &str,
+) -> Result<Vec<u8>, String> {
+    if response
+        .content_length()
+        .is_some_and(|len| len > limit as u64)
+    {
+        return Err(format!("{error_context} response too large"));
+    }
+
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        if body.len().saturating_add(chunk.len()) > limit {
+            return Err(format!("{error_context} response too large"));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
 /// Custom async HTTP client for oauth2 crate with timeout and proper configuration.
 ///
 /// This replaces `oauth2::reqwest::async_http_client` which doesn't have a timeout by default.
@@ -753,27 +723,16 @@ async fn async_http_client(
     let status = response.status();
     let headers = response.headers().clone();
 
-    if response
-        .content_length()
-        .is_some_and(|len| len > MAX_OAUTH_HTTP_BODY_BYTES as u64)
-    {
-        return Err(OAuthHttpClientError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "OAuth HTTP response too large",
-        )));
-    }
-
-    let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await? {
-        if body.len().saturating_add(chunk.len()) > MAX_OAUTH_HTTP_BODY_BYTES {
-            error!("OAuth HTTP response body exceeded maximum allowed size");
-            return Err(OAuthHttpClientError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "OAuth HTTP response too large",
-            )));
-        }
-        body.extend_from_slice(&chunk);
-    }
+    let body = read_response_body_with_limit(response, MAX_OAUTH_HTTP_BODY_BYTES, "OAuth HTTP")
+        .await
+        .map_err(|e| {
+            if e.contains("too large") {
+                error!("OAuth HTTP response body exceeded maximum allowed size");
+                OAuthHttpClientError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            } else {
+                OAuthHttpClientError::Io(std::io::Error::new(std::io::ErrorKind::Other, e))
+            }
+        })?;
 
     let mut resp = oauth2::HttpResponse::new(body);
     *resp.status_mut() = status;
