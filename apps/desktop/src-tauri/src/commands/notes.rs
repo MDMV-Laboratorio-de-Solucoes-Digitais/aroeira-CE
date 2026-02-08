@@ -47,7 +47,7 @@ fn map_note_error(e: NoteError, uid: Uuid, note_id: Uuid, action: &str) -> Strin
                 note_id = %note_id,
                 action = action,
                 outcome = "failure",
-                error_type = std::any::type_name_of_val(&other),
+                error = %other,
                 message = format!("Failed to {action} note in repository")
             );
             String::from(ErrorResponse::new(
@@ -74,7 +74,7 @@ pub async fn get_notes(state: State<'_, AppState>) -> Result<Vec<Note>, String> 
             user_id = %uid,
             action = "fetch_notes",
             outcome = "failure",
-            error_type = std::any::type_name_of_val(&e),  // Log error type without exposing sensitive details
+            error = %e,
             message = "Failed to fetch notes from repository"
         );
         String::from(ErrorResponse::new(
@@ -120,7 +120,7 @@ pub async fn create_note(
             note_id = %note.id,
             action = "create_note",
             outcome = "failure",
-            error_type = std::any::type_name_of_val(&e),  // Log error type without exposing sensitive details
+            error = %e,
             message = "Failed to create note in repository"
         );
         String::from(ErrorResponse::new(
