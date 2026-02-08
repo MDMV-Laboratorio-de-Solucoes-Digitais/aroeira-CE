@@ -235,6 +235,12 @@ export function processOAuthCallback(
         return;
       }
 
+      // Consume the pending marker early to prevent processing duplicate callbacks
+      // while the backend exchange is still in-flight.
+      localStorage.removeItem("oauth_pending_provider");
+      localStorage.removeItem("oauth_pending_state");
+      localStorage.removeItem("oauth_pending_started_at");
+
       callbacks.setError("");
 
       // Normalize localhost dev callback to aroeira:// scheme for backend consistency
