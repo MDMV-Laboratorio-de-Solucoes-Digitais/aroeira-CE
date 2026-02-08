@@ -1089,11 +1089,16 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
     })?;
 
     // Handle both production (aroeira://) and dev mode (http://localhost) callbacks
+    let dev_port: u16 = std::env::var("AROEIRA_DEV_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(1420);
+
     let is_aroeira_protocol = url.scheme() == OAUTH_CALLBACK_SCHEME;
     let is_localhost_dev = cfg!(debug_assertions)
         && url.scheme() == "http"
         && url.host_str() == Some("localhost")
-        && url.port() == Some(1420)
+        && url.port() == Some(dev_port)
         && url.path() == "/auth/callback";
 
     if !is_aroeira_protocol && !is_localhost_dev {
