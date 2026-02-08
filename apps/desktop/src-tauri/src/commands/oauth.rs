@@ -1166,9 +1166,12 @@ fn extract_and_validate_params(url: &Url) -> Result<(String, String), String> {
     }
 
     // Security: Validate state charset to prevent injection/ambiguity.
-    // This implementation expects a hex-encoded state (generated server-side),
-    // so enforce a strict hex charset to fail closed and avoid ambiguity.
-    if state.is_empty() || !state.as_bytes().iter().all(|b| b.is_ascii_hexdigit()) {
+    // Accept RFC3986 "unreserved" characters: ALPHA / DIGIT / "-" / "." / "_" / "~".
+    fn is_unreserved(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~')
+    }
+
+    if state.is_empty() || !state.as_bytes().iter().copied().all(is_unreserved) {
         tracing::warn!(
             target: "audit",
             outcome = "failure",
