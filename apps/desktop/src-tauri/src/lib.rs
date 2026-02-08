@@ -452,7 +452,7 @@ async fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
 
     // Perform background cleanup of stale sessions
     let cleanup_store = oauth_state.session_store.clone();
-    tauri::async_runtime::spawn(async move {
+    tauri::async_runtime::spawn_blocking(move || {
         cleanup_store.cleanup_stale_sessions();
     });
 

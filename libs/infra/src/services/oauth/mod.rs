@@ -563,6 +563,17 @@ impl OAuthService for OAuthServiceImpl {
         })?;
         let token_url = TokenUrl::new(token_url_str.to_string())
             .map_err(|e| OAuthError::ProviderNotConfigured(format!("Invalid token URL: {e}")))?;
+
+        // Fail-closed allowlist for redirect URI to prevent token/code exfiltration via misconfig.
+        let ru = self.config.redirect_uri.as_str();
+        let is_prod = ru == "aroeira://auth/callback";
+        let is_dev = cfg!(debug_assertions) && ru == "http://localhost:1420/auth/callback";
+        if !is_prod && !is_dev {
+            return Err(OAuthError::ProviderNotConfigured(
+                "Invalid redirect URI: not allowlisted".to_string(),
+            ));
+        }
+
         let redirect_url = RedirectUrl::new(self.config.redirect_uri.clone())
             .map_err(|e| OAuthError::ProviderNotConfigured(format!("Invalid redirect URI: {e}")))?;
 
@@ -798,6 +809,13 @@ async fn perform_token_exchange(
     // Perform token exchange with timeout and provider-specific adjustments
     let exchange_future = async {
         if session.provider == AuthProvider::GitHub {
+            // Enforce client secret for GitHub unless explicitly running in debug/proxy mode.
+            if client_secret.is_none() && !cfg!(debug_assertions) {
+                return Err(OAuthError::ProviderNotConfigured(
+                    "GitHub client secret is required".to_string(),
+                ));
+            }
+
             // GitHub requires client secret even with PKCE
             let client = if let Some(secret) = client_secret {
                 client.set_client_secret(oauth2::ClientSecret::new(secret.to_string()))
@@ -823,6 +841,7 @@ async fn perform_token_exchange(
                     async_http_client(req).await
                 })
                 .await
+                .map_err(|e| OAuthError::TokenRequestFailed(e.to_string()))
         } else {
             let verifier = PkceCodeVerifier::new(session.pkce_verifier.clone());
             let token_request = client
@@ -830,7 +849,10 @@ async fn perform_token_exchange(
                 .set_pkce_verifier(verifier);
 
             // Other providers (Google) work with default client
-            token_request.request_async(&async_http_client).await
+            token_request
+                .request_async(&async_http_client)
+                .await
+                .map_err(|e| OAuthError::TokenRequestFailed(e.to_string()))
         }
     };
 

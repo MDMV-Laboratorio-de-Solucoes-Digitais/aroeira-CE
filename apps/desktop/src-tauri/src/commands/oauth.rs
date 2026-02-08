@@ -579,6 +579,9 @@ async fn retrieve_cold_session(
             reason = "session_invalid_or_expired",
             "OAuth authentication failed: invalid or expired session"
         );
+
+        cleanup_invalid_persisted_session(oauth_state, state_hash, request_id).await;
+
         return Err("Invalid or expired OAuth session. Please try again.".to_string());
     }
 
@@ -605,6 +608,30 @@ async fn retrieve_cold_session(
     }
 
     Ok(recovered)
+}
+
+/// Helper to cleanup an invalid persisted session from keyring.
+async fn cleanup_invalid_persisted_session(
+    oauth_state: &OAuthState,
+    state_hash: &str,
+    request_id: &str,
+) {
+    let pkce_storage = oauth_state.pkce_storage.clone();
+    let state_hash_clone = state_hash.to_string();
+    match tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash_clone)).await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!(
+            target: "security",
+            request_id = %request_id,
+            "Failed to delete invalid persisted OAuth session from keyring: {e}"
+        ),
+        Err(e) => tracing::warn!(
+            target: "security",
+            request_id = %request_id,
+            "Failed to delete invalid persisted OAuth session from keyring due to task failure: {e}"
+        ),
+    }
 }
 
 async fn retrieve_session(

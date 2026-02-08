@@ -32,11 +32,15 @@ pub async fn github_token_exchange(
     })?;
 
     let scheme = parsed_url.scheme();
-    let host = parsed_url.host_str().unwrap_or_default();
+    let host = parsed_url
+        .host_str()
+        .unwrap_or_default()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
 
     // Only allow HTTPS requests to trusted GitHub hosts
     let allowed_hosts = ["github.com", "api.github.com"];
-    if scheme != "https" || !allowed_hosts.contains(&host) {
+    if scheme != "https" || !allowed_hosts.iter().any(|h| *h == host) {
         tracing::error!(
             "Blocked GitHub token exchange due to untrusted URL: scheme='{}', host='{}'",
             scheme,
