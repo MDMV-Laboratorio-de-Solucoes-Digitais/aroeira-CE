@@ -1,7 +1,10 @@
-use axum::{http::StatusCode, response::IntoResponse, Router};
+use axum::{
+    error_handling::HandleErrorLayer, extract::DefaultBodyLimit, http::StatusCode,
+    response::IntoResponse, Router,
+};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tower::ServiceBuilder;
+use tower::{buffer::BufferLayer, limit::RateLimitLayer, BoxError, ServiceBuilder};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::info;
@@ -103,9 +106,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ServiceBuilder::new()
                 .layer(TraceLayer::new_for_http())
                 .layer(cors)
-                .layer(tower_http::limit::RequestBodyLimitLayer::new(16 * 1024))
-                .layer(tower::limit::RateLimitLayer::new(
-                    state.config.rate_limit_requests,
+                .layer(DefaultBodyLimit::max(16 * 1024))
+                .layer(HandleErrorLayer::new(|err: BoxError| async move {
+                    (
+                        StatusCode::TOO_MANY_REQUESTS,
+                        format!("Too many requests: {}", err),
+                    )
+                }))
+                .layer(BufferLayer::new(1024))
+                .layer(RateLimitLayer::new(
+                    state.config.rate_limit_requests.into(),
                     std::time::Duration::from_secs(state.config.rate_limit_window_secs),
                 )),
         )
