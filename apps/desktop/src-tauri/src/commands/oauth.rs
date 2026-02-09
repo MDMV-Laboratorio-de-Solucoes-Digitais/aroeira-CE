@@ -559,20 +559,29 @@ async fn retrieve_cold_session(
             size = session_json.len(),
             "Persisted OAuth session exceeded max size"
         );
+
+        cleanup_invalid_persisted_session(oauth_state, state_hash, request_id).await;
+
         return Err("Invalid or expired OAuth session. Please try again.".to_string());
     }
 
-    let recovered = serde_json::from_str::<OAuthPkceSession>(&session_json).map_err(|e| {
-        tracing::error!(
-            target: "security",
-            request_id = %request_id,
-            outcome = "failure",
-            reason = "session_deserialization_failed",
-            error = %e,
-            "Failed to deserialize persisted OAuth session"
-        );
-        "Invalid or expired OAuth session. Please try again.".to_string()
-    })?;
+    let recovered = match serde_json::from_str::<OAuthPkceSession>(&session_json) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(
+                target: "security",
+                request_id = %request_id,
+                outcome = "failure",
+                reason = "session_deserialization_failed",
+                error = %e,
+                "Failed to deserialize persisted OAuth session"
+            );
+
+            cleanup_invalid_persisted_session(oauth_state, state_hash, request_id).await;
+
+            return Err("Invalid or expired OAuth session. Please try again.".to_string());
+        }
+    };
 
     if recovered.state != state_param || !recovered.is_valid() || recovered.is_expired() {
         tracing::warn!(

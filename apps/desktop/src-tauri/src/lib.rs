@@ -97,10 +97,11 @@ impl AppConfig {
         };
         let google_client_id = get_optional_env("GOOGLE_CLIENT_ID");
         let github_client_id = get_optional_env("GITHUB_CLIENT_ID");
-        #[cfg(debug_assertions)]
-        let github_client_secret = get_optional_env("GITHUB_CLIENT_SECRET").map(Into::into);
-        #[cfg(not(debug_assertions))]
-        let github_client_secret = None;
+        let github_client_secret = if cfg!(debug_assertions) {
+            get_optional_env("GITHUB_CLIENT_SECRET").map(Into::into)
+        } else {
+            None
+        };
 
         // Proxy configuration for secret-less OAuth
         let auth_proxy_url = get_optional_env("AUTH_PROXY_URL")

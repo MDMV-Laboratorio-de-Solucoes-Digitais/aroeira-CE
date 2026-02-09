@@ -39,17 +39,21 @@ pub async fn github_token_exchange(
         .to_ascii_lowercase();
 
     // Only allow HTTPS requests to trusted GitHub hosts.
-    // Prefer an explicit allowlist from config; fall back to public GitHub.
+    // GITHUB_ALLOWED_HOSTS must be explicitly set for security.
     let allowed_hosts: Vec<String> = std::env::var("GITHUB_ALLOWED_HOSTS")
-        .ok()
-        .map(|s| {
-            s.split(',')
-                .map(|h| h.trim().trim_end_matches('.').to_ascii_lowercase())
-                .filter(|h| !h.is_empty())
-                .collect()
-        })
-        .filter(|v: &Vec<String>| !v.is_empty())
-        .unwrap_or_else(|| vec!["github.com".to_string(), "api.github.com".to_string()]);
+        .map_err(|_| {
+            AppError::ConfigError("GITHUB_ALLOWED_HOSTS environment variable is not set.".to_string())
+        })?
+        .split(',')
+        .map(|h| h.trim().trim_end_matches('.').to_ascii_lowercase())
+        .filter(|h| !h.is_empty())
+        .collect();
+
+    if allowed_hosts.is_empty() {
+        return Err(AppError::ConfigError(
+            "GITHUB_ALLOWED_HOSTS must not be empty.".to_string(),
+        ));
+    }
 
     let expected_path = "/login/oauth/access_token";
     let has_userinfo = !parsed_url.username().is_empty() || parsed_url.password().is_some();
@@ -75,11 +79,23 @@ pub async fn github_token_exchange(
         ));
     }
 
+    // Enforce trusted redirect URI to prevent open redirection
+    let expected_redirect_uri = std::env::var("GITHUB_REDIRECT_URI")
+        .unwrap_or_else(|_| "aroeira://auth/callback".into());
+
+    if request.redirect_uri != expected_redirect_uri {
+        tracing::warn!(
+            "Rejected GitHub token exchange due to unexpected redirect_uri: {}",
+            request.redirect_uri
+        );
+        return Err(AppError::BadRequest("Invalid request parameters".to_string()));
+    }
+
     let params = [
         ("client_id", client_id.as_str()),
         ("client_secret", client_secret),
         ("code", request.code.as_str()),
-        ("redirect_uri", request.redirect_uri.as_str()),
+        ("redirect_uri", expected_redirect_uri.as_str()),
         ("state", request.state.as_str()),
         ("code_verifier", request.code_verifier.as_str()),
     ];
