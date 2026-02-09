@@ -1013,11 +1013,18 @@ impl OAuthSessionStore {
                     }
                 });
             } else {
-                tracing::warn!(
-                    target: "security",
-                    state_hash = %state_hash_clone,
-                    "No Tokio runtime found to clean up evicted session from keyring. It will be left to expire."
-                );
+                match pkce_storage.delete_session(&state_hash_clone) {
+                    Ok(()) => tracing::debug!(
+                        target: "security",
+                        state_hash = %state_hash_clone,
+                        "Evicted session deleted from keyring (sync fallback)"
+                    ),
+                    Err(e) => tracing::warn!(
+                        target: "security",
+                        state_hash = %state_hash_clone,
+                        "Failed to delete evicted session from keyring (sync fallback): {e}"
+                    ),
+                }
             }
         }
     }

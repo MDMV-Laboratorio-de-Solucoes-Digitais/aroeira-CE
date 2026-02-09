@@ -170,7 +170,7 @@ export function processOAuthCallback(
   // Some OS implementations might strip the // authority markers
   const isHostlessCallback =
     parsed.protocol === `${CALLBACK_SCHEME}:` &&
-    (parsed.hostname === "" || parsed.hostname === "localhost") &&
+    parsed.hostname === "" &&
     parsed.pathname.replace(/^\/+/, "") === HOSTLESS_PATH;
 
   const isLocalhostDev =

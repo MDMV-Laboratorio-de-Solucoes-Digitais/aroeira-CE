@@ -128,8 +128,12 @@ impl AppConfig {
                 let base = proxy_url.trim_end_matches('/');
                 github_token_url = Some(format!("{base}/oauth/github/token"));
             } else {
+                #[cfg(not(debug_assertions))]
+                tracing::info!(
+                    "In release builds, GITHUB_CLIENT_SECRET is ignored for security. Use AUTH_PROXY_URL for GitHub OAuth."
+                );
                 warn!(
-                    "GitHub OAuth client ID is set, but GITHUB_CLIENT_SECRET is missing and no AUTH_PROXY_URL provided. GitHub OAuth may fail if not using a public client."
+                    "GitHub OAuth client ID is set, but no client secret or proxy URL is configured. GitHub OAuth may fail if not using a public client."
                 );
             }
         }
@@ -522,10 +526,11 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // Handle deep link when a second instance is launched
             if let Some(url) = argv.iter().find(|arg| {
-                arg.len() <= 8192
-                    && arg
-                        .to_ascii_lowercase()
-                        .starts_with(&format!("{OAUTH_CALLBACK_SCHEME}://"))
+                arg.len() <= 8192 && {
+                    let lower = arg.to_ascii_lowercase();
+                    lower.starts_with(&format!("{OAUTH_CALLBACK_SCHEME}://"))
+                        || lower.starts_with(&format!("{OAUTH_CALLBACK_SCHEME}:"))
+                }
             }) {
                 // Strictly validate scheme/host/path to prevent prefix bypasses
                 let Ok(parsed) = url::Url::parse(url) else {
