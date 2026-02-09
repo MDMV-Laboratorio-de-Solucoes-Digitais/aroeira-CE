@@ -72,8 +72,37 @@ export async function openOAuthAuthUrl(
   provider: OAuthProvider,
   url: string,
 ): Promise<void> {
+  let parsed: URL;
   try {
-    await openUrl(url);
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid ${provider} authorization URL`);
+  }
+
+  // Prevent open-redirect / phishing via arbitrary URLs
+  if (parsed.protocol !== "https:") {
+    throw new Error(`Blocked non-HTTPS ${provider} authorization URL`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error(`Blocked credentialed ${provider} authorization URL`);
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  const allowedHosts =
+    provider === "google"
+      ? new Set([
+          "accounts.google.com",
+          "oauth2.googleapis.com",
+          "www.googleapis.com",
+        ])
+      : new Set(["github.com"]);
+
+  if (!allowedHosts.has(host)) {
+    throw new Error(`Blocked untrusted ${provider} authorization host`);
+  }
+
+  try {
+    await openUrl(parsed.toString());
   } catch (e) {
     console.error(`Failed to open ${provider} auth URL`, e);
     throw new Error(`Failed to open browser for ${provider} authentication`);

@@ -207,32 +207,35 @@ pub async fn start_oauth_flow(
     // This protects the PKCE verifier from unauthorized access.
     let pkce_storage = oauth_state.pkce_storage.clone();
     let state_hash_clone = state_hash.clone();
-    tokio::task::spawn_blocking(move || {
+    match tokio::task::spawn_blocking(move || {
         pkce_storage.save_session(&state_hash_clone, &session_json)
     })
     .await
-    .map_err(|e| {
-        tracing::error!(
-            target: "security",
-            request_id = %request_id,
-            outcome = "failure",
-            reason = "session_persistence_failed",
-            error = %e,
-            "Failed to persist OAuth session to keyring"
-        );
-        "Failed to start authentication. Please try again.".to_string()
-    })?
-    .map_err(|e| {
-        tracing::error!(
-            target: "security",
-            request_id = %request_id,
-            outcome = "failure",
-            reason = "session_persistence_failed",
-            error = %e,
-            "Failed to persist OAuth session to keyring"
-        );
-        "Failed to start authentication. Please try again.".to_string()
-    })?;
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            tracing::error!(
+                target: "security",
+                request_id = %request_id,
+                outcome = "failure",
+                reason = "session_persistence_failed",
+                error = %e,
+                "Failed to persist OAuth session to keyring"
+            );
+            return Err("Failed to start authentication. Please try again.".to_string());
+        }
+        Err(e) => {
+            tracing::error!(
+                target: "security",
+                request_id = %request_id,
+                outcome = "failure",
+                reason = "session_persistence_task_failed",
+                error = %e,
+                "Failed to persist OAuth session to keyring (task join error)"
+            );
+            return Err("Failed to start authentication. Please try again.".to_string());
+        }
+    }
 
     // Store session for callback verification (warm start)
     // Store in memory ONLY after successful persistence to avoid leaks if persistence fails

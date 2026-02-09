@@ -528,12 +528,35 @@ pub fn run() {
                     return;
                 };
 
-                let is_expected = parsed.scheme().eq_ignore_ascii_case("aroeira")
-                    && parsed.host_str() == Some("auth")
-                    && parsed.path() == "/callback";
+                use crate::constants::{
+                    OAUTH_CALLBACK_HOST, OAUTH_CALLBACK_PATH, OAUTH_CALLBACK_SCHEME,
+                };
+                const HOSTLESS_PATH: &str = "auth/callback";
 
-                if !is_expected {
-                    tracing::warn!("Ignoring unexpected deep link argv");
+                let dev_port: u16 = std::env::var("AROEIRA_DEV_PORT")
+                    .ok()
+                    .and_then(|p| p.parse().ok())
+                    .unwrap_or(1420);
+
+                let is_aroeira_protocol = parsed.scheme().eq_ignore_ascii_case(OAUTH_CALLBACK_SCHEME);
+                let is_localhost_dev = cfg!(debug_assertions)
+                    && parsed.scheme() == "http"
+                    && parsed.host_str() == Some("localhost")
+                    && parsed.port() == Some(dev_port)
+                    && parsed.path() == "/auth/callback";
+
+                let mut is_valid = is_localhost_dev;
+
+                if is_aroeira_protocol {
+                    let is_canonical =
+                        parsed.host_str() == Some(OAUTH_CALLBACK_HOST) && parsed.path() == OAUTH_CALLBACK_PATH;
+                    let is_hostless =
+                        parsed.host_str().is_none() && parsed.path().trim_start_matches('/') == HOSTLESS_PATH;
+                    is_valid = is_canonical || is_hostless;
+                }
+
+                if !is_valid {
+                    tracing::warn!("Ignoring unexpected deep link argv: {}", url);
                     return;
                 }
 

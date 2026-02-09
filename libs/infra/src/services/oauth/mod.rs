@@ -512,14 +512,25 @@ impl OAuthService for OAuthServiceImpl {
             .map_err(|e| OAuthError::ProviderNotConfigured(format!("Invalid token URL: {e}")))?;
 
         // Fail-closed allowlist for redirect URI to prevent token/code exfiltration via misconfig.
-        let ru = self.config.redirect_uri.as_str();
-        let is_prod = ru == "aroeira://auth/callback";
+        let ru_url = url::Url::parse(self.config.redirect_uri.as_str()).map_err(|e| {
+            OAuthError::ProviderNotConfigured(format!("Invalid redirect URI: {e}"))
+        })?;
+
+        let is_prod = ru_url.scheme() == "aroeira"
+            && ru_url.host_str() == Some("auth")
+            && ru_url.path() == "/callback";
+
         let dev_port: u16 = std::env::var("AROEIRA_DEV_PORT")
             .ok()
             .and_then(|p| p.parse().ok())
             .unwrap_or(1420);
-        let is_dev =
-            cfg!(debug_assertions) && ru == format!("http://localhost:{dev_port}/auth/callback");
+
+        let is_dev = cfg!(debug_assertions)
+            && ru_url.scheme() == "http"
+            && ru_url.host_str() == Some("localhost")
+            && ru_url.port() == Some(dev_port)
+            && ru_url.path() == "/auth/callback";
+
         if !is_prod && !is_dev {
             return Err(OAuthError::ProviderNotConfigured(
                 "Invalid redirect URI: not allowlisted".to_string(),
@@ -818,17 +829,6 @@ async fn perform_token_exchange(
     tokio::time::timeout(std::time::Duration::from_secs(30), exchange_future)
         .await
         .map_err(|_| OAuthError::TokenRequestFailed("Token exchange timed out".to_string()))?
-        .map_err(|e| {
-            // The `oauth2` crate's error types are designed not to leak secrets.
-            // Logging the error at a debug level provides valuable diagnostic information.
-            debug!(
-                "Token exchange failed for provider {:?}: {:?}",
-                session.provider, e
-            );
-            error!("Token exchange failed for provider {:?}", session.provider);
-            // Return a generic error to the client.
-            OAuthError::TokenRequestFailed("Provider rejected token request".to_string())
-        })
 }
 
 async fn store_tokens(

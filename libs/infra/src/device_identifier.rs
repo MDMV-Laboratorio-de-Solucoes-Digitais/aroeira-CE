@@ -360,8 +360,7 @@ impl DeviceIdentifier {
         #[cfg(target_os = "windows")]
         {
             // Try to get Windows MachineGuid
-            use winreg::enums::*;
-            use winreg::RegKey;
+            use winreg::{enums::*, RegKey};
 
             let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
             let key = hklm

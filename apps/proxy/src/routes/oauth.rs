@@ -53,16 +53,21 @@ pub async fn github_token_exchange(
 
     let expected_path = "/login/oauth/access_token";
     let has_userinfo = !parsed_url.username().is_empty() || parsed_url.password().is_some();
+    let has_query_or_fragment = parsed_url.query().is_some() || parsed_url.fragment().is_some();
+    let port = parsed_url.port_or_known_default();
 
     if scheme != "https"
         || has_userinfo
+        || has_query_or_fragment
+        || port != Some(443)
         || parsed_url.path() != expected_path
         || !allowed_hosts.iter().any(|h| h == &host)
     {
         tracing::error!(
-            "Blocked GitHub token exchange due to untrusted URL: scheme='{}', host='{}', path='{}'",
+            "Blocked GitHub token exchange due to untrusted URL: scheme='{}', host='{}', port='{:?}', path='{}'",
             scheme,
             host,
+            port,
             parsed_url.path()
         );
         return Err(AppError::GitHubError(
