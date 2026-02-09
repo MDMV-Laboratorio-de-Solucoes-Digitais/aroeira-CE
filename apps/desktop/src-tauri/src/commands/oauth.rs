@@ -187,9 +187,17 @@ pub async fn start_oauth_flow(
 
     let state_param = session.state.clone();
 
-    // Persist session for cold start recovery (deep link opens closed app)
-    // One-time use: deleted after successful `take` on callback.
-    // Hash state with SHA256 to ensure it's safe for storage keys and doesn't leak CSRF token
+    if !session.is_valid() || session.is_expired() {
+        tracing::error!(
+            target: "security",
+            request_id = %request_id,
+            outcome = "failure",
+            reason = "generated_session_invalid",
+            "OAuth service produced an invalid/expired PKCE session"
+        );
+        return Err("Failed to start authentication. Please try again.".to_string());
+    }
+
     let state_hash = hex::encode(Sha256::digest(state_param.as_bytes()));
     let session_json = serde_json::to_string(&session).map_err(|e| {
         tracing::error!(
@@ -672,6 +680,19 @@ async fn authenticate_or_create_user(
 ) -> Result<Uuid, String> {
     let normalized_email = user.email.trim().to_ascii_lowercase();
 
+    // Fail closed: must have a plausible, non-empty email before any lookup/logging.
+    if normalized_email.is_empty() || !normalized_email.contains('@') {
+        tracing::warn!(
+            target: "audit",
+            request_id = %request_id,
+            outcome = "failure",
+            reason = "oauth_email_invalid",
+            provider = %session.provider,
+            "OAuth login rejected due to invalid email"
+        );
+        return Err("Authentication failed. Please try again.".to_string());
+    }
+
     // Fail closed: OAuth sign-in must only accept provider-verified emails.
     if !user.email_verified {
         tracing::warn!(
@@ -680,7 +701,7 @@ async fn authenticate_or_create_user(
             outcome = "failure",
             reason = "oauth_email_not_verified",
             provider = %session.provider,
-            email_domain = %user.email.rsplit_once('@').map_or("unknown", |(_, d)| d),
+            email_domain = %normalized_email.rsplit_once('@').map_or("unknown", |(_, d)| d),
             "OAuth login rejected due to unverified email"
         );
         return Err("Authentication failed. Please use a verified email.".to_string());

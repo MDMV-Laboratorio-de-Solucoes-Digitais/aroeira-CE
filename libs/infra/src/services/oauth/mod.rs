@@ -321,6 +321,20 @@ impl OAuthServiceImpl {
                     );
                 }
 
+                let token_url = self
+                    .config
+                    .github_token_url
+                    .as_deref()
+                    .unwrap_or(Self::GITHUB_TOKEN_URL);
+
+                // GitHub's default token endpoint generally requires a client secret.
+                if token_url == Self::GITHUB_TOKEN_URL && client_secret.is_none() {
+                    return Err(OAuthError::ProviderNotConfigured(
+                        "GitHub client secret is required for the default token endpoint"
+                            .to_string(),
+                    ));
+                }
+
                 Ok((
                     client_id.as_str(),
                     client_secret,
@@ -328,10 +342,7 @@ impl OAuthServiceImpl {
                         .github_auth_url
                         .as_deref()
                         .unwrap_or(Self::GITHUB_AUTH_URL),
-                    self.config
-                        .github_token_url
-                        .as_deref()
-                        .unwrap_or(Self::GITHUB_TOKEN_URL),
+                    token_url,
                 ))
             }
         }
