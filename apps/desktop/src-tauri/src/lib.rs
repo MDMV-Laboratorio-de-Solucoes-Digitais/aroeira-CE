@@ -539,7 +539,8 @@ pub fn run() {
                     .and_then(|p| p.parse().ok())
                     .unwrap_or(1420);
 
-                let is_aroeira_protocol = parsed.scheme().eq_ignore_ascii_case(OAUTH_CALLBACK_SCHEME);
+                let is_aroeira_protocol =
+                    parsed.scheme().eq_ignore_ascii_case(OAUTH_CALLBACK_SCHEME);
                 let is_localhost_dev = cfg!(debug_assertions)
                     && parsed.scheme() == "http"
                     && parsed.host_str() == Some("localhost")
@@ -549,10 +550,10 @@ pub fn run() {
                 let mut is_valid = is_localhost_dev;
 
                 if is_aroeira_protocol {
-                    let is_canonical =
-                        parsed.host_str() == Some(OAUTH_CALLBACK_HOST) && parsed.path() == OAUTH_CALLBACK_PATH;
-                    let is_hostless =
-                        parsed.host_str().is_none() && parsed.path().trim_start_matches('/') == HOSTLESS_PATH;
+                    let is_canonical = parsed.host_str() == Some(OAUTH_CALLBACK_HOST)
+                        && parsed.path() == OAUTH_CALLBACK_PATH;
+                    let is_hostless = parsed.host_str().is_none()
+                        && parsed.path().trim_start_matches('/') == HOSTLESS_PATH;
                     is_valid = is_canonical || is_hostless;
                 }
 

@@ -42,7 +42,9 @@ pub async fn github_token_exchange(
     // GITHUB_ALLOWED_HOSTS must be explicitly set for security.
     let allowed_hosts: Vec<String> = std::env::var("GITHUB_ALLOWED_HOSTS")
         .map_err(|_| {
-            AppError::ConfigError("GITHUB_ALLOWED_HOSTS environment variable is not set.".to_string())
+            AppError::ConfigError(
+                "GITHUB_ALLOWED_HOSTS environment variable is not set.".to_string(),
+            )
         })?
         .split(',')
         .map(|h| h.trim().trim_end_matches('.').to_ascii_lowercase())
@@ -80,15 +82,17 @@ pub async fn github_token_exchange(
     }
 
     // Enforce trusted redirect URI to prevent open redirection
-    let expected_redirect_uri = std::env::var("GITHUB_REDIRECT_URI")
-        .unwrap_or_else(|_| "aroeira://auth/callback".into());
+    let expected_redirect_uri =
+        std::env::var("GITHUB_REDIRECT_URI").unwrap_or_else(|_| "aroeira://auth/callback".into());
 
     if request.redirect_uri != expected_redirect_uri {
         tracing::warn!(
             "Rejected GitHub token exchange due to unexpected redirect_uri: {}",
             request.redirect_uri
         );
-        return Err(AppError::BadRequest("Invalid request parameters".to_string()));
+        return Err(AppError::BadRequest(
+            "Invalid request parameters".to_string(),
+        ));
     }
 
     let params = [

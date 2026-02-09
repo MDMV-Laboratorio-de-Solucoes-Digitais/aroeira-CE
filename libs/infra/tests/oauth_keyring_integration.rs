@@ -51,7 +51,10 @@ async fn test_keyring_availability() {
         return;
     }
 
-    assert!(keyring_available(), "Keyring should be available for this test");
+    assert!(
+        keyring_available(),
+        "Keyring should be available for this test"
+    );
 }
 
 #[tokio::test]

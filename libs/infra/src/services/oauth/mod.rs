@@ -512,9 +512,8 @@ impl OAuthService for OAuthServiceImpl {
             .map_err(|e| OAuthError::ProviderNotConfigured(format!("Invalid token URL: {e}")))?;
 
         // Fail-closed allowlist for redirect URI to prevent token/code exfiltration via misconfig.
-        let ru_url = url::Url::parse(self.config.redirect_uri.as_str()).map_err(|e| {
-            OAuthError::ProviderNotConfigured(format!("Invalid redirect URI: {e}"))
-        })?;
+        let ru_url = url::Url::parse(self.config.redirect_uri.as_str())
+            .map_err(|e| OAuthError::ProviderNotConfigured(format!("Invalid redirect URI: {e}")))?;
 
         let is_prod = ru_url.scheme() == "aroeira"
             && ru_url.host_str() == Some("auth")
