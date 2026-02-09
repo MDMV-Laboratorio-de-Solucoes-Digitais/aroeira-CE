@@ -470,10 +470,28 @@ pub async fn handle_oauth_callback(
 pub async fn get_oauth_availability(
     oauth_state: State<'_, OAuthState>,
 ) -> Result<OAuthAvailability, String> {
-    Ok(OAuthAvailability {
-        google: oauth_state.oauth_service.config.google_client_id.is_some(),
-        github: oauth_state.oauth_service.config.github_client_id.is_some(),
-    })
+    const DEFAULT_GITHUB_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
+
+    let google = oauth_state.oauth_service.config.google_client_id.is_some();
+
+    let github_client_id_present = oauth_state.oauth_service.config.github_client_id.is_some();
+    let github_token_url = oauth_state
+        .oauth_service
+        .config
+        .github_token_url
+        .as_deref()
+        .unwrap_or(DEFAULT_GITHUB_TOKEN_URL);
+    let github_secret_present = oauth_state
+        .oauth_service
+        .config
+        .github_client_secret
+        .as_ref()
+        .is_some_and(|s| !s.expose_secret().trim().is_empty());
+
+    let github = github_client_id_present
+        && (github_token_url != DEFAULT_GITHUB_TOKEN_URL || github_secret_present);
+
+    Ok(OAuthAvailability { google, github })
 }
 
 /// Retrieves session from in-memory store (warm start).
@@ -591,19 +609,7 @@ async fn retrieve_cold_session(
         }
     };
 
-    if recovered.state != state_param || !recovered.is_valid() || recovered.is_expired() {
-        tracing::warn!(
-            target: "audit",
-            request_id = %request_id,
-            outcome = "failure",
-            reason = "session_invalid_or_expired",
-            "OAuth authentication failed: invalid or expired session"
-        );
-
-        cleanup_invalid_persisted_session(oauth_state, state_hash, request_id).await;
-
-        return Err("Invalid or expired OAuth session. Please try again.".to_string());
-    }
+    validate_session_and_log(&recovered, state_param, request_id, oauth_state, state_hash).await?;
 
     // Consume-once: delete from keyring only after successful validation.
     let pkce_storage = oauth_state.pkce_storage.clone();
@@ -628,6 +634,42 @@ async fn retrieve_cold_session(
     }
 
     Ok(recovered)
+}
+
+async fn validate_session_and_log(
+    session: &OAuthPkceSession,
+    state_param: &str,
+    request_id: &str,
+    oauth_state: &OAuthState,
+    state_hash: &str,
+) -> Result<(), String> {
+    // Validate state match (CSRF protection)
+    if session.state != state_param {
+        tracing::warn!(
+            target: "audit",
+            request_id = %request_id,
+            outcome = "failure",
+            reason = "state_mismatch_csrf",
+            "OAuth authentication failed: invalid or expired session"
+        );
+        cleanup_invalid_persisted_session(oauth_state, state_hash, request_id).await;
+        return Err("Invalid or expired OAuth session. Please try again.".to_string());
+    }
+
+    // Validate session validity and expiration
+    if !session.is_valid() || session.is_expired() {
+        tracing::info!(
+            target: "audit",
+            request_id = %request_id,
+            outcome = "failure",
+            reason = "session_invalid_or_expired",
+            "OAuth authentication failed: invalid or expired session"
+        );
+        cleanup_invalid_persisted_session(oauth_state, state_hash, request_id).await;
+        return Err("Invalid or expired OAuth session. Please try again.".to_string());
+    }
+
+    Ok(())
 }
 
 /// Helper to cleanup an invalid persisted session from keyring.
@@ -890,7 +932,15 @@ impl OAuthSessionStore {
                         let state_hash = hex::encode(Sha256::digest(key.as_bytes()));
                         let _ = tokio::task::spawn_blocking({
                             let pkce_storage = pkce_storage.clone();
-                            move || pkce_storage.delete_session(&state_hash)
+                            move || {
+                                if let Err(e) = pkce_storage.delete_session(&state_hash) {
+                                    tracing::warn!(
+                                        target: "security",
+                                        state_hash = %state_hash,
+                                        "Failed to delete expired session from keyring: {e}"
+                                    );
+                                }
+                            }
                         })
                         .await;
                     }
@@ -899,7 +949,13 @@ impl OAuthSessionStore {
                 // Best-effort cleanup even without a Tokio runtime.
                 for key in expired_keys {
                     let state_hash = hex::encode(Sha256::digest(key.as_bytes()));
-                    let _ = pkce_storage.delete_session(&state_hash);
+                    if let Err(e) = pkce_storage.delete_session(&state_hash) {
+                        tracing::warn!(
+                            target: "security",
+                            state_hash = %state_hash,
+                            "Failed to delete expired session from keyring (sync fallback): {e}"
+                        );
+                    }
                 }
             }
         }

@@ -20,7 +20,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' https://www.gstatic.com; style-src 'self'; img-src 'self' https://avatars.githubusercontent.com https://lh3.googleusercontent.com data:; font-src 'self' data:; connect-src 'self' ipc: https://accounts.google.com https://oauth2.googleapis.com https://www.googleapis.com https://github.com https://api.github.com; frame-src 'self' https://accounts.google.com; form-action 'self' https://accounts.google.com https://github.com"
+      "csp": "default-src 'self'; script-src 'self' https://www.gstatic.com https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline'; img-src 'self' https://avatars.githubusercontent.com https://lh3.googleusercontent.com data:; font-src 'self' data:; connect-src 'self' ipc: https://accounts.google.com https://oauth2.googleapis.com https://www.googleapis.com https://github.com https://api.github.com; frame-src 'self' https://accounts.google.com; form-action 'self' https://accounts.google.com https://github.com"
     }
   },
   "bundle": {

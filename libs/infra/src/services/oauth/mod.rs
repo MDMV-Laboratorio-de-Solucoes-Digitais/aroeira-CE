@@ -536,7 +536,12 @@ impl OAuthService for OAuthServiceImpl {
             .and_then(|p| p.parse().ok())
             .unwrap_or(1420);
 
-        let is_dev = cfg!(debug_assertions)
+        let allow_dev_redirect = cfg!(debug_assertions)
+            && std::env::var("AROEIRA_ALLOW_DEV_REDIRECT")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+
+        let is_dev = allow_dev_redirect
             && ru_url.scheme() == "http"
             && ru_url.host_str() == Some("localhost")
             && ru_url.port() == Some(dev_port)

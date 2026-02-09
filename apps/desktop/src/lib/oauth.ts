@@ -173,13 +173,16 @@ export function processOAuthCallback(
     parsed.hostname === "" &&
     parsed.pathname.replace(/^\/+/, "") === HOSTLESS_PATH;
 
-  const DEV_PORT = 1420;
+  const devPort =
+    Number(window.location.port) ||
+    Number((import.meta as any).env?.VITE_DEV_PORT) ||
+    1420;
 
   const isLocalhostDev =
     import.meta.env.DEV &&
     parsed.protocol === "http:" &&
     parsed.hostname === "localhost" &&
-    parsed.port === String(DEV_PORT) &&
+    parsed.port === String(devPort) &&
     parsed.pathname === "/auth/callback";
 
   const isOAuthCallback =
@@ -269,10 +272,12 @@ export function processOAuthCallback(
 
       try {
         const user = await handleOAuthCallback(callbackForBackend);
-        console.log("OAuth callback successful, user:", {
-          provider: user.provider,
-          email: redactEmail(user.email),
-        });
+        if (import.meta.env.DEV) {
+          console.debug("OAuth callback successful", {
+            provider: user.provider,
+            email: redactEmail(user.email),
+          });
+        }
         logAuditEvent("oauth_login", true, {
           provider: user.provider,
           email: redactEmail(user.email),
@@ -284,8 +289,6 @@ export function processOAuthCallback(
         localStorage.removeItem("oauth_pending_state");
         localStorage.removeItem("oauth_pending_started_at");
 
-        // Clean up OAuth state on success
-        callbacks.resetState();
         await goto(resolve("/dashboard"), { replaceState: true });
       } catch (err: unknown) {
         console.error("OAuth callback failed:", sanitizeErrorForAudit(err));
