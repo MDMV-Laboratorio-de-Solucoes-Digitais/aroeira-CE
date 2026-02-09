@@ -1,11 +1,11 @@
 use crate::state::AppState;
 use domain::modules::auth::UserRepository;
 use domain::modules::notes::NoteRepository;
+use infra::constants::OAUTH_CALLBACK_SCHEME;
 use infra::database::establish_connection;
 use infra::database::repositories::{note_repo::NoteRepositoryImpl, user_repo::UserRepositoryImpl};
 use infra::security::{PathValidator, SecureFileCreator};
 use secrecy::SecretBox;
-use infra::constants::OAUTH_CALLBACK_SCHEME;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{Emitter, Manager, Runtime};
@@ -453,7 +453,7 @@ async fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
     // Set up OAuth state first to consume config fields without cloning.
     // Use the deep-link scheme in both dev and release; opening the flow in the system browser
     // requires a custom-scheme callback (or an explicit loopback HTTP listener).
-    let redirect_uri = crate::constants::OAUTH_REDIRECT_URI.to_string();
+    let redirect_uri = infra::constants::OAUTH_REDIRECT_URI.to_string();
     let oauth_config = infra::services::oauth::OAuthConfig {
         google_client_id: config.google_client_id.clone(),
         github_client_id: config.github_client_id.clone(),
@@ -525,7 +525,7 @@ pub fn run() {
                 arg.len() <= 8192
                     && arg
                         .to_ascii_lowercase()
-                        .starts_with(&format!("{}://", OAUTH_CALLBACK_SCHEME))
+                        .starts_with(&format!("{OAUTH_CALLBACK_SCHEME}://"))
             }) {
                 // Strictly validate scheme/host/path to prevent prefix bypasses
                 let Ok(parsed) = url::Url::parse(url) else {

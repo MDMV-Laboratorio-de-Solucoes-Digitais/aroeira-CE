@@ -5,6 +5,7 @@ use url::Url;
 pub const HOSTLESS_PATH: &str = "auth/callback";
 
 /// Gets the development server port from environment or defaults to 1420.
+#[must_use]
 pub fn get_dev_port() -> u16 {
     std::env::var("AROEIRA_DEV_PORT")
         .ok()
@@ -15,7 +16,7 @@ pub fn get_dev_port() -> u16 {
 /// Validates the basic structure (scheme, host, path) of an OAuth callback URL.
 ///
 /// This handles:
-/// 1. Canonical production scheme: aroeira://auth/callback
+/// 1. Canonical production scheme: <aroeira://auth/callback>
 /// 2. Hostless custom scheme: aroeira:auth/callback
 /// 3. Localhost development: http://localhost:{port}/auth/callback (debug only)
 ///
