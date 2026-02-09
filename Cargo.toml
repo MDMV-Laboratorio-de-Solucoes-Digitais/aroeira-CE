@@ -123,7 +123,7 @@ windows-sys = "0.61"
 # CI Profile: Fast builds for PR validation (inherits from dev)
 [profile.ci]
 inherits = "dev"
-debug = 1          # Apenas line tables para backtraces melhores em caso de pânico
+debug = 1          # Line tables only for better backtraces on panic
 opt-level = 0      # No optimizations (fastest compile)
 incremental = true # Enable incremental compilation
 

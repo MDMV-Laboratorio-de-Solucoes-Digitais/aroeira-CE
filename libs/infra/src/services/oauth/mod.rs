@@ -526,7 +526,8 @@ impl OAuthService for OAuthServiceImpl {
         let ru_url = url::Url::parse(self.config.redirect_uri.as_str())
             .map_err(|e| OAuthError::ProviderNotConfigured(format!("Invalid redirect URI: {e}")))?;
 
-        let is_prod = ru_url.scheme() == crate::constants::OAUTH_CALLBACK_SCHEME
+        let is_allowed_prod_scheme = matches!(ru_url.scheme(), "com.aroeira.app" | "aroeira");
+        let is_prod = is_allowed_prod_scheme
             && ru_url.host_str() == Some(crate::constants::OAUTH_CALLBACK_HOST)
             && ru_url.path() == crate::constants::OAUTH_CALLBACK_PATH;
 

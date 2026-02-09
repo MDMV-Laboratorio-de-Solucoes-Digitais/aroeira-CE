@@ -48,6 +48,7 @@ pre-push:
     # ============================================================
     rust-clippy:
       run: |
+        mkdir -p apps/desktop/build
         UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || true)
         if [ -z "$UPSTREAM" ]; then
           echo "⚠️ No upstream configured; running full clippy..."
@@ -64,6 +65,7 @@ pre-push:
 
     rust-test:
       run: |
+        mkdir -p apps/desktop/build
         UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || true)
         if [ -z "$UPSTREAM" ]; then
           echo "⚠️ No upstream configured; running full Rust tests..."

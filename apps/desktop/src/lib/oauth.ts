@@ -173,10 +173,13 @@ export function processOAuthCallback(
     parsed.hostname === "" &&
     parsed.pathname.replace(/^\/+/, "") === HOSTLESS_PATH;
 
+  const DEV_PORT = 1420;
+
   const isLocalhostDev =
     import.meta.env.DEV &&
     parsed.protocol === "http:" &&
     parsed.hostname === "localhost" &&
+    parsed.port === String(DEV_PORT) &&
     parsed.pathname === "/auth/callback";
 
   const isOAuthCallback =
