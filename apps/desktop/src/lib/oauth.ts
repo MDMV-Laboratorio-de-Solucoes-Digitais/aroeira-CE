@@ -112,13 +112,11 @@ export async function openOAuthAuthUrl(
 // Serialize OAuth callback handling to avoid races without dropping events
 let oauthCallbackQueue: Promise<void> = Promise.resolve();
 
-/* eslint-disable no-unused-vars */
 export type OAuthStateCallbacks = {
-  setLoading: (provider: OAuthProvider | null) => void;
-  setError: (msg: string) => void;
-  resetState: (msg?: string) => void;
+  setLoading(_provider: OAuthProvider | null): void;
+  setError(_msg: string): void;
+  resetState(_msg?: string): void;
 };
-/* eslint-enable no-unused-vars */
 
 /**
  * Process an OAuth callback URL from deep linking.
@@ -210,7 +208,6 @@ export function processOAuthCallback(
 
       // Validate callback contains authorization code
       const code = callbackUrl.searchParams.get("code");
-      const state = callbackUrl.searchParams.get("state");
       if (!code) {
         callbacks.resetState(
           "Authentication callback was invalid. Please try again.",

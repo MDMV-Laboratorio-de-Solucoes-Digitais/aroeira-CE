@@ -14,8 +14,18 @@ export const ALLOWED_EXTERNAL_SCHEMES = new Set([
  */
 export function isDangerousHref(href: string): boolean {
   // Normalize by trimming leading whitespace and control characters to prevent bypasses
-  // eslint-disable-next-line no-control-regex
-  const normalized = href.replace(/^[\s\u0000-\u001F\u007F]+/g, "");
+  // Manual loop to avoid no-control-regex lint error
+  let start = 0;
+  while (start < href.length) {
+    const code = href.charCodeAt(start);
+    // 0-31 are control codes, 127 is DEL. \s checks for whitespace.
+    if (code <= 31 || code === 127 || /\s/.test(href[start])) {
+      start++;
+    } else {
+      break;
+    }
+  }
+  const normalized = href.slice(start);
   if (normalized.startsWith("//")) return true;
 
   const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):/i.exec(normalized);
