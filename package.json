@@ -16,7 +16,7 @@
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:restart": "docker compose down && docker compose up -d",
-    "postinstall": "lefthook install"
+    "postinstall": "lefthook install || true"
   },
   "keywords": [],
   "author": "",
