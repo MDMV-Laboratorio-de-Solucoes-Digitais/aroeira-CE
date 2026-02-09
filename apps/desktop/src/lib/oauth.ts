@@ -34,7 +34,11 @@ function redactEmail(email: string): string {
 // Helper function to sanitize error messages for audit logging
 export function sanitizeErrorForAudit(err: unknown): string {
   const errorStr = String(err);
-  if (errorStr.includes("callback") || errorStr.includes("aroeira://")) {
+  if (
+    errorStr.includes("callback") ||
+    errorStr.includes("com.aroeira.app") ||
+    errorStr.includes("aroeira://")
+  ) {
     return "callback_processing_error";
   }
   if (errorStr.includes("token") || errorStr.includes("exchange")) {
@@ -139,12 +143,17 @@ export function processOAuthCallback(
     return Promise.resolve();
   }
 
+  const CALLBACK_SCHEME = "com.aroeira.app";
+  const CALLBACK_HOST = "auth";
+  const CALLBACK_PATH = "/callback";
+  const HOSTLESS_PATH = "auth/callback";
+
   let parsed: URL | null = null;
   try {
     parsed = new URL(rawUrl);
   } catch {
     // If this looks like our scheme but isn't parseable, treat as a failed callback
-    if (rawUrl.startsWith("aroeira:")) {
+    if (rawUrl.startsWith(`${CALLBACK_SCHEME}:`)) {
       callbacks.resetState(
         "Authentication callback was invalid. Please try again.",
       );
@@ -152,10 +161,17 @@ export function processOAuthCallback(
     return Promise.resolve();
   }
 
-  const isAroeiraProtocol =
-    parsed.protocol === "aroeira:" &&
-    parsed.hostname === "auth" &&
-    parsed.pathname === "/callback";
+  const isCanonicalCallback =
+    parsed.protocol === `${CALLBACK_SCHEME}:` &&
+    parsed.hostname === CALLBACK_HOST &&
+    parsed.pathname === CALLBACK_PATH;
+
+  // Handle hostless URLs (e.g., com.aroeira.app:auth/callback)
+  // Some OS implementations might strip the // authority markers
+  const isHostlessCallback =
+    parsed.protocol === `${CALLBACK_SCHEME}:` &&
+    (parsed.hostname === "" || parsed.hostname === "localhost") &&
+    parsed.pathname.replace(/^\/+/, "") === HOSTLESS_PATH;
 
   const isLocalhostDev =
     import.meta.env.DEV &&
@@ -163,7 +179,8 @@ export function processOAuthCallback(
     parsed.hostname === "localhost" &&
     parsed.pathname === "/auth/callback";
 
-  const isOAuthCallback = isAroeiraProtocol || isLocalhostDev;
+  const isOAuthCallback =
+    isCanonicalCallback || isHostlessCallback || isLocalhostDev;
 
   if (!isOAuthCallback) {
     // Ignore unrelated deep links; don't cancel an in-progress OAuth flow.
@@ -239,10 +256,13 @@ export function processOAuthCallback(
 
       callbacks.setError("");
 
-      // Normalize localhost dev callback to aroeira:// scheme for backend consistency
-      const callbackForBackend = isLocalhostDev
-        ? `aroeira://auth/callback${parsed.search}`
-        : rawUrl;
+      // Normalize callback to the canonical scheme for backend consistency
+      // This ensures the backend (which expects com.aroeira.app://auth/callback)
+      // always receives a consistent URL format regardless of how the OS invoked the app.
+      const callbackForBackend =
+        isLocalhostDev || isHostlessCallback
+          ? `${CALLBACK_SCHEME}://${CALLBACK_HOST}${CALLBACK_PATH}${parsed.search}`
+          : rawUrl;
 
       try {
         const user = await handleOAuthCallback(callbackForBackend);
