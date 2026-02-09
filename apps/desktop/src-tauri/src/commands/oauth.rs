@@ -854,7 +854,8 @@ impl OAuthSessionStore {
         // Collect expired keys so we can also delete persisted sessions from keyring.
         let expired_keys: Vec<String> = sessions
             .iter()
-            .filter_map(|(k, s)| s.is_expired().then(|| k.clone()))
+            .filter(|&(_k, s)| s.is_expired())
+            .map(|(k, _s)| k.clone())
             .collect();
 
         sessions.retain(|_, s| !s.is_expired());
