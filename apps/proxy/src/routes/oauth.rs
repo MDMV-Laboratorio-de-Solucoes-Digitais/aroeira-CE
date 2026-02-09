@@ -38,24 +38,7 @@ pub async fn github_token_exchange(
         .trim_end_matches('.')
         .to_ascii_lowercase();
 
-    // Only allow HTTPS requests to trusted GitHub hosts.
-    // GITHUB_ALLOWED_HOSTS must be explicitly set for security.
-    let allowed_hosts: Vec<String> = std::env::var("GITHUB_ALLOWED_HOSTS")
-        .map_err(|_| {
-            AppError::ConfigError(
-                "GITHUB_ALLOWED_HOSTS environment variable is not set.".to_string(),
-            )
-        })?
-        .split(',')
-        .map(|h| h.trim().trim_end_matches('.').to_ascii_lowercase())
-        .filter(|h| !h.is_empty())
-        .collect();
-
-    if allowed_hosts.is_empty() {
-        return Err(AppError::ConfigError(
-            "GITHUB_ALLOWED_HOSTS must not be empty.".to_string(),
-        ));
-    }
+    let allowed_hosts = &state.config.github_allowed_hosts;
 
     let expected_path = "/login/oauth/access_token";
     let has_userinfo = !parsed_url.username().is_empty() || parsed_url.password().is_some();
@@ -82,10 +65,9 @@ pub async fn github_token_exchange(
     }
 
     // Enforce trusted redirect URI to prevent open redirection
-    let expected_redirect_uri =
-        std::env::var("GITHUB_REDIRECT_URI").unwrap_or_else(|_| "aroeira://auth/callback".into());
+    let expected_redirect_uri = &state.config.github_redirect_uri;
 
-    if request.redirect_uri != expected_redirect_uri {
+    if &request.redirect_uri != expected_redirect_uri {
         tracing::warn!(
             "Rejected GitHub token exchange due to unexpected redirect_uri: {}",
             request.redirect_uri

@@ -240,12 +240,6 @@ export function processOAuthCallback(
         return;
       }
 
-      // Consume the pending marker early to prevent processing duplicate callbacks
-      // while the backend exchange is still in-flight.
-      localStorage.removeItem("oauth_pending_provider");
-      localStorage.removeItem("oauth_pending_state");
-      localStorage.removeItem("oauth_pending_started_at");
-
       callbacks.setError("");
 
       // Normalize localhost dev callback to aroeira:// scheme for backend consistency
@@ -254,11 +248,6 @@ export function processOAuthCallback(
         : rawUrl;
 
       try {
-        if (import.meta.env.DEV) {
-          console.debug("Calling handleOAuthCallback with backend", {
-            normalized: isLocalhostDev,
-          });
-        }
         const user = await handleOAuthCallback(callbackForBackend);
         console.log("OAuth callback successful, user:", {
           provider: user.provider,
@@ -269,6 +258,12 @@ export function processOAuthCallback(
           email: redactEmail(user.email),
         });
         setSessionId();
+
+        // Consume pending markers only after a successful exchange.
+        localStorage.removeItem("oauth_pending_provider");
+        localStorage.removeItem("oauth_pending_state");
+        localStorage.removeItem("oauth_pending_started_at");
+
         // Clean up OAuth state on success
         callbacks.resetState();
         await goto(resolve("/dashboard"), { replaceState: true });

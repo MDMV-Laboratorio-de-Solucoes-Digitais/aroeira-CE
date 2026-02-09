@@ -5,6 +5,7 @@ use infra::database::establish_connection;
 use infra::database::repositories::{note_repo::NoteRepositoryImpl, user_repo::UserRepositoryImpl};
 use infra::security::{PathValidator, SecureFileCreator};
 use secrecy::SecretBox;
+use infra::constants::OAUTH_CALLBACK_SCHEME;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{Emitter, Manager, Runtime};
@@ -14,6 +15,7 @@ pub mod auth_utils;
 pub mod commands;
 pub mod constants;
 pub mod error_codes;
+pub mod oauth_utils;
 #[cfg(test)]
 mod security_tests;
 pub mod services;
@@ -519,46 +521,20 @@ pub fn run() {
         .plugin(tauri_plugin_secure_storage::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // Handle deep link when a second instance is launched
-            if let Some(url) = argv
-                .iter()
-                .find(|arg| arg.len() <= 8192 && arg.to_ascii_lowercase().starts_with("aroeira://"))
-            {
+            if let Some(url) = argv.iter().find(|arg| {
+                arg.len() <= 8192
+                    && arg
+                        .to_ascii_lowercase()
+                        .starts_with(&format!("{}://", OAUTH_CALLBACK_SCHEME))
+            }) {
                 // Strictly validate scheme/host/path to prevent prefix bypasses
                 let Ok(parsed) = url::Url::parse(url) else {
                     tracing::warn!("Ignoring malformed deep link argv");
                     return;
                 };
 
-                use crate::constants::{
-                    OAUTH_CALLBACK_HOST, OAUTH_CALLBACK_PATH, OAUTH_CALLBACK_SCHEME,
-                };
-                const HOSTLESS_PATH: &str = "auth/callback";
-
-                let dev_port: u16 = std::env::var("AROEIRA_DEV_PORT")
-                    .ok()
-                    .and_then(|p| p.parse().ok())
-                    .unwrap_or(1420);
-
-                let is_aroeira_protocol =
-                    parsed.scheme().eq_ignore_ascii_case(OAUTH_CALLBACK_SCHEME);
-                let is_localhost_dev = cfg!(debug_assertions)
-                    && parsed.scheme() == "http"
-                    && parsed.host_str() == Some("localhost")
-                    && parsed.port() == Some(dev_port)
-                    && parsed.path() == "/auth/callback";
-
-                let mut is_valid = is_localhost_dev;
-
-                if is_aroeira_protocol {
-                    let is_canonical = parsed.host_str() == Some(OAUTH_CALLBACK_HOST)
-                        && parsed.path() == OAUTH_CALLBACK_PATH;
-                    let is_hostless = parsed.host_str().is_none()
-                        && parsed.path().trim_start_matches('/') == HOSTLESS_PATH;
-                    is_valid = is_canonical || is_hostless;
-                }
-
-                if !is_valid {
-                    tracing::warn!("Ignoring unexpected deep link argv: {}", url);
+                if let Err(e) = crate::oauth_utils::validate_callback_url_base(&parsed) {
+                    tracing::warn!(error = %e, "Ignoring unexpected deep link argv: {}", url);
                     return;
                 }
 

@@ -163,6 +163,14 @@
               length: event.payload?.length ?? 0,
             });
           }
+
+          if (typeof event.payload !== "string" || event.payload.length === 0) {
+            resetOAuthState(
+              "Authentication callback was invalid. Please try again.",
+            );
+            return;
+          }
+
           await handleDeepLink(event.payload);
         },
       );

@@ -319,11 +319,11 @@ async fn exchange_code_for_user(
             // Only log debug OAuth details when explicitly enabled
             if cfg!(debug_assertions) && std::env::var_os("AROEIRA_OAUTH_DEBUG").is_some() {
                 tracing::debug!(
-                        target: "oauth_debug",
-                        request_id = %request_id,
-                        error_details = %e,
-                        "OAuth code exchange failed for provider {:?}",
-                        session.provider
+                    target: "oauth_debug",
+                    request_id = %request_id,
+                    error_message = %e.to_string(),
+                    "OAuth code exchange failed for provider {:?}",
+                    session.provider
                 );
             }
             Err("Authentication failed. Please try again.".to_string())
@@ -850,7 +850,37 @@ impl OAuthSessionStore {
     #[must_use]
     pub fn take_valid(&self, state: &str, request_id: &str) -> Option<OAuthPkceSession> {
         let mut sessions = self.sessions.lock();
+
+        // Collect expired keys so we can also delete persisted sessions from keyring.
+        let expired_keys: Vec<String> = sessions
+            .iter()
+            .filter_map(|(k, s)| s.is_expired().then(|| k.clone()))
+            .collect();
+
         sessions.retain(|_, s| !s.is_expired());
+
+        if !expired_keys.is_empty() {
+            let pkce_storage = self.pkce_storage.clone();
+
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    for key in expired_keys {
+                        let state_hash = hex::encode(Sha256::digest(key.as_bytes()));
+                        let _ = tokio::task::spawn_blocking({
+                            let pkce_storage = pkce_storage.clone();
+                            move || pkce_storage.delete_session(&state_hash)
+                        })
+                        .await;
+                    }
+                });
+            } else {
+                // Best-effort cleanup even without a Tokio runtime.
+                for key in expired_keys {
+                    let state_hash = hex::encode(Sha256::digest(key.as_bytes()));
+                    let _ = pkce_storage.delete_session(&state_hash);
+                }
+            }
+        }
 
         let is_valid = sessions
             .get(state)
@@ -879,6 +909,9 @@ impl OAuthSessionStore {
                         })
                         .await;
                     });
+                } else {
+                    // Best-effort cleanup even without a Tokio runtime.
+                    let _ = pkce_storage.delete_session(&state_hash);
                 }
             }
 
@@ -1076,52 +1109,7 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
 
 /// Validates the basic structure (scheme, host, path) of the callback URL.
 fn validate_callback_url_base(url: &Url) -> Result<(), String> {
-    use crate::constants::{OAUTH_CALLBACK_HOST, OAUTH_CALLBACK_PATH, OAUTH_CALLBACK_SCHEME};
-    const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
-    const HOSTLESS_PATH: &str = "auth/callback";
-
-    // Handle both production (aroeira://) and dev mode (http://localhost) callbacks
-    let dev_port: u16 = std::env::var("AROEIRA_DEV_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(1420);
-
-    let is_aroeira_protocol = url.scheme() == OAUTH_CALLBACK_SCHEME;
-    let is_localhost_dev = cfg!(debug_assertions)
-        && url.scheme() == "http"
-        && url.host_str() == Some("localhost")
-        && url.port() == Some(dev_port)
-        && url.path() == "/auth/callback";
-
-    if !is_aroeira_protocol && !is_localhost_dev {
-        tracing::warn!(
-            expected_scheme = OAUTH_CALLBACK_SCHEME,
-            actual_scheme = url.scheme(),
-            "OAuth callback: invalid scheme"
-        );
-        return Err(GENERIC_ERROR.to_string());
-    }
-
-    // For aroeira protocol, validate host/path
-    if is_aroeira_protocol {
-        let is_canonical =
-            url.host_str() == Some(OAUTH_CALLBACK_HOST) && url.path() == OAUTH_CALLBACK_PATH;
-        let is_hostless =
-            url.host_str().is_none() && url.path().trim_start_matches('/') == HOSTLESS_PATH;
-
-        if !is_canonical && !is_hostless {
-            tracing::warn!(
-                expected_host = OAUTH_CALLBACK_HOST,
-                expected_path = OAUTH_CALLBACK_PATH,
-                actual_host = ?url.host_str(),
-                actual_path = url.path(),
-                "OAuth callback: invalid host or path"
-            );
-            return Err(GENERIC_ERROR.to_string());
-        }
-    }
-
-    Ok(())
+    crate::oauth_utils::validate_callback_url_base(url)
 }
 
 /// Extracts and performs security validation on the OAuth code and state parameters.

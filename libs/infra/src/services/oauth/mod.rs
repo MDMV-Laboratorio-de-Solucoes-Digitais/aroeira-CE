@@ -515,9 +515,9 @@ impl OAuthService for OAuthServiceImpl {
         let ru_url = url::Url::parse(self.config.redirect_uri.as_str())
             .map_err(|e| OAuthError::ProviderNotConfigured(format!("Invalid redirect URI: {e}")))?;
 
-        let is_prod = ru_url.scheme() == "aroeira"
-            && ru_url.host_str() == Some("auth")
-            && ru_url.path() == "/callback";
+        let is_prod = ru_url.scheme() == crate::constants::OAUTH_CALLBACK_SCHEME
+            && ru_url.host_str() == Some(crate::constants::OAUTH_CALLBACK_HOST)
+            && ru_url.path() == crate::constants::OAUTH_CALLBACK_PATH;
 
         let dev_port: u16 = std::env::var("AROEIRA_DEV_PORT")
             .ok()
