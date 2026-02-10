@@ -365,6 +365,7 @@ async fn exchange_code_for_user(
 async fn finalize_oauth_login(
     user: &OAuthUser,
     session: &domain::modules::auth::oauth::OAuthPkceSession,
+    oauth_state: &OAuthState,
     state: &AppState,
     device_id: &str,
     request_id: &str,
@@ -379,6 +380,27 @@ async fn finalize_oauth_login(
 
     handle_successful_login(user_id, &email_hash, device_id, state).await?;
     log_oauth_success(user_id, session, user, request_id);
+
+    // Clean up persisted session now that login is successful
+    let state_hash = hex::encode(Sha256::digest(session.state.as_bytes()));
+    let pkce_storage = oauth_state.pkce_storage.clone();
+    let request_id_clone = request_id.to_string();
+
+    tokio::spawn(async move {
+        match tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::warn!(
+                target: "security",
+                request_id = %request_id_clone,
+                "Failed to delete persisted OAuth session after success: {e}"
+            ),
+            Err(e) => tracing::warn!(
+                target: "security",
+                request_id = %request_id_clone,
+                "Failed to delete persisted OAuth session after success (task join error): {e}"
+            ),
+        }
+    });
 
     Ok(OAuthCallbackResponse::from(user.clone()))
 }
@@ -466,7 +488,15 @@ pub async fn handle_oauth_callback(
     let user =
         exchange_code_for_user(&oauth_state, &session, code, &request_id, &device_id_hash).await?;
 
-    finalize_oauth_login(&user, &session, &state, &device_id, &request_id).await
+    finalize_oauth_login(
+        &user,
+        &session,
+        &oauth_state,
+        &state,
+        &device_id,
+        &request_id,
+    )
+    .await
 }
 
 /// Checks which OAuth providers are available by querying the backend configuration.
@@ -508,7 +538,7 @@ pub async fn get_oauth_availability(
         .config
         .github_client_secret
         .as_ref()
-        .is_some_and(|s| !s.expose_secret().trim().is_empty());
+        .is_some_and(|s| !s.expose_secret().is_empty());
 
     let github = github_client_id_present
         && (github_token_url != DEFAULT_GITHUB_TOKEN_URL || github_secret_present);
@@ -520,34 +550,15 @@ pub async fn get_oauth_availability(
 async fn retrieve_warm_session(
     state_param: &str,
     oauth_state: &OAuthState,
-    state_hash: &str,
+    _state_hash: &str,
     request_id: &str,
 ) -> Option<OAuthPkceSession> {
     let session = oauth_state
         .session_store
         .take_valid(state_param, request_id)?;
 
-    // Session is valid - clean up persisted session from keyring.
-    let pkce_storage = oauth_state.pkce_storage.clone();
-    let state_hash_clone = state_hash.to_string();
-    match tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash_clone)).await
-    {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => {
-            tracing::warn!(
-                target: "security",
-                request_id = %request_id,
-                "Failed to delete persisted OAuth session from keyring: {e}. Session will be cleaned up separately."
-            );
-        }
-        Err(e) => {
-            tracing::warn!(
-                target: "security",
-                request_id = %request_id,
-                "Failed to delete persisted OAuth session from keyring due to task failure: {e}. Session will be cleaned up separately."
-            );
-        }
-    }
+    // NOTE: Do not delete the persisted session here.
+    // Delete only after a successful code exchange/login to allow retry on transient failures.
 
     Some(session)
 }
@@ -575,7 +586,7 @@ async fn retrieve_cold_session(
                     error = %e,
                     "Failed to read persisted OAuth session from keyring"
                 );
-                "Invalid or expired OAuth session. Please try again.".to_string()
+                "Authentication session is invalid or expired. Please try again.".to_string()
             })?
             .map_err(|e| {
                 tracing::error!(
@@ -586,7 +597,7 @@ async fn retrieve_cold_session(
                     error = %e,
                     "Failed to read persisted OAuth session from keyring"
                 );
-                "Invalid or expired OAuth session. Please try again.".to_string()
+                "Authentication session is invalid or expired. Please try again.".to_string()
             })?
             .ok_or_else(|| {
                 tracing::warn!(
@@ -596,7 +607,7 @@ async fn retrieve_cold_session(
                     reason = "session_not_found",
                     "OAuth authentication failed: invalid or expired session"
                 );
-                "Invalid or expired OAuth session. Please try again.".to_string()
+                "Authentication session is invalid or expired. Please try again.".to_string()
             })?;
 
     if session_json.len() > MAX_SESSION_JSON_BYTES {
@@ -633,27 +644,8 @@ async fn retrieve_cold_session(
 
     validate_session_and_log(&recovered, state_param, request_id, oauth_state, state_hash).await?;
 
-    // Consume-once: delete from keyring only after successful validation.
-    let pkce_storage = oauth_state.pkce_storage.clone();
-    let state_hash_clone = state_hash.to_string();
-    match tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash_clone)).await
-    {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => {
-            tracing::warn!(
-                target: "security",
-                request_id = %request_id,
-                "Failed to delete persisted OAuth session from keyring: {e}. Session will expire naturally but cleanup is incomplete."
-            );
-        }
-        Err(e) => {
-            tracing::warn!(
-                target: "security",
-                request_id = %request_id,
-                "Failed to delete persisted OAuth session from keyring due to task failure: {e}. Session will expire naturally but cleanup is incomplete."
-            );
-        }
-    }
+    // NOTE: Do not delete the persisted session here.
+    // Delete only after a successful code exchange/login to allow retry on transient failures.
 
     Ok(recovered)
 }
@@ -754,7 +746,7 @@ async fn authenticate_or_create_user(
             provider = %session.provider,
             "OAuth login rejected due to invalid email"
         );
-        return Err("Authentication failed. Please try again.".to_string());
+        return Err("Authentication failed: Invalid email. Please try again.".to_string());
     }
 
     // Fail closed: OAuth sign-in must only accept provider-verified emails.
@@ -789,7 +781,7 @@ async fn authenticate_or_create_user(
                         request_id = %request_id,
                         "Failed to update user verification from OAuth: {e}"
                     );
-                    "Authentication failed".to_string()
+                    "Authentication failed: System error during verification update.".to_string()
                 })?;
             }
             Ok(user.id)
@@ -828,7 +820,7 @@ async fn authenticate_or_create_user(
                             request_id = %request_id,
                             "Failed to recover user after OAuth create conflict"
                         );
-                        Err("Authentication failed".to_string())
+                        Err("Authentication failed: User creation conflict.".to_string())
                     }
                 }
                 Err(e) => {
@@ -836,7 +828,7 @@ async fn authenticate_or_create_user(
                         request_id = %request_id,
                         "Failed to save new OAuth user due to unexpected database error: {e}"
                     );
-                    Err("Authentication failed".to_string())
+                    Err("Authentication failed: Database error.".to_string())
                 }
             }
         }
@@ -845,7 +837,7 @@ async fn authenticate_or_create_user(
                 request_id = %request_id,
                 "Database error finding user: {e}"
             );
-            Err("Authentication failed".to_string())
+            Err("Authentication failed: Database error finding user.".to_string())
         }
     }
 }
