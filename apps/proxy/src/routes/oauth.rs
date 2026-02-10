@@ -34,7 +34,7 @@ pub async fn github_token_exchange(
     ];
 
     let response = client
-        .post(&payload.redirect_uri) // We validated this matches expected path/host above
+        .post("https://github.com/login/oauth/access_token")
         .header("Accept", "application/json")
         .form(&params)
         .send()
