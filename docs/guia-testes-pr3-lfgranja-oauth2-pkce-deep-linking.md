@@ -118,7 +118,7 @@ Get-ItemProperty "Registry::HKEY_CLASSES_ROOT\aroeira"
    ```bash
    cargo tauri dev
    # ou
-   ./target/release/aroeira`
+   ./target/release/aroeira
    ```
 
 2. **Clicar em "Sign in with Google"** no frontend
@@ -144,10 +144,14 @@ Get-ItemProperty "Registry::HKEY_CLASSES_ROOT\aroeira"
    # Instalar secret-tool
    sudo apt-get install libsecret-tools
 
-   # Buscar a sessão PKCE
-   secret-tool lookup service aroeira-oauth-pkce
+   # Buscar a sessão PKCE (descoberta)
+   secret-tool search service aroeira-oauth-pkce
 
-   # Deve retornar os dados da sessão (JSON criptografado)
+   # Se sua implementação armazenar também "account", faça o lookup direto:
+   # (substitua <ACCOUNT> pelo valor retornado no search)
+   secret-tool lookup service aroeira-oauth-pkce account <ACCOUNT>
+
+   # Deve retornar os dados da sessão (JSON)
    ```
 
    #### macOS
