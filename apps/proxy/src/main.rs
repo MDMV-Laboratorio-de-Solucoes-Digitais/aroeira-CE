@@ -4,6 +4,7 @@ use axum::{
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tower::buffer::error::ServiceError;
 use tower::{buffer::BufferLayer, limit::RateLimitLayer, BoxError, ServiceBuilder};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
@@ -108,6 +109,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .layer(cors)
                 .layer(DefaultBodyLimit::max(16 * 1024))
                 .layer(HandleErrorLayer::new(|err: BoxError| async move {
+                    if let Some(service_err) = err.downcast_ref::<ServiceError>() {
+                        if service_err.to_string().contains("full") {
+                            return (
+                                StatusCode::TOO_MANY_REQUESTS,
+                                "Too many requests".to_string(),
+                            );
+                        }
+                    }
                     tracing::error!("Unhandled middleware error: {}", err);
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,

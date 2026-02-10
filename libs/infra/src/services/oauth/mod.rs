@@ -847,6 +847,8 @@ async fn perform_token_exchange(
         .map_err(|_| OAuthError::TokenRequestFailed("Token exchange timed out".to_string()))?
 }
 
+const MAX_TOKEN_PAYLOAD_BYTES: usize = 16 * 1024; // 16 KiB hard cap (defensive)
+
 async fn store_tokens(
     storage: &std::sync::Arc<dyn TokenStorage>,
     user: &OAuthUser,
@@ -855,8 +857,6 @@ async fn store_tokens(
         oauth2::basic::BasicTokenType,
     >,
 ) -> Result<(), OAuthError> {
-    const MAX_TOKEN_PAYLOAD_BYTES: usize = 16 * 1024; // 16 KiB hard cap (defensive)
-
     let user_key = format!("{}:{}", user.provider, user.provider_user_id);
 
     // Hash user key for logging and storage to avoid PII leak in OS store/logs
