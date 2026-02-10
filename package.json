@@ -16,7 +16,7 @@
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:restart": "docker compose down && docker compose up -d",
-    "postinstall": "lefthook install || true"
+    "postinstall": "node -e \"const fs=require('fs'); if(fs.existsSync('.git')) process.exit(require('child_process').spawnSync('lefthook',['install'],{stdio:'inherit'}).status||0);\" || true"
   },
   "keywords": [],
   "author": "",
