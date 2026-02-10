@@ -199,8 +199,21 @@ pub async fn start_oauth_flow(
         return Err("Failed to start authentication. Please try again.".to_string());
     }
 
-    let state_hash = hex::encode(Sha256::digest(state_param.as_bytes()));
-    let session_json = serde_json::to_string(&session).map_err(|e| {
+    persist_oauth_session(&oauth_state, &session, &request_id).await?;
+
+    Ok(StartOAuthResponse {
+        auth_url,
+        state: state_param,
+    })
+}
+
+async fn persist_oauth_session(
+    oauth_state: &OAuthState,
+    session: &OAuthPkceSession,
+    request_id: &str,
+) -> Result<(), String> {
+    let state_hash = hex::encode(Sha256::digest(session.state.as_bytes()));
+    let session_json = serde_json::to_string(session).map_err(|e| {
         tracing::error!(
             target: "security",
             request_id = %request_id,
@@ -214,14 +227,31 @@ pub async fn start_oauth_flow(
 
     // Store PKCE session in OS keyring for secure persistence (encryption at rest).
     // This protects the PKCE verifier from unauthorized access.
-    let pkce_storage = oauth_state.pkce_storage.clone();
-    let state_hash_clone = state_hash.clone();
-    match tokio::task::spawn_blocking(move || {
-        pkce_storage.save_session(&state_hash_clone, &session_json)
-    })
-    .await
+    store_session_in_keyring(
+        oauth_state.pkce_storage.clone(),
+        state_hash,
+        session_json,
+        request_id,
+    )
+    .await?;
+
+    // Store session for callback verification (warm start)
+    // Store in memory ONLY after successful persistence to avoid leaks if persistence fails
+    oauth_state.session_store.store(session.clone());
+
+    Ok(())
+}
+
+async fn store_session_in_keyring(
+    pkce_storage: Arc<dyn PkceSessionStorage>,
+    state_hash: String,
+    session_json: String,
+    request_id: &str,
+) -> Result<(), String> {
+    match tokio::task::spawn_blocking(move || pkce_storage.save_session(&state_hash, &session_json))
+        .await
     {
-        Ok(Ok(())) => {}
+        Ok(Ok(())) => Ok(()),
         Ok(Err(e)) => {
             tracing::error!(
                 target: "security",
@@ -231,7 +261,7 @@ pub async fn start_oauth_flow(
                 error = %e,
                 "Failed to persist OAuth session to keyring"
             );
-            return Err("Failed to start authentication. Please try again.".to_string());
+            Err("Failed to start authentication. Please try again.".to_string())
         }
         Err(e) => {
             tracing::error!(
@@ -242,18 +272,9 @@ pub async fn start_oauth_flow(
                 error = %e,
                 "Failed to persist OAuth session to keyring (task join error)"
             );
-            return Err("Failed to start authentication. Please try again.".to_string());
+            Err("Failed to start authentication. Please try again.".to_string())
         }
     }
-
-    // Store session for callback verification (warm start)
-    // Store in memory ONLY after successful persistence to avoid leaks if persistence fails
-    oauth_state.session_store.store(session.clone());
-
-    Ok(StartOAuthResponse {
-        auth_url,
-        state: state_param,
-    })
 }
 
 /// Validates the OAuth callback URL and extracts code and state.
