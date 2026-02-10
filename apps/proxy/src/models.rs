@@ -31,6 +31,7 @@ pub struct GitHubTokenResponse {
     pub error_description: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct GitHubRawTokenResponse {
     pub access_token: String,

@@ -15,6 +15,7 @@ pub enum AppError {
     #[allow(dead_code)]
     #[error("Database error: {0}")]
     DbError(String),
+    #[allow(dead_code)]
     #[error("Bad request: {0}")]
     BadRequest(String),
     #[error("Internal server error")]
