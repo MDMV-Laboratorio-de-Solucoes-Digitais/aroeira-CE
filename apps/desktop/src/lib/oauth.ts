@@ -7,9 +7,12 @@ import { handleError } from "./logger";
 
 export type OAuthProvider = "google" | "github";
 
-export interface OAuthAvailability {
-  google: boolean;
-  github: boolean;
+let oauthCallbackQueue = Promise.resolve();
+
+export interface OAuthStateCallbacks {
+  setLoading: (_provider: OAuthProvider | null) => void;
+  setError: (_error: string) => void;
+  resetState: (_msg?: string) => void;
 }
 
 export interface OAuthUser {
@@ -22,6 +25,11 @@ export interface OAuthUser {
 export interface StartOAuthResponse {
   auth_url: string;
   state: string;
+}
+
+export interface OAuthAvailability {
+  google: boolean;
+  github: boolean;
 }
 
 // Helper function to redact email addresses for audit logging
@@ -66,12 +74,6 @@ export async function startOAuthFlow(
   return invoke<StartOAuthResponse>("start_oauth_flow", { provider });
 }
 
-export async function handleOAuthCallback(
-  callbackUrl: string,
-): Promise<OAuthUser> {
-  return invoke<OAuthUser>("handle_oauth_callback", { callbackUrl });
-}
-
 export async function openOAuthAuthUrl(
   provider: OAuthProvider,
   url: string,
@@ -92,17 +94,16 @@ export async function openOAuthAuthUrl(
   }
 
   const host = parsed.hostname.toLowerCase();
-  const allowedHosts =
-    provider === "google"
-      ? new Set([
-          "accounts.google.com",
-          "oauth2.googleapis.com",
-          "www.googleapis.com",
-        ])
-      : new Set(["github.com"]);
+  const path = parsed.pathname;
 
-  if (!allowedHosts.has(host)) {
-    throw new Error(`Blocked untrusted ${provider} authorization host`);
+  if (provider === "google") {
+    if (host !== "accounts.google.com" || path !== "/o/oauth2/v2/auth") {
+      throw new Error("Blocked untrusted Google authorization endpoint");
+    }
+  } else {
+    if (host !== "github.com" || path !== "/login/oauth/authorize") {
+      throw new Error("Blocked untrusted GitHub authorization endpoint");
+    }
   }
 
   try {
@@ -113,13 +114,65 @@ export async function openOAuthAuthUrl(
   }
 }
 
-// Serialize OAuth callback handling to avoid races without dropping events
-let oauthCallbackQueue: Promise<void> = Promise.resolve();
+/**
+ * Handle the OAuth callback
+ * This is called when the app is opened via deep link
+ */
+export const handleOAuthCallback = async (url: string): Promise<OAuthUser> => {
+  const parsed = new URL(url);
+  const rawUrl = url;
 
-export type OAuthStateCallbacks = {
-  setLoading(_provider: OAuthProvider | null): void;
-  setError(_msg: string): void;
-  resetState(_msg?: string): void;
+  // Constants
+  const CALLBACK_SCHEME = "aroeira";
+  const CALLBACK_HOST = "auth";
+  const CALLBACK_PATH = "/callback";
+  const HOSTLESS_PATH = "auth/callback";
+
+  const isCanonicalCallback =
+    parsed.protocol === `${CALLBACK_SCHEME}:` &&
+    parsed.hostname === CALLBACK_HOST &&
+    parsed.pathname === CALLBACK_PATH;
+
+  const isHostlessCallback =
+    parsed.protocol === `${CALLBACK_SCHEME}:` &&
+    parsed.hostname === "" &&
+    parsed.pathname.replace(/^\/+/, "") === HOSTLESS_PATH;
+
+  const devPort =
+    Number(window.location.port) ||
+    Number((import.meta as any).env?.VITE_DEV_PORT) ||
+    1420;
+
+  const isLocalhostDev =
+    import.meta.env.DEV &&
+    parsed.protocol === "http:" &&
+    parsed.hostname === "localhost" &&
+    parsed.port === String(devPort) &&
+    parsed.pathname === "/auth/callback";
+
+  const isOAuthCallback =
+    isCanonicalCallback || isHostlessCallback || isLocalhostDev;
+
+  if (!isOAuthCallback) {
+    // Not an OAuth callback we recognize
+    throw new Error("Invalid callback URL");
+  }
+
+  // Normalize callback to the canonical scheme for backend consistency
+  // This ensures the backend (which expects com.aroeira.app://auth/callback)
+  // always receives a consistent URL format regardless of how the OS invoked the app.
+  const callbackForBackend = isHostlessCallback
+    ? `${CALLBACK_SCHEME}://${CALLBACK_HOST}${CALLBACK_PATH}${parsed.search}`
+    : rawUrl;
+
+  try {
+    return await invoke<OAuthUser>("handle_oauth_callback", {
+      url: callbackForBackend,
+    });
+  } catch (err: unknown) {
+    console.error("Backend OAuth exchange failed:", err);
+    throw err; // Re-throw to be handled by caller
+  }
 };
 
 /**
@@ -265,10 +318,9 @@ export function processOAuthCallback(
       // Normalize callback to the canonical scheme for backend consistency
       // This ensures the backend (which expects com.aroeira.app://auth/callback)
       // always receives a consistent URL format regardless of how the OS invoked the app.
-      const callbackForBackend =
-        isLocalhostDev || isHostlessCallback
-          ? `${CALLBACK_SCHEME}://${CALLBACK_HOST}${CALLBACK_PATH}${parsed.search}`
-          : rawUrl;
+      const callbackForBackend = isHostlessCallback
+        ? `${CALLBACK_SCHEME}://${CALLBACK_HOST}${CALLBACK_PATH}${parsed.search}`
+        : rawUrl;
 
       try {
         const user = await handleOAuthCallback(callbackForBackend);

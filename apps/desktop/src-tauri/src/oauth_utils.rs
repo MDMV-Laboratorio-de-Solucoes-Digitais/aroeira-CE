@@ -42,8 +42,18 @@ pub fn validate_callback_url_base(url: &Url) -> Result<(), String> {
         return Err(GENERIC_ERROR.to_string());
     }
 
-    // For aroeira protocol, validate host/path
+    // Reject URL fragments everywhere (OAuth response must not be in fragment for this app)
+    if url.fragment().is_some() {
+        tracing::warn!("OAuth callback: unexpected fragment");
+        return Err(GENERIC_ERROR.to_string());
+    }
+
+    // For aroeira protocol, validate host/path and disallow userinfo/ports
     if is_aroeira_protocol {
+        if !url.username().is_empty() || url.password().is_some() || url.port().is_some() {
+            tracing::warn!("OAuth callback: unexpected authority components");
+            return Err(GENERIC_ERROR.to_string());
+        }
         let is_canonical =
             url.host_str() == Some(OAUTH_CALLBACK_HOST) && url.path() == OAUTH_CALLBACK_PATH;
         let is_hostless =

@@ -855,6 +855,8 @@ async fn store_tokens(
         oauth2::basic::BasicTokenType,
     >,
 ) -> Result<(), OAuthError> {
+    const MAX_TOKEN_PAYLOAD_BYTES: usize = 16 * 1024; // 16 KiB hard cap (defensive)
+
     let user_key = format!("{}:{}", user.provider, user.provider_user_id);
 
     // Hash user key for logging and storage to avoid PII leak in OS store/logs
@@ -884,6 +886,12 @@ async fn store_tokens(
     // Prevent blocking async runtime with synchronous keyring operations
     let storage = storage.clone();
     let token_payload_str = token_payload.to_string();
+    if token_payload_str.len() > MAX_TOKEN_PAYLOAD_BYTES {
+        return Err(OAuthError::TokenRequestFailed(
+            "Provider returned an unexpectedly large token payload".to_string(),
+        ));
+    }
+
     let user_key_hash_for_store = user_key_hash.clone();
 
     let store_result = tokio::task::spawn_blocking(move || {
