@@ -14,6 +14,9 @@ Crie um arquivo `.env` na raiz do projeto:
 # .env
 GOOGLE_CLIENT_ID=seu-client-id-do-google.apps.googleusercontent.com
 GITHUB_CLIENT_ID=seu-client-id-do-github
+
+# Obrigatório para GitHub OAuth (troca code→token via BFF; sem isso, GitHub OAuth fica desabilitado)
+GITHUB_BFF_PROXY_URL=https://auth.seu-dominio.com/github/exchange
 ```
 
 **Como obter:**

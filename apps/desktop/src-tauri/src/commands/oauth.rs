@@ -938,44 +938,51 @@ impl OAuthSessionStore {
     /// - Session is invalid or has expired
     #[must_use]
     pub fn take_valid(&self, state: &str, request_id: &str) -> Option<OAuthPkceSession> {
-        let mut sessions = self.sessions.lock();
+        let (expired_hashes, removed_state_hash_if_invalid, session_to_return) = {
+            let mut sessions = self.sessions.lock();
 
-        // Collect expired hashes so we can also delete persisted sessions from keyring.
-        let expired_hashes: Vec<String> = sessions
-            .iter()
-            .filter(|&(_k, s)| s.is_expired())
-            .map(|(k, _s)| hex::encode(Sha256::digest(k.as_bytes())))
-            .collect();
+            // Collect expired hashes so we can also delete persisted sessions from keyring.
+            let expired_hashes: Vec<String> = sessions
+                .iter()
+                .filter(|&(_k, s)| s.is_expired())
+                .map(|(k, _s)| hex::encode(Sha256::digest(k.as_bytes())))
+                .collect();
 
-        sessions.retain(|_, s| !s.is_expired());
+            sessions.retain(|_, s| !s.is_expired());
 
-        Self::perform_keyring_cleanup(expired_hashes, None, &self.pkce_storage);
+            let is_valid = sessions
+                .get(state)
+                .is_some_and(|s| s.state == state && s.is_valid() && !s.is_expired());
 
-        let is_valid = sessions
-            .get(state)
-            .is_some_and(|s| s.state == state && s.is_valid() && !s.is_expired());
+            if is_valid {
+                (expired_hashes, None, sessions.remove(state))
+            } else {
+                tracing::warn!(
+                    target: "audit",
+                    request_id = %request_id,
+                    outcome = "failure",
+                    reason = "session_invalid_or_expired",
+                    "OAuth authentication failed: invalid or expired session"
+                );
 
-        if !is_valid {
-            tracing::warn!(
-                target: "audit",
-                request_id = %request_id,
-                outcome = "failure",
-                reason = "session_invalid_or_expired",
-                "OAuth authentication failed: invalid or expired session"
-            );
-            // If present but invalid, remove it to prevent reuse.
-            let removed = sessions.remove(state);
+                // If present but invalid, remove it to prevent reuse.
+                let removed = sessions.remove(state);
+                let removed_state_hash_if_invalid = removed
+                    .as_ref()
+                    .map(|_| hex::encode(Sha256::digest(state.as_bytes())));
 
-            // Best-effort cleanup of persisted session to avoid stale sensitive data.
-            if removed.is_some() {
-                let state_hash = hex::encode(Sha256::digest(state.as_bytes()));
-                Self::perform_keyring_cleanup(vec![], Some(state_hash), &self.pkce_storage);
+                (expired_hashes, removed_state_hash_if_invalid, None)
             }
+        };
 
-            return None;
-        }
+        // Cleanup *after* releasing the lock to prevent blocking all OAuth flows.
+        Self::perform_keyring_cleanup(
+            expired_hashes,
+            removed_state_hash_if_invalid,
+            &self.pkce_storage,
+        );
 
-        sessions.remove(state)
+        session_to_return
     }
 
     /// Stores a session, keyed by its state value.
@@ -1197,6 +1204,8 @@ impl Default for OAuthSessionStore {
 fn parse_query_preserving_plus(query: &str) -> Result<Vec<(String, String)>, String> {
     const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
     const MAX_QUERY_PAIRS: usize = 64;
+    const MAX_KEY_LEN: usize = 64;
+    const MAX_VALUE_LEN: usize = 4096;
 
     let mut query_pairs = Vec::new();
     for pair in query.split('&') {
@@ -1208,6 +1217,11 @@ fn parse_query_preserving_plus(query: &str) -> Result<Vec<(String, String)>, Str
         }
         let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
 
+        // Cheap pre-checks to avoid decoding obviously oversized inputs.
+        if k.len() > MAX_KEY_LEN * 3 || v.len() > MAX_VALUE_LEN * 3 {
+            return Err(GENERIC_ERROR.to_string());
+        }
+
         let k = percent_encoding::percent_decode_str(k)
             .decode_utf8()
             .map_err(|_| GENERIC_ERROR.to_string())?
@@ -1216,6 +1230,11 @@ fn parse_query_preserving_plus(query: &str) -> Result<Vec<(String, String)>, Str
             .decode_utf8()
             .map_err(|_| GENERIC_ERROR.to_string())?
             .to_string();
+
+        if k.len() > MAX_KEY_LEN || v.len() > MAX_VALUE_LEN {
+            return Err(GENERIC_ERROR.to_string());
+        }
+
         query_pairs.push((k, v));
     }
     Ok(query_pairs)
