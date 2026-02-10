@@ -92,6 +92,11 @@ export async function openOAuthAuthUrl(
   if (parsed.username || parsed.password) {
     throw new Error(`Blocked credentialed ${provider} authorization URL`);
   }
+  if (parsed.port) {
+    throw new Error(
+      `Blocked non-default port for ${provider} authorization URL`,
+    );
+  }
 
   const host = parsed.hostname.toLowerCase();
   const path = parsed.pathname;
@@ -291,10 +296,10 @@ export function processOAuthCallback(
         return;
       }
 
-      // Expire stale OAuth pending state (> 2 minutes)
+      // Expire stale OAuth pending state (align with backend PKCE session TTL: 10 minutes)
       const startedAtStr = localStorage.getItem("oauth_pending_started_at");
       const startedAt = startedAtStr ? Number(startedAtStr) : NaN;
-      const maxAgeMs = 2 * 60 * 1000;
+      const maxAgeMs = 10 * 60 * 1000;
 
       if (!Number.isFinite(startedAt) || Date.now() - startedAt > maxAgeMs) {
         callbacks.resetState(

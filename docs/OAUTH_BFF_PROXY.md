@@ -16,13 +16,12 @@ GitHub's OAuth2 implementation requires a `client_secret` for the authorization 
 
 ### Current Implementation
 
-The current implementation (as a temporary measure):
+GitHub token exchange **must be performed via the BFF proxy** so the desktop binary never embeds or uses `client_secret`.
 
-- Reads `GITHUB_CLIENT_SECRET` from environment at build time
-- Logs a security warning at runtime when GitHub OAuth is used
-- Disables GitHub OAuth if the secret is not configured
+- Desktop app uses `GITHUB_BFF_PROXY_URL` to call the proxy for code→token exchange
+- If `GITHUB_BFF_PROXY_URL` is not configured, **GitHub OAuth is disabled**
 
-**⚠️ This should only be used in controlled environments, not production.**
+**The desktop app must not read/use `GITHUB_CLIENT_SECRET` in production or development.**
 
 ### The BFF Proxy Solution
 

@@ -3,7 +3,7 @@ use validator::Validate;
 
 #[derive(Debug, Deserialize, Validate)]
 pub struct GitHubTokenRequest {
-    #[validate(length(min = 20, max = 255, message = "Invalid authorization code"))]
+    #[validate(length(min = 1, max = 2048, message = "Invalid authorization code"))]
     pub code: String,
 
     #[validate(length(min = 10, max = 255, message = "Invalid state"))]

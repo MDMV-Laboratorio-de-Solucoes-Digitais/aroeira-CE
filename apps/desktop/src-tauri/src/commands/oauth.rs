@@ -851,8 +851,12 @@ async fn authenticate_or_create_user(
 }
 
 async fn generate_and_hash_oauth_password() -> Result<String, String> {
-    // Generate a random high-entropy password that will never be shown to the user
-    let oauth_random_password = Uuid::new_v4().to_string();
+    // Generate a high-entropy password that will never be shown to the user.
+    // Derive 256 bits from multiple UUIDs (no extra deps) and hex-encode.
+    let mut hasher = Sha256::new();
+    hasher.update(Uuid::new_v4().as_bytes());
+    hasher.update(Uuid::new_v4().as_bytes());
+    let oauth_random_password = hex::encode(hasher.finalize());
 
     // Use infra's hash_password which handles security config correctly
     // spawn_blocking is required because bcrypt is CPU-intensive and would block the async runtime
@@ -1134,18 +1138,34 @@ impl OAuthSessionStore {
     /// - Session has expired
     #[must_use]
     pub fn take(&self, state: &str) -> Option<OAuthPkceSession> {
-        let mut sessions = self.sessions.lock();
+        let (expired_hashes, removed_session, pkce_storage) = {
+            let mut sessions = self.sessions.lock();
 
-        // Proactively clean up expired sessions to prevent memory leaks
-        sessions.retain(|_, s| !s.is_expired());
+            // Collect expired hashes so we can also delete persisted sessions from keyring.
+            let expired_hashes: Vec<String> = sessions
+                .iter()
+                .filter(|&(_k, s)| s.is_expired())
+                .map(|(k, _s)| hex::encode(Sha256::digest(k.as_bytes())))
+                .collect();
 
-        if sessions.get(state).is_some_and(|s| !s.is_valid()) {
-            sessions.remove(state);
-            return None;
+            // Proactively clean up expired sessions to prevent memory leaks
+            sessions.retain(|_, s| !s.is_expired());
+
+            let removed_session = sessions.remove(state);
+
+            (expired_hashes, removed_session, self.pkce_storage.clone())
+        };
+
+        let removed_hash = removed_session
+            .as_ref()
+            .map(|s| hex::encode(Sha256::digest(s.state.as_bytes())));
+
+        Self::perform_keyring_cleanup(expired_hashes, removed_hash, &pkce_storage);
+
+        match removed_session {
+            Some(s) if s.is_valid() => Some(s),
+            _ => None,
         }
-
-        // Remove and return (expiration already checked by retain)
-        sessions.remove(state)
     }
     /// Performs a background cleanup of stale sessions from the keyring.
     ///

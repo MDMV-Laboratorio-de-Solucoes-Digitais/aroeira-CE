@@ -539,10 +539,11 @@ pub fn run() {
                     return;
                 };
 
-                if let Err(e) = crate::oauth_utils::validate_callback_url_base(&parsed) {
-                    tracing::warn!(error = %e, "Ignoring unexpected deep link argv: {}", url);
-                    return;
-                }
+        if let Err(e) = crate::oauth_utils::validate_callback_url_base(&parsed) {
+            // Avoid logging full URL (may contain OAuth code/state)
+            tracing::warn!(error = %e, "Ignoring unexpected deep link argv (validation failed)");
+            return;
+        }
 
                 // Avoid logging full URL (may contain OAuth code/state)
                 let redacted = match parsed.query() {
