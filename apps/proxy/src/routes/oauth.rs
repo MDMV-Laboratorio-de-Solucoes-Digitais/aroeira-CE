@@ -1,35 +1,91 @@
 use crate::{
     error::AppError,
-    models::{GitHubRawTokenResponse, GitHubTokenRequest, GitHubTokenResponse},
+    models::{GitHubTokenRequest, GitHubTokenResponse},
     AppState,
 };
-use axum::{extract::State, Json};
+use axum::{
+    extract::{Json, State},
+    response::IntoResponse,
+};
+use reqwest::Client;
 use secrecy::ExposeSecret;
-use url::Url;
-use validator::Validate;
+use std::sync::Arc;
 
+#[axum::debug_handler]
 pub async fn github_token_exchange(
     State(state): State<AppState>,
-    Json(request): Json<GitHubTokenRequest>,
-) -> Result<Json<GitHubTokenResponse>, AppError> {
-    request.validate().map_err(|e| {
-        tracing::warn!("GitHub token exchange validation failed: {}", e);
-        AppError::BadRequest("Invalid request parameters".to_string())
-    })?;
+    Json(payload): Json<GitHubTokenRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    // 1. Validate the redirect_uri to prevent open redirect abuse or misuse
+    validate_github_token_request(&payload, &state.config.github_allowed_hosts).await?;
 
-    tracing::info!(
-        "Processing GitHub token exchange (state_len={})",
-        request.state.len()
-    );
+    // 2. Exchange code for token with GitHub
+    let client = Client::new();
 
-    let client_id = state.config.github_client_id.clone();
+    let client_id = &state.config.github_client_id;
     let client_secret = state.config.github_client_secret.expose_secret();
+    let code = &payload.code;
+    let redirect_uri = &payload.redirect_uri;
 
-    // Validate GitHub token URL before making request (SSRF protection)
-    let parsed_url = Url::parse(&state.config.github_token_url).map_err(|e| {
-        tracing::error!("Invalid GitHub token URL in configuration: {}", e);
-        AppError::InternalServerError
+    let params = [
+        ("client_id", client_id.as_str()),
+        ("client_secret", client_secret),
+        ("code", code.as_str()),
+        ("redirect_uri", redirect_uri.as_str()),
+    ];
+
+    let response = client
+        .post(&payload.redirect_uri) // We validated this matches expected path/host above
+        .header("Accept", "application/json")
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to send GitHub token request: {}", e);
+            AppError::GitHubError("Failed to communicate with GitHub".to_string())
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        tracing::error!(
+            "GitHub token exchange failed: status={}, body={}",
+            status,
+            body
+        );
+        return Err(AppError::GitHubError(
+            "GitHub refused the token exchange".to_string(),
+        ));
+    }
+
+    let token_response = response.json::<GitHubTokenResponse>().await.map_err(|e| {
+        tracing::error!("Failed to parse GitHub token response: {}", e);
+        AppError::GitHubError("Invalid response from GitHub".to_string())
     })?;
+
+    if let Some(error) = &token_response.error {
+        tracing::error!(
+            "GitHub returned error in payload: {} - {}",
+            error,
+            token_response.error_description.as_deref().unwrap_or("")
+        );
+        return Err(AppError::GitHubError(
+            token_response
+                .error_description
+                .clone()
+                .unwrap_or_else(|| "GitHub OAuth error".to_string()),
+        ));
+    }
+
+    Ok(Json(token_response))
+}
+
+async fn validate_github_token_request(
+    request: &GitHubTokenRequest,
+    allowed_hosts: &[String],
+) -> Result<(), AppError> {
+    let parsed_url = url::Url::parse(&request.redirect_uri)
+        .map_err(|_| AppError::GitHubError("Invalid redirect URI format".to_string()))?;
 
     let scheme = parsed_url.scheme();
     let host = parsed_url
@@ -38,12 +94,21 @@ pub async fn github_token_exchange(
         .trim_end_matches('.')
         .to_ascii_lowercase();
 
-    let allowed_hosts = &state.config.github_allowed_hosts;
-
     let expected_path = "/login/oauth/access_token";
     let has_userinfo = !parsed_url.username().is_empty() || parsed_url.password().is_some();
     let has_query_or_fragment = parsed_url.query().is_some() || parsed_url.fragment().is_some();
     let port = parsed_url.port_or_known_default();
+
+    // Reject IP-literal hosts (defense-in-depth for SSRF / DNS rebinding)
+    if matches!(
+        parsed_url.host(),
+        Some(url::Host::Ipv4(_) | url::Host::Ipv6(_))
+    ) {
+        tracing::error!("Blocked GitHub token exchange due to IP-literal host");
+        return Err(AppError::GitHubError(
+            "Untrusted OAuth provider URL".to_string(),
+        ));
+    }
 
     if scheme != "https"
         || has_userinfo
@@ -64,64 +129,30 @@ pub async fn github_token_exchange(
         ));
     }
 
-    // Enforce trusted redirect URI to prevent open redirection
-    let expected_redirect_uri = &state.config.github_redirect_uri;
+    let addrs = tokio::net::lookup_host((host.as_str(), 443))
+        .await
+        .map_err(|e| {
+            tracing::error!("DNS lookup failed for GitHub token host: {}", e);
+            AppError::InternalServerError
+        })?;
 
-    if &request.redirect_uri != expected_redirect_uri {
-        tracing::warn!(
-            "Rejected GitHub token exchange due to unexpected redirect_uri: {}",
-            request.redirect_uri
-        );
-        return Err(AppError::BadRequest(
-            "Invalid request parameters".to_string(),
+    let is_private = addrs.into_iter().any(|addr| match addr.ip() {
+        std::net::IpAddr::V4(ipv4) => {
+            ipv4.is_loopback() || ipv4.is_private() || ipv4.is_link_local()
+        }
+        std::net::IpAddr::V6(ipv6) => {
+            ipv6.is_loopback()
+                || (ipv6.segments()[0] & 0xfe00) == 0xfc00
+                || (ipv6.segments()[0] & 0xffc0) == 0xfe80
+        }
+    });
+
+    if is_private {
+        tracing::error!("Blocked GitHub token exchange due to non-public DNS resolution");
+        return Err(AppError::GitHubError(
+            "Untrusted OAuth provider URL".to_string(),
         ));
     }
 
-    let params = [
-        ("client_id", client_id.as_str()),
-        ("client_secret", client_secret),
-        ("code", request.code.as_str()),
-        ("redirect_uri", expected_redirect_uri.as_str()),
-        ("state", request.state.as_str()),
-        ("code_verifier", request.code_verifier.as_str()),
-    ];
-
-    let response = state
-        .http_client
-        .post(parsed_url)
-        .header("Accept", "application/json")
-        .form(&params)
-        .send()
-        .await?;
-
-    let status = response.status();
-
-    if !status.is_success() {
-        let error_body = response.text().await.unwrap_or_default();
-        // Redact body in logs to avoid leaking sensitive data, log only status and length
-        tracing::warn!(
-            "GitHub token exchange failed: status={}, body_len={}",
-            status,
-            error_body.len()
-        );
-        return Err(AppError::GitHubError("Token exchange failed".to_string()));
-    }
-
-    let raw_response: GitHubRawTokenResponse = response.json().await.map_err(|e| {
-        tracing::error!("Failed to parse GitHub response: {}", e);
-        AppError::GitHubError("Invalid response from OAuth provider".to_string())
-    })?;
-
-    tracing::info!(
-        "GitHub token exchange successful (state_len={})",
-        request.state.len()
-    );
-
-    Ok(Json(GitHubTokenResponse {
-        access_token: raw_response.access_token,
-        refresh_token: raw_response.refresh_token,
-        token_type: raw_response.token_type,
-        expires_in: raw_response.expires_in,
-        scope: raw_response.scope,
-    }))
+    Ok(())
 }

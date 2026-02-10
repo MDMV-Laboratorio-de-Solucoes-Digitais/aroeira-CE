@@ -16,7 +16,7 @@ pub struct GitHubTokenRequest {
     pub code_verifier: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GitHubTokenResponse {
     pub access_token: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -25,6 +25,10 @@ pub struct GitHubTokenResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_in: Option<i64>,
     pub scope: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
