@@ -182,6 +182,7 @@ pub async fn start_oauth_flow(
         action = "oauth_start",
         provider = %provider,
         device_id = %device_id_hash,
+        outcome = "started",
         "Starting OAuth flow"
     );
 
