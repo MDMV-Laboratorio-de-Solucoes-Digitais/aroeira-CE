@@ -936,51 +936,16 @@ impl OAuthSessionStore {
     pub fn take_valid(&self, state: &str, request_id: &str) -> Option<OAuthPkceSession> {
         let mut sessions = self.sessions.lock();
 
-        // Collect expired keys so we can also delete persisted sessions from keyring.
-        let expired_keys: Vec<String> = sessions
+        // Collect expired hashes so we can also delete persisted sessions from keyring.
+        let expired_hashes: Vec<String> = sessions
             .iter()
             .filter(|&(_k, s)| s.is_expired())
-            .map(|(k, _s)| k.clone())
+            .map(|(k, _s)| hex::encode(Sha256::digest(k.as_bytes())))
             .collect();
 
         sessions.retain(|_, s| !s.is_expired());
 
-        if !expired_keys.is_empty() {
-            let pkce_storage = self.pkce_storage.clone();
-
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                handle.spawn(async move {
-                    for key in expired_keys {
-                        let state_hash = hex::encode(Sha256::digest(key.as_bytes()));
-                        let _ = tokio::task::spawn_blocking({
-                            let pkce_storage = pkce_storage.clone();
-                            move || {
-                                if let Err(e) = pkce_storage.delete_session(&state_hash) {
-                                    tracing::warn!(
-                                        target: "security",
-                                        state_hash = %state_hash,
-                                        "Failed to delete expired session from keyring: {e}"
-                                    );
-                                }
-                            }
-                        })
-                        .await;
-                    }
-                });
-            } else {
-                // Best-effort cleanup even without a Tokio runtime.
-                for key in expired_keys {
-                    let state_hash = hex::encode(Sha256::digest(key.as_bytes()));
-                    if let Err(e) = pkce_storage.delete_session(&state_hash) {
-                        tracing::warn!(
-                            target: "security",
-                            state_hash = %state_hash,
-                            "Failed to delete expired session from keyring (sync fallback): {e}"
-                        );
-                    }
-                }
-            }
-        }
+        Self::perform_keyring_cleanup(expired_hashes, None, &self.pkce_storage);
 
         let is_valid = sessions
             .get(state)
@@ -999,20 +964,8 @@ impl OAuthSessionStore {
 
             // Best-effort cleanup of persisted session to avoid stale sensitive data.
             if removed.is_some() {
-                let pkce_storage = self.pkce_storage.clone();
                 let state_hash = hex::encode(Sha256::digest(state.as_bytes()));
-
-                if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                    handle.spawn(async move {
-                        let _ = tokio::task::spawn_blocking(move || {
-                            pkce_storage.delete_session(&state_hash)
-                        })
-                        .await;
-                    });
-                } else {
-                    // Best-effort cleanup even without a Tokio runtime.
-                    let _ = pkce_storage.delete_session(&state_hash);
-                }
+                Self::perform_keyring_cleanup(vec![], Some(state_hash), &self.pkce_storage);
             }
 
             return None;
@@ -1028,125 +981,149 @@ impl OAuthSessionStore {
     pub fn store(&self, session: OAuthPkceSession) {
         const MAX_SESSIONS: usize = 512;
 
-        let (expired_state_hashes, evicted_state_hash, pkce_storage) = {
+        let (expired_hashes, evicted_hash, pkce_storage) = {
             let mut sessions = self.sessions.lock();
 
-            let expired_state_hashes: Vec<String> = sessions
-                .iter()
-                .filter(|&(_k, s)| s.is_expired())
-                .map(|(k, _)| hex::encode(Sha256::digest(k.as_bytes())))
-                .collect();
-
-            // Clean up expired sessions
-            sessions.retain(|_, s| !s.is_expired());
-
-            // Enforce a hard cap to prevent memory growth (DoS prevention)
-            // Find oldest first, then remove in separate step to avoid borrow checker issues
-            let oldest_key = sessions
-                .iter()
-                .min_by_key(|(_, s)| s.created_at)
-                .map(|(k, _)| k.clone());
-
-            let evicted_state_hash = if sessions.len() >= MAX_SESSIONS {
-                oldest_key.map(|key| {
-                    let state_hash = hex::encode(Sha256::digest(key.as_bytes()));
-                    tracing::warn!(
-                        target: "security",
-                        reason = "session_store_full",
-                        evicted_state_hash = %state_hash,
-                        "OAuth session store reached max capacity ({MAX_SESSIONS}). Evicting oldest session."
-                    );
-                    sessions.remove(&key);
-                    state_hash
-                })
-            } else {
-                None
-            };
+            let expired_hashes = Self::collect_and_remove_expired(&mut sessions);
+            let evicted_hash = Self::evict_if_full(&mut sessions, MAX_SESSIONS);
 
             // Store new session while still holding the lock to preserve the cap invariant.
             sessions.insert(session.state.clone(), session);
 
-            (
-                expired_state_hashes,
-                evicted_state_hash,
-                self.pkce_storage.clone(),
-            )
+            (expired_hashes, evicted_hash, self.pkce_storage.clone())
         };
 
-        if !expired_state_hashes.is_empty() {
-            let pkce_storage = pkce_storage.clone();
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                handle.spawn(async move {
-                    for state_hash in expired_state_hashes {
-                        let _ = tokio::task::spawn_blocking({
-                            let pkce_storage = pkce_storage.clone();
-                            move || {
-                                if let Err(e) = pkce_storage.delete_session(&state_hash) {
-                                    tracing::warn!(
-                                        target: "security",
-                                        state_hash = %state_hash,
-                                        "Failed to delete expired session from keyring: {e}"
-                                    );
-                                }
-                            }
-                        })
-                        .await;
-                    }
-                });
-            } else {
-                for state_hash in expired_state_hashes {
-                    if let Err(e) = pkce_storage.delete_session(&state_hash) {
-                        tracing::warn!(
-                            target: "security",
-                            state_hash = %state_hash,
-                            "Failed to delete expired session from keyring (sync fallback): {e}"
-                        );
-                    }
-                }
-            }
+        Self::perform_keyring_cleanup(expired_hashes, evicted_hash, &pkce_storage);
+    }
+
+    fn collect_and_remove_expired(sessions: &mut HashMap<String, OAuthPkceSession>) -> Vec<String> {
+        let expired_hashes: Vec<String> = sessions
+            .iter()
+            .filter(|&(_k, s)| s.is_expired())
+            .map(|(k, _)| hex::encode(Sha256::digest(k.as_bytes())))
+            .collect();
+
+        // Clean up expired sessions
+        sessions.retain(|_, s| !s.is_expired());
+        expired_hashes
+    }
+
+    fn evict_if_full(
+        sessions: &mut HashMap<String, OAuthPkceSession>,
+        max_sessions: usize,
+    ) -> Option<String> {
+        if sessions.len() < max_sessions {
+            return None;
         }
 
-        if let Some(state_hash) = evicted_state_hash {
-            let state_hash_clone = state_hash.clone();
+        // Enforce a hard cap to prevent memory growth (DoS prevention)
+        // Find oldest first, then remove in separate step to avoid borrow checker issues
+        let oldest_key = sessions
+            .iter()
+            .min_by_key(|(_, s)| s.created_at)
+            .map(|(k, _)| k.clone());
 
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                handle.spawn(async move {
-                    match tokio::task::spawn_blocking(move || {
-                        pkce_storage.delete_session(&state_hash_clone)
-                    })
-                    .await
-                    {
-                        Ok(Ok(())) => tracing::debug!(
-                            target: "security",
-                            state_hash = %state_hash,
-                            "Evicted session deleted from keyring"
-                        ),
-                        Ok(Err(e)) => tracing::warn!(
-                            target: "security",
-                            state_hash = %state_hash,
-                            "Failed to delete evicted session from keyring: {e}"
-                        ),
-                        Err(e) => tracing::warn!(
-                            target: "security",
-                            state_hash = %state_hash,
-                            "Task failed when deleting evicted session from keyring: {e}"
-                        ),
-                    }
-                });
-            } else {
-                match pkce_storage.delete_session(&state_hash_clone) {
+        oldest_key.map(|key| {
+            let state_hash = hex::encode(Sha256::digest(key.as_bytes()));
+            tracing::warn!(
+                target: "security",
+                reason = "session_store_full",
+                evicted_state_hash = %state_hash,
+                "OAuth session store reached max capacity ({max_sessions}). Evicting oldest session."
+            );
+            sessions.remove(&key);
+            state_hash
+        })
+    }
+
+    fn perform_keyring_cleanup(
+        expired_hashes: Vec<String>,
+        evicted_hash: Option<String>,
+        pkce_storage: &Arc<dyn PkceSessionStorage>,
+    ) {
+        if expired_hashes.is_empty() && evicted_hash.is_none() {
+            return;
+        }
+
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            // We are in a runtime, so we can spawn.
+            // Clone data for the async task to avoid moving originals needed for sync fallback path check
+            // (though strictly mutually exclusive, the compiler sees the async move construction)
+            let expired_hashes = expired_hashes.clone();
+            let evicted_hash = evicted_hash.clone();
+            let pkce_storage = pkce_storage.clone();
+
+            handle.spawn(async move {
+                // Handle expired sessions
+                for state_hash in expired_hashes {
+                    Self::delete_from_keyring_blocking(pkce_storage.clone(), state_hash, false)
+                        .await;
+                }
+
+                // Handle evicted session
+                if let Some(state_hash) = evicted_hash {
+                    Self::delete_from_keyring_blocking(pkce_storage.clone(), state_hash, true)
+                        .await;
+                }
+            });
+        } else {
+            // Sync fallback for non-async contexts (e.g. tests)
+            for state_hash in expired_hashes {
+                if let Err(e) = pkce_storage.delete_session(&state_hash) {
+                    tracing::warn!(
+                        target: "security",
+                        state_hash = %state_hash,
+                        "Failed to delete expired session from keyring (sync fallback): {e}"
+                    );
+                }
+            }
+            if let Some(state_hash) = evicted_hash {
+                match pkce_storage.delete_session(&state_hash) {
                     Ok(()) => tracing::debug!(
                         target: "security",
-                        state_hash = %state_hash_clone,
+                        state_hash = %state_hash,
                         "Evicted session deleted from keyring (sync fallback)"
                     ),
                     Err(e) => tracing::warn!(
                         target: "security",
-                        state_hash = %state_hash_clone,
+                        state_hash = %state_hash,
                         "Failed to delete evicted session from keyring (sync fallback): {e}"
                     ),
                 }
             }
+        }
+    }
+
+    async fn delete_from_keyring_blocking(
+        pkce_storage: Arc<dyn PkceSessionStorage>,
+        state_hash: String,
+        is_eviction: bool,
+    ) {
+        let state_hash_clone = state_hash.clone();
+        match tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash_clone))
+            .await
+        {
+            Ok(Ok(())) => {
+                if is_eviction {
+                    tracing::debug!(
+                        target: "security",
+                        state_hash = %state_hash,
+                        "Evicted session deleted from keyring"
+                    );
+                }
+            }
+            Ok(Err(e)) => tracing::warn!(
+                target: "security",
+                state_hash = %state_hash,
+                "Failed to delete {} session from keyring: {e}",
+                if is_eviction { "evicted" } else { "expired" }
+            ),
+            Err(e) => tracing::warn!(
+                target: "security",
+                state_hash = %state_hash,
+                "Task failed when deleting {} session from keyring: {e}",
+                if is_eviction { "evicted" } else { "expired" }
+            ),
         }
     }
 
