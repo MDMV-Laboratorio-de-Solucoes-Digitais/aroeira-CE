@@ -8,6 +8,7 @@ pub const HOSTLESS_PATH: &str = "auth/callback";
 #[must_use]
 pub fn get_dev_port() -> u16 {
     std::env::var("AROEIRA_DEV_PORT")
+        .or_else(|_| std::env::var("VITE_DEV_PORT"))
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(1420)
