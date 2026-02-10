@@ -777,7 +777,7 @@ async fn authenticate_or_create_user(
                 // SECURITY CRITICAL: When verifying an existing unverified account via OAuth,
                 // we MUST invalidate the old password to prevent account takeover.
                 // Otherwise, an attacker who pre-registered the email could use the old password.
-                let password_hash = generate_and_hash_oauth_password(session.provider).await?;
+                let password_hash = generate_and_hash_oauth_password().await?;
 
                 user.email_verified = true;
                 user.password_hash = password_hash; // Invalidate old password
@@ -799,7 +799,7 @@ async fn authenticate_or_create_user(
 
             // Generate a random high-entropy password that will never be shown to the user
             // This ensures the account cannot be accessed via password login unless explicitly reset
-            let password_hash = generate_and_hash_oauth_password(session.provider).await?;
+            let password_hash = generate_and_hash_oauth_password().await?;
 
             let new_user = domain::modules::auth::User {
                 id: Uuid::new_v4(),
@@ -850,7 +850,7 @@ async fn authenticate_or_create_user(
     }
 }
 
-async fn generate_and_hash_oauth_password(_provider: AuthProvider) -> Result<String, String> {
+async fn generate_and_hash_oauth_password() -> Result<String, String> {
     // Generate a random high-entropy password that will never be shown to the user
     let oauth_random_password = Uuid::new_v4().to_string();
 
@@ -1028,8 +1028,14 @@ impl OAuthSessionStore {
     pub fn store(&self, session: OAuthPkceSession) {
         const MAX_SESSIONS: usize = 512;
 
-        let (evicted_state_hash, pkce_storage) = {
+        let (expired_state_hashes, evicted_state_hash, pkce_storage) = {
             let mut sessions = self.sessions.lock();
+
+            let expired_state_hashes: Vec<String> = sessions
+                .iter()
+                .filter(|&(_k, s)| s.is_expired())
+                .map(|(k, _)| hex::encode(Sha256::digest(k.as_bytes())))
+                .collect();
 
             // Clean up expired sessions
             sessions.retain(|_, s| !s.is_expired());
@@ -1060,8 +1066,45 @@ impl OAuthSessionStore {
             // Store new session while still holding the lock to preserve the cap invariant.
             sessions.insert(session.state.clone(), session);
 
-            (evicted_state_hash, self.pkce_storage.clone())
+            (
+                expired_state_hashes,
+                evicted_state_hash,
+                self.pkce_storage.clone(),
+            )
         };
+
+        if !expired_state_hashes.is_empty() {
+            let pkce_storage = pkce_storage.clone();
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    for state_hash in expired_state_hashes {
+                        let _ = tokio::task::spawn_blocking({
+                            let pkce_storage = pkce_storage.clone();
+                            move || {
+                                if let Err(e) = pkce_storage.delete_session(&state_hash) {
+                                    tracing::warn!(
+                                        target: "security",
+                                        state_hash = %state_hash,
+                                        "Failed to delete expired session from keyring: {e}"
+                                    );
+                                }
+                            }
+                        })
+                        .await;
+                    }
+                });
+            } else {
+                for state_hash in expired_state_hashes {
+                    if let Err(e) = pkce_storage.delete_session(&state_hash) {
+                        tracing::warn!(
+                            target: "security",
+                            state_hash = %state_hash,
+                            "Failed to delete expired session from keyring (sync fallback): {e}"
+                        );
+                    }
+                }
+            }
+        }
 
         if let Some(state_hash) = evicted_state_hash {
             let state_hash_clone = state_hash.clone();
@@ -1156,11 +1199,15 @@ impl Default for OAuthSessionStore {
 /// We use `percent_encoding` directly to decode '%XX' but leave '+' as is.
 fn parse_query_preserving_plus(query: &str) -> Result<Vec<(String, String)>, String> {
     const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
+    const MAX_QUERY_PAIRS: usize = 64;
 
     let mut query_pairs = Vec::new();
     for pair in query.split('&') {
         if pair.is_empty() {
             continue;
+        }
+        if query_pairs.len() >= MAX_QUERY_PAIRS {
+            return Err(GENERIC_ERROR.to_string());
         }
         let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
 
@@ -1216,7 +1263,12 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
 
 /// Validates the basic structure (scheme, host, path) of the callback URL.
 fn validate_callback_url_base(url: &Url) -> Result<(), String> {
-    crate::oauth_utils::validate_callback_url_base(url)
+    const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
+
+    crate::oauth_utils::validate_callback_url_base(url).map_err(|e| {
+        tracing::warn!(target: "audit", reason = %e, "OAuth callback base validation failed");
+        GENERIC_ERROR.to_string()
+    })
 }
 
 /// Extracts and performs security validation on the OAuth code and state parameters.

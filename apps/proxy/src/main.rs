@@ -107,10 +107,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .layer(TraceLayer::new_for_http())
                 .layer(cors)
                 .layer(DefaultBodyLimit::max(16 * 1024))
-                .layer(HandleErrorLayer::new(|_err: BoxError| async move {
+                .layer(HandleErrorLayer::new(|err: BoxError| async move {
+                    tracing::error!("Unhandled middleware error: {}", err);
                     (
-                        StatusCode::TOO_MANY_REQUESTS,
-                        "Too many requests".to_string(),
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Internal server error".to_string(),
                     )
                 }))
                 .layer(BufferLayer::new(1024))

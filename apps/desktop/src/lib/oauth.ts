@@ -348,6 +348,12 @@ export function processOAuthCallback(
         logAuditEvent("oauth_login", false, {
           error: sanitizeErrorForAudit(err),
         });
+
+        // Clear stale pending markers so the user can retry cleanly.
+        localStorage.removeItem("oauth_pending_provider");
+        localStorage.removeItem("oauth_pending_state");
+        localStorage.removeItem("oauth_pending_started_at");
+
         callbacks.setError(handleError(err, "OAuth authentication"));
         callbacks.setLoading(null);
       }
