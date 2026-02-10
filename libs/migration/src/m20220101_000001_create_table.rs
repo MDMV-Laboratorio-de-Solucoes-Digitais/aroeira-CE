@@ -43,11 +43,11 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Notes::Content).string().not_null())
                     .col(ColumnDef::new(Notes::CreatedAt).date_time().not_null())
                     .col(ColumnDef::new(Notes::UpdatedAt).date_time().not_null())
-                    .col(ColumnDef::new(Notes::UserId).string().not_null())
+                    .col(ColumnDef::new(Notes::OwnerId).string().not_null())
                     .foreign_key(
                         ForeignKey::create()
-                            .name("fk-notes-user_id")
-                            .from(Notes::Table, Notes::UserId)
+                            .name("fk-notes-owner_id")
+                            .from(Notes::Table, Notes::OwnerId)
                             .to(Users::Table, Users::Id),
                     )
                     .to_owned(),
@@ -84,5 +84,5 @@ enum Notes {
     Content,
     CreatedAt,
     UpdatedAt,
-    UserId,
+    OwnerId,
 }

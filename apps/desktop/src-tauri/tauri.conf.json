@@ -37,7 +37,7 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["com.aroeira.app"]
+        "schemes": ["aroeira"]
       }
     }
   }

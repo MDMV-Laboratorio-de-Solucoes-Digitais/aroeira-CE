@@ -15,7 +15,7 @@ async fn generate_url_for_google_includes_required_params() {
         google_client_id: Some("test-google-client-id".to_string()),
         github_client_id: None,
         github_client_secret: None,
-        redirect_uri: "com.aroeira.app://auth/callback".to_string(),
+        redirect_uri: "aroeira://auth/callback".to_string(),
         google_auth_url: None,
         google_token_url: None,
         google_userinfo_url: None,
@@ -80,7 +80,7 @@ async fn generate_url_for_github_includes_required_params() {
         github_client_secret: Some(secrecy::SecretString::from(
             "test-github-client-secret".to_string(),
         )),
-        redirect_uri: "com.aroeira.app://auth/callback".to_string(),
+        redirect_uri: "aroeira://auth/callback".to_string(),
         google_auth_url: None,
         google_token_url: None,
         google_userinfo_url: None,
@@ -122,7 +122,7 @@ async fn generate_url_fails_when_google_not_configured() {
         google_client_id: None, // Google not configured!
         github_client_id: None,
         github_client_secret: None,
-        redirect_uri: "com.aroeira.app://auth/callback".to_string(),
+        redirect_uri: "aroeira://auth/callback".to_string(),
         google_auth_url: None,
         google_token_url: None,
         google_userinfo_url: None,
@@ -150,7 +150,7 @@ async fn generate_url_fails_when_github_not_configured() {
         google_client_id: None,
         github_client_id: None, // GitHub not configured!
         github_client_secret: None,
-        redirect_uri: "com.aroeira.app://auth/callback".to_string(),
+        redirect_uri: "aroeira://auth/callback".to_string(),
         google_auth_url: None,
         google_token_url: None,
         google_userinfo_url: None,
@@ -178,7 +178,7 @@ async fn session_state_matches_url_state_param() {
         google_client_id: Some("client-id".to_string()),
         github_client_id: None,
         github_client_secret: None,
-        redirect_uri: "com.aroeira.app://auth/callback".to_string(),
+        redirect_uri: "aroeira://auth/callback".to_string(),
         google_auth_url: None,
         google_token_url: None,
         google_userinfo_url: None,
@@ -206,7 +206,7 @@ async fn pkce_verifier_in_session_is_valid_length() {
         google_client_id: Some("client-id".to_string()),
         github_client_id: None,
         github_client_secret: None,
-        redirect_uri: "com.aroeira.app://auth/callback".to_string(),
+        redirect_uri: "aroeira://auth/callback".to_string(),
         google_auth_url: None,
         google_token_url: None,
         google_userinfo_url: None,
@@ -239,7 +239,7 @@ async fn each_url_generation_produces_unique_state() {
         google_client_id: Some("client-id".to_string()),
         github_client_id: None,
         github_client_secret: None,
-        redirect_uri: "com.aroeira.app://auth/callback".to_string(),
+        redirect_uri: "aroeira://auth/callback".to_string(),
         google_auth_url: None,
         google_token_url: None,
         google_userinfo_url: None,
@@ -275,7 +275,7 @@ async fn redirect_uri_is_properly_encoded_in_url() {
         google_client_id: Some("client-id".to_string()),
         github_client_id: None,
         github_client_secret: None,
-        redirect_uri: "com.aroeira.app://auth/callback".to_string(),
+        redirect_uri: "aroeira://auth/callback".to_string(),
         google_auth_url: None,
         google_token_url: None,
         google_userinfo_url: None,
@@ -291,7 +291,7 @@ async fn redirect_uri_is_properly_encoded_in_url() {
         .expect("Should generate URL");
 
     // redirect_uri should be URL-encoded
-    // "com.aroeira.app://auth/callback" -> "aroeira%3A%2F%2Fauth%2Fcallback" or similar
+    // "aroeira://auth/callback" -> "aroeira%3A%2F%2Fauth%2Fcallback" or similar
     assert!(
         url.contains("redirect_uri="),
         "URL should contain redirect_uri"
@@ -316,7 +316,7 @@ async fn exchange_code_fails_on_expired_session() {
         google_client_id: Some("client-id".to_string()),
         github_client_id: None,
         github_client_secret: None,
-        redirect_uri: "com.aroeira.app://auth/callback".to_string(),
+        redirect_uri: "aroeira://auth/callback".to_string(),
         google_auth_url: None,
         google_token_url: None,
         google_userinfo_url: None,
@@ -354,7 +354,7 @@ async fn exchange_code_fails_on_invalid_session() {
         google_client_id: Some("client-id".to_string()),
         github_client_id: None,
         github_client_secret: None,
-        redirect_uri: "com.aroeira.app://auth/callback".to_string(),
+        redirect_uri: "aroeira://auth/callback".to_string(),
         google_auth_url: None,
         google_token_url: None,
         google_userinfo_url: None,
@@ -392,7 +392,7 @@ async fn exchange_code_success_google() {
         google_client_id: Some("client-id".to_string()),
         github_client_id: None,
         github_client_secret: None,
-        redirect_uri: "com.aroeira.app://auth/callback".to_string(),
+        redirect_uri: "aroeira://auth/callback".to_string(),
         google_auth_url: Some(format!("{}/auth", mock_server.uri())),
         google_token_url: Some(format!("{}/token", mock_server.uri())),
         google_userinfo_url: Some(format!("{}/userinfo", mock_server.uri())),
@@ -461,7 +461,7 @@ async fn exchange_code_success_github() {
         google_client_id: None,
         github_client_id: Some("client-id".to_string()),
         github_client_secret: Some(secrecy::SecretString::from("client-secret".to_string())),
-        redirect_uri: "com.aroeira.app://auth/callback".to_string(),
+        redirect_uri: "aroeira://auth/callback".to_string(),
         google_auth_url: None,
         google_token_url: None,
         google_userinfo_url: None,

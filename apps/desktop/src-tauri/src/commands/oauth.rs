@@ -1423,7 +1423,7 @@ mod tests {
 
     #[test]
     fn parse_callback_url_extracts_code_and_state() {
-        let url = "com.aroeira.app://auth/callback?code=abc123&state=xyz789";
+        let url = "aroeira://auth/callback?code=abc123&state=xyz789";
         let (code, state) = parse_oauth_callback_url(url).expect("Should parse valid URL");
 
         assert_eq!(code, "abc123");
@@ -1432,7 +1432,7 @@ mod tests {
 
     #[test]
     fn parse_callback_url_fails_without_code() {
-        let url = "com.aroeira.app://auth/callback?state=xyz789";
+        let url = "aroeira://auth/callback?state=xyz789";
         let result = parse_oauth_callback_url(url);
 
         assert!(result.is_err());
@@ -1440,7 +1440,7 @@ mod tests {
 
     #[test]
     fn parse_callback_url_fails_without_state() {
-        let url = "com.aroeira.app://auth/callback?code=abc123";
+        let url = "aroeira://auth/callback?code=abc123";
         let result = parse_oauth_callback_url(url);
 
         assert!(result.is_err());
@@ -1459,7 +1459,7 @@ mod tests {
         // state uses only allowed unreserved characters (RFC 3986)
         // code uses + which is allowed in code but not state (per our strict rule)
         // %2B encodes +
-        let url = "com.aroeira.app://auth/callback?code=abc%2B123&state=xyz-789";
+        let url = "aroeira://auth/callback?code=abc%2B123&state=xyz-789";
         let (code, state) = parse_oauth_callback_url(url).expect("Should parse URL-encoded values");
 
         assert_eq!(code, "abc+123");
@@ -1468,8 +1468,7 @@ mod tests {
 
     #[test]
     fn parse_callback_url_handles_error_response() {
-        let url =
-            "com.aroeira.app://auth/callback?error=access_denied&error_description=User%20denied";
+        let url = "aroeira://auth/callback?error=access_denied&error_description=User%20denied";
         let result = parse_oauth_callback_url(url);
 
         assert!(result.is_err());
@@ -1494,7 +1493,7 @@ mod tests {
 
     #[test]
     fn parse_callback_url_rejects_wrong_host() {
-        let url = "com.aroeira.app://malicious/callback?code=abc123&state=xyz789";
+        let url = "aroeira://malicious/callback?code=abc123&state=xyz789";
         let result = parse_oauth_callback_url(url);
 
         assert!(result.is_err());

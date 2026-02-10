@@ -312,7 +312,7 @@ impl OAuthServiceImpl {
                     .config
                     .github_client_secret
                     .as_ref()
-                    .filter(|s| !s.expose_secret().is_empty())
+                    .filter(|s| !s.expose_secret().trim().is_empty())
                     .map(secrecy::ExposeSecret::expose_secret);
 
                 if client_secret.is_none() {

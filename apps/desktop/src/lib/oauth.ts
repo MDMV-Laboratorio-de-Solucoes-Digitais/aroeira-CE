@@ -143,7 +143,7 @@ export function processOAuthCallback(
     return Promise.resolve();
   }
 
-  const CALLBACK_SCHEME = "com.aroeira.app";
+  const CALLBACK_SCHEME = "aroeira";
   const CALLBACK_HOST = "auth";
   const CALLBACK_PATH = "/callback";
   const HOSTLESS_PATH = "auth/callback";
@@ -289,6 +289,7 @@ export function processOAuthCallback(
         localStorage.removeItem("oauth_pending_state");
         localStorage.removeItem("oauth_pending_started_at");
 
+        callbacks.resetState();
         await goto(resolve("/dashboard"), { replaceState: true });
       } catch (err: unknown) {
         console.error("OAuth callback failed:", sanitizeErrorForAudit(err));
@@ -296,8 +297,7 @@ export function processOAuthCallback(
           error: sanitizeErrorForAudit(err),
         });
         callbacks.setError(handleError(err, "OAuth authentication"));
-      } finally {
-        callbacks.resetState();
+        callbacks.setLoading(null);
       }
     });
 

@@ -107,10 +107,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .layer(TraceLayer::new_for_http())
                 .layer(cors)
                 .layer(DefaultBodyLimit::max(16 * 1024))
-                .layer(HandleErrorLayer::new(|err: BoxError| async move {
+                .layer(HandleErrorLayer::new(|_err: BoxError| async move {
                     (
                         StatusCode::TOO_MANY_REQUESTS,
-                        format!("Too many requests: {err}"),
+                        "Too many requests".to_string(),
                     )
                 }))
                 .layer(BufferLayer::new(1024))
