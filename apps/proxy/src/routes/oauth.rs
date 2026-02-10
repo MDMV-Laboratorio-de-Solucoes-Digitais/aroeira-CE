@@ -9,12 +9,17 @@ use axum::{
 };
 use reqwest::Client;
 use secrecy::ExposeSecret;
+use validator::Validate;
 
 #[axum::debug_handler]
 pub async fn github_token_exchange(
     State(state): State<AppState>,
     Json(payload): Json<GitHubTokenRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    payload
+        .validate()
+        .map_err(|_| AppError::BadRequest("Invalid OAuth request payload".to_string()))?;
+
     // 1. Validate the redirect_uri to prevent open redirect abuse or misuse
     validate_github_token_request(&payload, &state.config.github_allowed_hosts).await?;
 
