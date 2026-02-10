@@ -878,10 +878,12 @@ async fn store_tokens(
         .map(|t| t.secret().clone())
         .filter(|t| !t.trim().is_empty());
 
-    let token_payload = serde_json::json!({
+    let mut token_payload = serde_json::json!({
         "access_token": access_token,
-        "refresh_token": refresh_token,
     });
+    if let Some(rt) = refresh_token {
+        token_payload["refresh_token"] = serde_json::Value::String(rt);
+    }
 
     // Prevent blocking async runtime with synchronous keyring operations
     let storage = storage.clone();
