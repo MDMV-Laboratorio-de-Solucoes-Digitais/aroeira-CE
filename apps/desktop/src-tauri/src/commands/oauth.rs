@@ -547,7 +547,7 @@ pub async fn get_oauth_availability(
 }
 
 /// Retrieves session from in-memory store (warm start).
-async fn retrieve_warm_session(
+fn retrieve_warm_session(
     state_param: &str,
     oauth_state: &OAuthState,
     _state_hash: &str,
@@ -719,8 +719,7 @@ async fn retrieve_session(
     let state_hash = hex::encode(Sha256::digest(state_param.as_bytes()));
 
     // Try warm start first, then cold start
-    if let Some(session) =
-        retrieve_warm_session(state_param, oauth_state, &state_hash, request_id).await
+    if let Some(session) = retrieve_warm_session(state_param, oauth_state, &state_hash, request_id)
     {
         Ok(session)
     } else {

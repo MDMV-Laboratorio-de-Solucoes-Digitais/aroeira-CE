@@ -9,7 +9,6 @@ use axum::{
 };
 use reqwest::Client;
 use secrecy::ExposeSecret;
-use std::sync::Arc;
 
 #[axum::debug_handler]
 pub async fn github_token_exchange(
