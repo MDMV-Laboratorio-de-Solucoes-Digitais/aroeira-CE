@@ -8,15 +8,15 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum AppError {
-    #[error("Invalid request: {0}")]
-    BadRequest(String),
-
-    #[error("GitHub OAuth error: {0}")]
+    #[error("Environment variable error: {0}")]
+    EnvError(#[from] std::env::VarError),
+    #[error("GitHub API error: {0}")]
     GitHubError(String),
-
-    #[error("Configuration error: {0}")]
-    ConfigError(String),
-
+    #[allow(dead_code)]
+    #[error("Database error: {0}")]
+    DbError(String),
+    #[error("Bad request: {0}")]
+    BadRequest(String),
     #[error("Internal server error")]
     InternalServerError,
 }
@@ -29,11 +29,7 @@ impl IntoResponse for AppError {
                 StatusCode::BAD_GATEWAY,
                 "OAuth provider error. Please try again.".to_string(),
             ),
-            Self::ConfigError(_) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Service configuration error".to_string(),
-            ),
-            Self::InternalServerError => (
+            Self::InternalServerError | Self::EnvError(_) | Self::DbError(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal server error".to_string(),
             ),
@@ -51,11 +47,5 @@ impl IntoResponse for AppError {
 impl From<reqwest::Error> for AppError {
     fn from(err: reqwest::Error) -> Self {
         Self::GitHubError(format!("HTTP client error: {err}"))
-    }
-}
-
-impl From<config::ConfigError> for AppError {
-    fn from(err: config::ConfigError) -> Self {
-        Self::ConfigError(err.to_string())
     }
 }
