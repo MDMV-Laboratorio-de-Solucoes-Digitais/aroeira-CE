@@ -9,6 +9,11 @@ export type OAuthProvider = "google" | "github";
 
 let oauthCallbackQueue = Promise.resolve();
 
+// Deduplicate callback deliveries coming from multiple deep-link sources
+// (e.g., deep-link plugin + single-instance event).
+let lastCallbackKey: string | null = null;
+let lastCallbackAt = 0;
+
 export interface OAuthStateCallbacks {
   setLoading: (_provider: OAuthProvider | null) => void;
   setError: (_error: string) => void;
@@ -217,6 +222,20 @@ export function processOAuthCallback(
       );
     }
     return Promise.resolve();
+  }
+
+  // Deduplicate repeated delivery of the same callback (warm start can emit via multiple sources).
+  const code = parsed.searchParams.get("code") ?? "";
+  const state = parsed.searchParams.get("state") ?? "";
+  const oauthError = parsed.searchParams.get("error") ?? "";
+  const callbackKey = `${oauthError}|${state}|${code}`;
+  const now = Date.now();
+  if (callbackKey !== "||") {
+    if (lastCallbackKey === callbackKey && now - lastCallbackAt < 5_000) {
+      return Promise.resolve();
+    }
+    lastCallbackKey = callbackKey;
+    lastCallbackAt = now;
   }
 
   const isCanonicalCallback =
