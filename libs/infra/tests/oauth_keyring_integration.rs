@@ -210,13 +210,16 @@ async fn test_large_session_data() {
         storage.delete_session(&state_hash).ok();
 
         let save_result = storage.save_session(&state_hash, &session_data);
+        assert!(
+            save_result.is_ok(),
+            "Keyring should either support large entries for this test or the test should be adjusted to assert an expected failure: {:?}",
+            save_result.err()
+        );
 
-        if save_result.is_ok() {
-            let retrieve_result = storage.get_session(&state_hash);
-            assert!(retrieve_result.is_ok(), "Should retrieve large data");
-            assert_eq!(retrieve_result.unwrap(), Some(session_data));
-            storage.delete_session(&state_hash).ok();
-        }
+        let retrieve_result = storage.get_session(&state_hash);
+        assert!(retrieve_result.is_ok(), "Should retrieve large data");
+        assert_eq!(retrieve_result.unwrap(), Some(session_data));
+        storage.delete_session(&state_hash).ok();
     })
     .await
     .expect("spawn_blocking task should not panic");
