@@ -815,9 +815,28 @@ async fn authenticate_or_create_user(
                         request_id = %request_id,
                         "User creation from OAuth failed due to concurrent insert (EmailAlreadyExists)"
                     );
-                    if let Ok(Some(existing)) =
+
+                    if let Ok(Some(mut existing)) =
                         state.user_repo.find_by_email(&normalized_email).await
                     {
+                        if !existing.email_verified {
+                            // Mirror the "existing unverified -> verified via OAuth" hardening logic.
+                            let password_hash = generate_and_hash_oauth_password().await?;
+
+                            existing.email_verified = true;
+                            existing.password_hash = password_hash; // Invalidate old password
+                            existing.verification_token = None;
+                            existing.verification_token_expires_at = None;
+
+                            state.user_repo.save(&existing).await.map_err(|e| {
+                            tracing::error!(
+                                request_id = %request_id,
+                                "Failed to update user verification after OAuth create conflict: {e}"
+                            );
+                            "Authentication failed: System error during verification update.".to_string()
+                        })?;
+                        }
+
                         Ok(existing.id)
                     } else {
                         tracing::error!(
@@ -827,6 +846,7 @@ async fn authenticate_or_create_user(
                         Err("Authentication failed: User creation conflict.".to_string())
                     }
                 }
+
                 Err(e) => {
                     tracing::error!(
                         request_id = %request_id,
@@ -847,12 +867,12 @@ async fn authenticate_or_create_user(
 }
 
 async fn generate_and_hash_oauth_password() -> Result<String, String> {
-    // Generate a high-entropy password that will never be shown to the user.
-    // Derive 256 bits from multiple UUIDs (no extra deps) and hex-encode.
-    let mut hasher = Sha256::new();
-    hasher.update(Uuid::new_v4().as_bytes());
-    hasher.update(Uuid::new_v4().as_bytes());
-    let oauth_random_password = hex::encode(hasher.finalize());
+    let mut random_bytes = [0u8; 32]; // 256 bits of entropy
+    getrandom::getrandom(&mut random_bytes).map_err(|e| {
+        tracing::error!("Failed to generate random bytes for OAuth password: {e}");
+        "Authentication failed".to_string()
+    })?;
+    let oauth_random_password = hex::encode(random_bytes);
 
     // Use infra's hash_password which handles security config correctly
     // spawn_blocking is required because bcrypt is CPU-intensive and would block the async runtime
