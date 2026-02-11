@@ -585,7 +585,7 @@ fn test_hash_email_for_logging_invalid_key() {
     let email = "test@example.com";
     // Using a random short byte array to avoid hard-coded key detection
     // Key length of 3 is intentionally invalid (too short)
-    let mut key = [0u8; 3];
+    let mut key = vec![0u8; 3];
     getrandom::getrandom(&mut key).expect("Failed to generate random bytes for test key");
     let result = hash_email_for_logging(email, &key);
     assert!(result.is_err());
