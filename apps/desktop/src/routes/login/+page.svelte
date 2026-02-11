@@ -58,6 +58,10 @@
   let unlistenDeepLink: UnlistenFn | null = null;
   let unlistenDeepLinkEvent: UnlistenFn | null = null;
 
+  // De-dupe cache for OAuth callbacks
+  const seenOAuthCallbacks = new Map<string, number>();
+  const OAUTH_CALLBACK_DEDUPE_MS = 10_000;
+
   type PasswordSecurityLevel =
     | "none"
     | "minimum"
@@ -77,6 +81,23 @@
    */
   function handleDeepLink(rawUrl: string): Promise<void> {
     if (destroyed) return Promise.resolve();
+
+    // De-dupe using `state` when present (preferred), otherwise the raw URL
+    let key = rawUrl;
+    try {
+      const u = new URL(rawUrl);
+      key = u.searchParams.get("state") ?? rawUrl;
+    } catch {
+      // ignore parse errors here; processOAuthCallback will handle validation
+    }
+
+    const now = Date.now();
+    const lastSeen = seenOAuthCallbacks.get(key);
+    if (lastSeen && now - lastSeen < OAUTH_CALLBACK_DEDUPE_MS) {
+      return Promise.resolve();
+    }
+    seenOAuthCallbacks.set(key, now);
+
     return processOAuthCallback(
       rawUrl,
       {
