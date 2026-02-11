@@ -533,6 +533,17 @@ impl OAuthService for OAuthServiceImpl {
         let ru_url = url::Url::parse(self.config.redirect_uri.as_str())
             .map_err(|e| OAuthError::ProviderNotConfigured(format!("Invalid redirect URI: {e}")))?;
 
+        // Extra hardening: disallow userinfo, fragments, and unexpected query strings.
+        if !ru_url.username().is_empty()
+            || ru_url.password().is_some()
+            || ru_url.fragment().is_some()
+            || ru_url.query().is_some()
+        {
+            return Err(OAuthError::ProviderNotConfigured(
+                "Invalid redirect URI: contains disallowed components".to_string(),
+            ));
+        }
+
         let is_allowed_prod_scheme = matches!(ru_url.scheme(), "com.aroeira.app" | "aroeira");
         let is_prod = is_allowed_prod_scheme
             && ru_url.host_str() == Some(OAUTH_CALLBACK_HOST)
@@ -552,7 +563,9 @@ impl OAuthService for OAuthServiceImpl {
             && ru_url.scheme() == "http"
             && ru_url.host_str() == Some("localhost")
             && ru_url.port() == Some(dev_port)
-            && ru_url.path() == "/auth/callback";
+            && ru_url.path() == "/auth/callback"
+            && ru_url.query().is_none()
+            && ru_url.fragment().is_none();
 
         if !is_prod && !is_dev {
             return Err(OAuthError::ProviderNotConfigured(
