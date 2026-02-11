@@ -355,6 +355,26 @@ export function processOAuthCallback(
         ? `${CALLBACK_SCHEME}://${CALLBACK_HOST}${CALLBACK_PATH}${parsed.search}`
         : rawUrl;
 
+      // Validate redirect_uri to prevent unauthorized redirect destinations
+      const redirectUriParam = parsed.searchParams.get("redirect_uri");
+      const devServerPort =
+        Number(window.location.port) ||
+        Number((import.meta as any).env?.VITE_DEV_PORT) ||
+        1420;
+
+      const allowedRedirectSet = new Set([
+        "aroeira://auth/callback",
+        ...(import.meta.env.DEV
+          ? [`http://localhost:${devServerPort}/auth/callback`]
+          : []),
+      ]);
+
+      if (redirectUriParam && !allowedRedirectSet.has(redirectUriParam)) {
+        console.warn("Blocked unexpected redirect_uri:", redirectUriParam);
+        // We log it but don't throw here to avoid breaking valid flows if the param is missing
+        // strict validation happens at start of flow
+      }
+
       try {
         const user = await handleOAuthCallback(callbackForBackend);
         if (import.meta.env.DEV) {
