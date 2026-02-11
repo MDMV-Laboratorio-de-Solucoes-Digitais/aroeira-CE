@@ -23,6 +23,13 @@ use sha2::{Digest, Sha256};
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
+// Constants for keyring service names to prevent typo-based fragmentation
+pub const PKCE_SESSION_KEYRING_SERVICE: &str = "aroeira-oauth-pkce";
+pub const TOKEN_KEYRING_SERVICE: &str = "aroeira-oauth";
+
+const OAUTH_CALLBACK_HOST: &str = "auth";
+const OAUTH_CALLBACK_PATH: &str = "/callback";
+
 // Static HTTP client for async_http_client callback (connection pooling)
 static ASYNC_HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(|| {
     reqwest::Client::builder()
@@ -528,8 +535,8 @@ impl OAuthService for OAuthServiceImpl {
 
         let is_allowed_prod_scheme = matches!(ru_url.scheme(), "com.aroeira.app" | "aroeira");
         let is_prod = is_allowed_prod_scheme
-            && ru_url.host_str() == Some(crate::constants::OAUTH_CALLBACK_HOST)
-            && ru_url.path() == crate::constants::OAUTH_CALLBACK_PATH;
+            && ru_url.host_str() == Some(OAUTH_CALLBACK_HOST)
+            && ru_url.path() == OAUTH_CALLBACK_PATH;
 
         let dev_port: u16 = std::env::var("AROEIRA_DEV_PORT")
             .ok()
@@ -897,7 +904,7 @@ async fn store_tokens(
     let user_key_hash_for_store = user_key_hash.clone();
 
     let store_result = tokio::task::spawn_blocking(move || {
-        let service_name = "aroeira-oauth".to_string();
+        let service_name = TOKEN_KEYRING_SERVICE.to_string();
         storage.store(&service_name, &user_key_hash_for_store, &token_payload_str)
     })
     .await
