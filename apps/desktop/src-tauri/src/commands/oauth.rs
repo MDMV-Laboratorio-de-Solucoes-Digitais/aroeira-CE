@@ -648,8 +648,28 @@ async fn retrieve_cold_session(
 
     validate_session_and_log(&recovered, state_param, request_id, oauth_state, state_hash).await?;
 
-    // NOTE: Do not delete the persisted session here.
-    // Delete only after a successful code exchange/login to allow retry on transient failures.
+    // Enforce single-use for cold-start sessions: once a persisted session is successfully
+    // recovered and validated, remove it from keyring to reduce replay window.
+    let pkce_storage = oauth_state.pkce_storage.clone();
+    let state_hash_clone = state_hash.to_string();
+    let request_id_clone = request_id.to_string();
+    tokio::spawn(async move {
+        match tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash_clone))
+            .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::warn!(
+                target: "security",
+                request_id = %request_id_clone,
+                "Failed to delete consumed OAuth session from keyring: {e}"
+            ),
+            Err(e) => tracing::warn!(
+                target: "security",
+                request_id = %request_id_clone,
+                "Failed to delete consumed OAuth session from keyring (task join error): {e}"
+            ),
+        }
+    });
 
     Ok(recovered)
 }
@@ -668,19 +688,6 @@ async fn validate_session_and_log(
             request_id = %request_id,
             outcome = "failure",
             reason = "state_mismatch_csrf",
-            "OAuth authentication failed: invalid or expired session"
-        );
-        cleanup_invalid_persisted_session(oauth_state, state_hash, request_id).await;
-        return Err("Invalid or expired OAuth session. Please try again.".to_string());
-    }
-
-    // Validate session validity and expiration
-    if !session.is_valid() || session.is_expired() {
-        tracing::info!(
-            target: "audit",
-            request_id = %request_id,
-            outcome = "failure",
-            reason = "session_invalid_or_expired",
             "OAuth authentication failed: invalid or expired session"
         );
         cleanup_invalid_persisted_session(oauth_state, state_hash, request_id).await;
@@ -732,6 +739,33 @@ async fn retrieve_session(
     }
 }
 
+/// Hardens an existing, unverified user account during an OAuth flow
+/// by generating a new secure password and marking the email as verified.
+async fn harden_unverified_user(
+    user: &mut domain::modules::auth::User,
+    state: &AppState,
+    request_id: &str,
+) -> Result<(), String> {
+    // SECURITY CRITICAL: When verifying an existing unverified account via OAuth,
+    // we MUST invalidate the old password to prevent account takeover.
+    let password_hash = generate_and_hash_oauth_password().await?;
+
+    user.email_verified = true;
+    user.password_hash = password_hash; // Invalidate old password
+    user.verification_token = None;
+    user.verification_token_expires_at = None;
+
+    state.user_repo.save(user).await.map_err(|e| {
+        tracing::error!(
+            request_id = %request_id,
+            "Failed to update user verification from OAuth: {e}"
+        );
+        "Authentication failed: System error during verification update.".to_string()
+    })?;
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 async fn authenticate_or_create_user(
     user: &OAuthUser,
@@ -771,23 +805,7 @@ async fn authenticate_or_create_user(
     match state.user_repo.find_by_email(&normalized_email).await {
         Ok(Some(mut user)) => {
             if !user.email_verified {
-                // SECURITY CRITICAL: When verifying an existing unverified account via OAuth,
-                // we MUST invalidate the old password to prevent account takeover.
-                // Otherwise, an attacker who pre-registered the email could use the old password.
-                let password_hash = generate_and_hash_oauth_password().await?;
-
-                user.email_verified = true;
-                user.password_hash = password_hash; // Invalidate old password
-                user.verification_token = None;
-                user.verification_token_expires_at = None;
-
-                state.user_repo.save(&user).await.map_err(|e| {
-                    tracing::error!(
-                        request_id = %request_id,
-                        "Failed to update user verification from OAuth: {e}"
-                    );
-                    "Authentication failed: System error during verification update.".to_string()
-                })?;
+                harden_unverified_user(&mut user, state, request_id).await?;
             }
             Ok(user.id)
         }
@@ -821,21 +839,7 @@ async fn authenticate_or_create_user(
                         state.user_repo.find_by_email(&normalized_email).await
                     {
                         if !existing.email_verified {
-                            // Mirror the "existing unverified -> verified via OAuth" hardening logic.
-                            let password_hash = generate_and_hash_oauth_password().await?;
-
-                            existing.email_verified = true;
-                            existing.password_hash = password_hash; // Invalidate old password
-                            existing.verification_token = None;
-                            existing.verification_token_expires_at = None;
-
-                            state.user_repo.save(&existing).await.map_err(|e| {
-                            tracing::error!(
-                                request_id = %request_id,
-                                "Failed to update user verification after OAuth create conflict: {e}"
-                            );
-                            "Authentication failed: System error during verification update.".to_string()
-                        })?;
+                            harden_unverified_user(&mut existing, state, request_id).await?;
                         }
 
                         Ok(existing.id)
