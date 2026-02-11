@@ -311,12 +311,14 @@
       // The callback is handled by processOAuthCallback
     } catch (err: unknown) {
       if (destroyed) return;
+
+      const msg = handleError(err, `${provider} authentication`);
       logAuditEvent("oauth_start", false, {
         provider,
         error: sanitizeErrorForAudit(err),
       });
-      error = handleError(err, `${provider} authentication`);
-      resetOAuthState();
+
+      resetOAuthState(msg);
     }
   }
 </script>
