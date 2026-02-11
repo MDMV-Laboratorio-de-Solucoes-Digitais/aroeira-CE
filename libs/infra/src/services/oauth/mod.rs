@@ -245,13 +245,13 @@ impl OAuthServiceImpl {
     const GOOGLE_USERINFO_URL: &'static str = "https://openidconnect.googleapis.com/v1/userinfo";
 
     /// GitHub `OAuth2` authorization endpoint
-    const GITHUB_AUTH_URL: &'static str = "https://github.com/login/oauth/authorize";
+    pub const GITHUB_AUTH_URL: &'static str = "https://github.com/login/oauth/authorize";
     /// GitHub `OAuth2` token endpoint
-    const GITHUB_TOKEN_URL: &'static str = "https://github.com/login/oauth/access_token";
+    pub const GITHUB_TOKEN_URL: &'static str = "https://github.com/login/oauth/access_token";
     /// GitHub user API endpoint
-    const GITHUB_USER_URL: &'static str = "https://api.github.com/user";
+    pub const GITHUB_USER_URL: &'static str = "https://api.github.com/user";
     /// GitHub user emails API endpoint
-    const GITHUB_EMAILS_URL: &'static str = "https://api.github.com/user/emails";
+    pub const GITHUB_EMAILS_URL: &'static str = "https://api.github.com/user/emails";
 
     /// Creates a new OAuth service with the given configuration.
     #[must_use]
