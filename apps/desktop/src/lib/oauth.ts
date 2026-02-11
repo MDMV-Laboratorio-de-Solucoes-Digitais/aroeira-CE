@@ -97,7 +97,16 @@ export async function openOAuthAuthUrl(
   if (parsed.username || parsed.password) {
     throw new Error(`Blocked credentialed ${provider} authorization URL`);
   }
-  if (parsed.port) {
+
+  const port = parsed.port ? Number(parsed.port) : null;
+  const defaultPort =
+    parsed.protocol === "https:"
+      ? 443
+      : parsed.protocol === "http:"
+        ? 80
+        : null;
+
+  if (port !== null && defaultPort !== null && port !== defaultPort) {
     throw new Error(
       `Blocked non-default port for ${provider} authorization URL`,
     );
