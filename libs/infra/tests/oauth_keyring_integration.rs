@@ -68,7 +68,22 @@ async fn test_save_and_retrieve_session_roundtrip() {
         let session_data =
             r#"{"verifier":"test-verifier-123","state":"test-state-456","provider":"Google"}"#;
 
+        // RAII guard to ensure cleanup happens even if assertions fail
+        struct Cleanup<'a> {
+            storage: KeyringPkceStorage,
+            key: &'a str,
+        }
+        impl Drop for Cleanup<'_> {
+            fn drop(&mut self) {
+                self.storage.delete_session(self.key).ok();
+            }
+        }
+
         storage.delete_session(&state_hash).ok();
+        let _cleanup = Cleanup {
+            storage: KeyringPkceStorage,
+            key: &state_hash,
+        };
 
         let save_result = storage.save_session(&state_hash, session_data);
         assert!(save_result.is_ok(), "Save failed: {:?}", save_result.err());
@@ -76,8 +91,6 @@ async fn test_save_and_retrieve_session_roundtrip() {
         let get_result = storage.get_session(&state_hash);
         assert!(get_result.is_ok(), "Get failed: {:?}", get_result.err());
         assert_eq!(get_result.unwrap(), Some(session_data.to_string()));
-
-        storage.delete_session(&state_hash).ok();
     })
     .await
     .expect("spawn_blocking task should not panic");
