@@ -111,11 +111,30 @@ fn validate_redirect_uri(
     request: &GitHubTokenRequest,
     expected_redirect_uri: &str,
 ) -> Result<(), AppError> {
-    // 1) Ensure the client cannot choose arbitrary redirect URIs
-    if request.redirect_uri != expected_redirect_uri {
+    let req = url::Url::parse(&request.redirect_uri)
+        .map_err(|_| AppError::BadRequest("Invalid redirect URI".to_string()))?;
+    let expected = url::Url::parse(expected_redirect_uri)
+        .map_err(|_| AppError::GitHubError("Server misconfiguration".to_string()))?;
+
+    // Reject any authority tricks / dynamic parts
+    let has_userinfo = !req.username().is_empty() || req.password().is_some();
+    let has_query_or_fragment = req.query().is_some() || req.fragment().is_some();
+    if has_userinfo || has_query_or_fragment {
+        tracing::error!("Blocked GitHub token exchange due to unexpected redirect_uri components");
+        return Err(AppError::BadRequest("Invalid redirect URI".to_string()));
+    }
+
+    // Compare normalized base (scheme/host/port/path), ignoring formatting differences.
+    let same_base = req.scheme() == expected.scheme()
+        && req.host_str() == expected.host_str()
+        && req.port_or_known_default() == expected.port_or_known_default()
+        && req.path() == expected.path();
+
+    if !same_base {
         tracing::error!("Blocked GitHub token exchange due to mismatched redirect_uri");
         return Err(AppError::BadRequest("Invalid redirect URI".to_string()));
     }
+
     Ok(())
 }
 
