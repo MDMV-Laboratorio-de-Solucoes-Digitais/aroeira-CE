@@ -732,6 +732,7 @@ async fn retrieve_session(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn authenticate_or_create_user(
     user: &OAuthUser,
     session: &OAuthPkceSession,
