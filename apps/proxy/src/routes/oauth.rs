@@ -21,7 +21,7 @@ pub async fn github_token_exchange(
 
     validate_github_token_request(
         &payload,
-        &payload.redirect_uri,
+        &state.config.github_redirect_uri,
         &state.config.github_token_url,
         &state.config.github_allowed_hosts,
     )?;
