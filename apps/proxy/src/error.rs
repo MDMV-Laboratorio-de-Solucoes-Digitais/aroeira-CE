@@ -14,8 +14,6 @@ pub enum AppError {
     GitHubError(String),
     #[error("Bad request: {0}")]
     BadRequest(String),
-    #[error("Internal server error")]
-    InternalServerError,
 }
 
 impl IntoResponse for AppError {
@@ -26,7 +24,7 @@ impl IntoResponse for AppError {
                 StatusCode::BAD_GATEWAY,
                 "OAuth provider error. Please try again.".to_string(),
             ),
-            Self::InternalServerError | Self::EnvError(_) => (
+            Self::EnvError(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal server error".to_string(),
             ),

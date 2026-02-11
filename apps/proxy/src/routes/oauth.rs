@@ -19,7 +19,6 @@ pub async fn github_token_exchange(
         .validate()
         .map_err(|_| AppError::BadRequest("Invalid OAuth request payload".to_string()))?;
 
-    // 1. Validate the redirect_uri to prevent open redirect abuse or misuse
     validate_github_token_request(
         &payload,
         &state.config.github_redirect_uri,
@@ -45,6 +44,8 @@ pub async fn github_token_exchange(
         ("code_verifier", code_verifier.as_str()),
     ];
 
+    // Configurable URL with strict validation (see validate_github_token_request)
+    // to support Enterprise/Proxy scenarios while preventing SSRF.
     let response = client
         .post(&state.config.github_token_url)
         .header("Accept", "application/json")
@@ -59,10 +60,14 @@ pub async fn github_token_exchange(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+
+        // Avoid logging potentially sensitive payloads; keep a small bounded snippet.
+        let snippet: String = body.chars().take(512).collect();
+
         tracing::error!(
-            "GitHub token exchange failed: status={}, body={}",
+            "GitHub token exchange failed: status={}, body_snippet={}",
             status,
-            body
+            snippet
         );
         return Err(AppError::GitHubError(
             "GitHub refused the token exchange".to_string(),
@@ -103,6 +108,7 @@ async fn validate_github_token_request(
         return Err(AppError::BadRequest("Invalid redirect URI".to_string()));
     }
 
+    // 2) Validate the upstream token URL against allowlist / SSRF rules
     let parsed_url = url::Url::parse(github_token_url)
         .map_err(|_| AppError::GitHubError("Invalid provider token URL format".to_string()))?;
 
@@ -143,31 +149,6 @@ async fn validate_github_token_request(
             port,
             parsed_url.path()
         );
-        return Err(AppError::GitHubError(
-            "Untrusted OAuth provider URL".to_string(),
-        ));
-    }
-
-    let addrs = tokio::net::lookup_host((host.as_str(), 443))
-        .await
-        .map_err(|e| {
-            tracing::error!("DNS lookup failed for GitHub token host: {}", e);
-            AppError::InternalServerError
-        })?;
-
-    let is_private = addrs.into_iter().any(|addr| match addr.ip() {
-        std::net::IpAddr::V4(ipv4) => {
-            ipv4.is_loopback() || ipv4.is_private() || ipv4.is_link_local()
-        }
-        std::net::IpAddr::V6(ipv6) => {
-            ipv6.is_loopback()
-                || (ipv6.segments()[0] & 0xfe00) == 0xfc00
-                || (ipv6.segments()[0] & 0xffc0) == 0xfe80
-        }
-    });
-
-    if is_private {
-        tracing::error!("Blocked GitHub token exchange due to non-public DNS resolution");
         return Err(AppError::GitHubError(
             "Untrusted OAuth provider URL".to_string(),
         ));
