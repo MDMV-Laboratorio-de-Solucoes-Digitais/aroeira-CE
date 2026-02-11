@@ -18,13 +18,16 @@ pub struct GitHubTokenRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GitHubTokenResponse {
-    pub access_token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refresh_token: Option<String>,
-    pub token_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_in: Option<i64>,
-    pub scope: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

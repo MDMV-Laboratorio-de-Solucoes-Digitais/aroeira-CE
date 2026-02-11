@@ -94,6 +94,16 @@ pub async fn github_token_exchange(
         ));
     }
 
+    if token_response.access_token.is_none()
+        || token_response.token_type.is_none()
+        || token_response.scope.is_none()
+    {
+        tracing::error!("GitHub token response missing required fields");
+        return Err(AppError::GitHubError(
+            "Invalid response from GitHub".to_string(),
+        ));
+    }
+
     Ok(Json(token_response))
 }
 
