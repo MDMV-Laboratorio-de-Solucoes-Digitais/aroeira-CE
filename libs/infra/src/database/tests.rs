@@ -237,6 +237,9 @@ mod database_tests {
 
     #[test]
     fn test_validate_relative_path_containment() {
+        // Serialize tests that rely on global environment state (TMPDIR)
+        let _guard = ENV_MUTEX.lock().expect("Failed to acquire env var lock");
+
         let temp_dir = TempDir::new().unwrap();
         let base_dir = temp_dir.path().to_path_buf();
         let contained_file = base_dir.join("safe.db");
@@ -252,6 +255,9 @@ mod database_tests {
 
     #[test]
     fn test_validate_relative_path_containment_outside() {
+        // Serialize tests that rely on global environment state (TMPDIR)
+        let _guard = ENV_MUTEX.lock().expect("Failed to acquire env var lock");
+
         let temp_dir = TempDir::new().unwrap();
         let base_dir = temp_dir.path().to_path_buf();
         let outside_dir = TempDir::new().unwrap();
