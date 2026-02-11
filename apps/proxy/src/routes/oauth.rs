@@ -118,6 +118,8 @@ fn resolve_github_token_url(
     // This helps static analysis tools (like CodeQL) verify that the default path is safe/constant.
     const STANDARD_GITHUB_URL: &str = "https://github.com/login/oauth/access_token";
     if configured_url == STANDARD_GITHUB_URL {
+        // Safe to unwrap because we know this string literal is a valid URL.
+        #[allow(clippy::expect_used)]
         return Ok(url::Url::parse(STANDARD_GITHUB_URL).expect("Standard URL is valid"));
     }
 
