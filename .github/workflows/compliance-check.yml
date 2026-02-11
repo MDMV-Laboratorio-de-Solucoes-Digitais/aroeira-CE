@@ -86,8 +86,11 @@ jobs:
         run: npm ci
         working-directory: ./apps/desktop
 
-      - name: Create dummy frontend build directory
-        run: mkdir -p apps/desktop/build
+      - name: Build frontend (required for Tauri assets)
+        run: |
+          npm run build
+          test -f build/index.html
+        working-directory: ./apps/desktop
 
       - name: Rust Format Check
         run: cargo fmt -- --check

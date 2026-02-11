@@ -134,8 +134,12 @@ jobs:
             . -> target
             apps/desktop/src-tauri -> target
 
-      - name: Create dummy frontend build directory
-        run: mkdir -p apps/desktop/build
+      - name: Build frontend (required for Tauri assets)
+        run: |
+          npm ci
+          npm run build
+          test -f build/index.html
+        working-directory: ./apps/desktop
 
       - name: Run Tests
         run: cargo test --workspace --locked --profile ci
