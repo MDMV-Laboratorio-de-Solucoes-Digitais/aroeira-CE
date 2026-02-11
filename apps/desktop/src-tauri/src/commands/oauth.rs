@@ -1098,7 +1098,7 @@ impl OAuthSessionStore {
                     tracing::warn!(
                         target: "security",
                         "Keyring cleanup task join error: {e}"
-                    )
+                    );
                 });
             });
         } else {
