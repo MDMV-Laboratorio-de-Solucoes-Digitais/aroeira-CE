@@ -19,14 +19,16 @@ pub async fn github_token_exchange(
         .validate()
         .map_err(|_| AppError::BadRequest("Invalid OAuth request payload".to_string()))?;
 
-    validate_github_token_request(
-        &payload,
-        &state.config.github_redirect_uri,
+    validate_redirect_uri(&payload, &state.config.github_redirect_uri)?;
+
+    // 2. Resolve and validate the upstream token URL
+    // We do this explicitly to return a trusted `Url` object and satisfy SSRF checks.
+    let token_url = resolve_github_token_url(
         &state.config.github_token_url,
         &state.config.github_allowed_hosts,
     )?;
 
-    // 2. Exchange code for token with GitHub
+    // 3. Exchange code for token with GitHub
     let client = &state.http_client;
 
     let client_id = &state.config.github_client_id;
@@ -43,10 +45,10 @@ pub async fn github_token_exchange(
         ("code_verifier", code_verifier.as_str()),
     ];
 
-    // Configurable URL with strict validation (see validate_github_token_request)
+    // Configurable URL with strict validation (see resolve_github_token_url)
     // to support Enterprise/Proxy scenarios while preventing SSRF.
     let response = client
-        .post(&state.config.github_token_url)
+        .post(token_url)
         .header("Accept", "application/json")
         .form(&params)
         .send()
@@ -95,20 +97,32 @@ pub async fn github_token_exchange(
     Ok(Json(token_response))
 }
 
-fn validate_github_token_request(
+fn validate_redirect_uri(
     request: &GitHubTokenRequest,
     expected_redirect_uri: &str,
-    github_token_url: &str,
-    allowed_hosts: &[String],
 ) -> Result<(), AppError> {
     // 1) Ensure the client cannot choose arbitrary redirect URIs
     if request.redirect_uri != expected_redirect_uri {
         tracing::error!("Blocked GitHub token exchange due to mismatched redirect_uri");
         return Err(AppError::BadRequest("Invalid redirect URI".to_string()));
     }
+    Ok(())
+}
 
-    // 2) Validate the upstream token URL against allowlist / SSRF rules
-    let parsed_url = url::Url::parse(github_token_url)
+fn resolve_github_token_url(
+    configured_url: &str,
+    allowed_hosts: &[String],
+) -> Result<url::Url, AppError> {
+    // Defense-in-depth: If the configured URL matches the standard GitHub endpoint exactly,
+    // return a fresh Url object constructed from a string literal.
+    // This helps static analysis tools (like CodeQL) verify that the default path is safe/constant.
+    const STANDARD_GITHUB_URL: &str = "https://github.com/login/oauth/access_token";
+    if configured_url == STANDARD_GITHUB_URL {
+        return Ok(url::Url::parse(STANDARD_GITHUB_URL).expect("Standard URL is valid"));
+    }
+
+    // Otherwise, parse and validate the custom URL against the allowlist.
+    let parsed_url = url::Url::parse(configured_url)
         .map_err(|_| AppError::GitHubError("Invalid provider token URL format".to_string()))?;
 
     let scheme = parsed_url.scheme();
@@ -153,5 +167,5 @@ fn validate_github_token_request(
         ));
     }
 
-    Ok(())
+    Ok(parsed_url)
 }
