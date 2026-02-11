@@ -6,7 +6,7 @@ test.describe("Authentication Flow", () => {
     await page.addInitScript(() => {
       // Mock for Tauri v2
       // @ts-ignore - Playwright executes this in browser context
-      const w = window;
+      const w = globalThis;
 
       // Initialize if undefined
       w.__TAURI_INTERNALS__ = w.__TAURI_INTERNALS__ || {};
@@ -132,7 +132,7 @@ test.describe("Authentication Flow", () => {
     // Override mock to simulate failure
     await page.addInitScript(() => {
       // @ts-ignore - Playwright executes this in browser context
-      const w = window;
+      const w = globalThis;
       // Initialize if undefined
       w.__TAURI_INTERNALS__ = w.__TAURI_INTERNALS__ || {};
 
