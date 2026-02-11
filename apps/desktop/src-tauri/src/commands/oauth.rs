@@ -207,11 +207,8 @@ pub async fn start_oauth_flow(
     })
 }
 
-fn keyed_state_hash(state: &str, key: &[u8]) -> String {
-    let mut h = Sha256::new();
-    h.update(key);
-    h.update(state.as_bytes());
-    hex::encode(h.finalize())
+fn state_hash(state: &str) -> String {
+    hex::encode(Sha256::digest(state.as_bytes()))
 }
 
 async fn persist_oauth_session(
@@ -220,10 +217,8 @@ async fn persist_oauth_session(
     request_id: &str,
     state: &AppState,
 ) -> Result<(), String> {
-    let state_hash = keyed_state_hash(
-        &session.state,
-        state.rate_limit_key.expose_secret().as_bytes(),
-    );
+    let _ = state; // `AppState` no longer needed for hashing the keyring key
+    let state_hash = state_hash(&session.state);
     let session_json = serde_json::to_string(session).map_err(|e| {
         tracing::error!(
             target: "security",
@@ -393,10 +388,7 @@ async fn finalize_oauth_login(
     log_oauth_success(user_id, session, user, request_id);
 
     // Clean up persisted session now that login is successful
-    let state_hash = keyed_state_hash(
-        &session.state,
-        state.rate_limit_key.expose_secret().as_bytes(),
-    );
+    let state_hash = state_hash(&session.state);
     let pkce_storage = oauth_state.pkce_storage.clone();
     let request_id_clone = request_id.to_string();
 
@@ -728,7 +720,8 @@ async fn retrieve_session(
     state: &AppState,
     request_id: &str,
 ) -> Result<OAuthPkceSession, String> {
-    let state_hash = keyed_state_hash(state_param, state.rate_limit_key.expose_secret().as_bytes());
+    let _ = state; // `AppState` no longer needed for hashing the keyring key
+    let state_hash = state_hash(state_param);
 
     // Try warm start first, then cold start
     if let Some(session) = retrieve_warm_session(state_param, oauth_state, &state_hash, request_id)
