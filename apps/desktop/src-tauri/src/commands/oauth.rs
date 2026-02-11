@@ -544,8 +544,10 @@ pub async fn get_oauth_availability(
         .as_ref()
         .is_some_and(|s| !s.expose_secret().is_empty());
 
-    let github = github_client_id_present
-        && (github_token_url != OAuthServiceImpl::GITHUB_TOKEN_URL || github_secret_present);
+    let is_direct_mode_with_secret =
+        github_token_url == OAuthServiceImpl::GITHUB_TOKEN_URL && github_secret_present;
+    let is_proxy_mode = github_token_url != OAuthServiceImpl::GITHUB_TOKEN_URL;
+    let github = github_client_id_present && (is_proxy_mode || is_direct_mode_with_secret);
 
     Ok(OAuthAvailability { google, github })
 }
@@ -648,28 +650,9 @@ async fn retrieve_cold_session(
 
     validate_session_and_log(&recovered, state_param, request_id, oauth_state, state_hash).await?;
 
-    // Enforce single-use for cold-start sessions: once a persisted session is successfully
-    // recovered and validated, remove it from keyring to reduce replay window.
-    let pkce_storage = oauth_state.pkce_storage.clone();
-    let state_hash_clone = state_hash.to_string();
-    let request_id_clone = request_id.to_string();
-    tokio::spawn(async move {
-        match tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash_clone))
-            .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => tracing::warn!(
-                target: "security",
-                request_id = %request_id_clone,
-                "Failed to delete consumed OAuth session from keyring: {e}"
-            ),
-            Err(e) => tracing::warn!(
-                target: "security",
-                request_id = %request_id_clone,
-                "Failed to delete consumed OAuth session from keyring (task join error): {e}"
-            ),
-        }
-    });
+    // Retention Policy: We deliberately keep the persisted session in the keyring here.
+    // It will be deleted only after a successful token exchange and login (in `finalize_oauth_login`)
+    // to allow for retries in case of transient network failures during the exchange.
 
     Ok(recovered)
 }
@@ -688,6 +671,20 @@ async fn validate_session_and_log(
             request_id = %request_id,
             outcome = "failure",
             reason = "state_mismatch_csrf",
+            "OAuth authentication failed: invalid or expired session"
+        );
+        cleanup_invalid_persisted_session(oauth_state, state_hash, request_id).await;
+        return Err("Invalid or expired OAuth session. Please try again.".to_string());
+    }
+
+    // Security: Validate session integrity (expiry/validity) for recovered sessions.
+    // This ensures that even if a session exists in the store, it meets current security policies.
+    if !session.is_valid() || session.is_expired() {
+        tracing::warn!(
+            target: "audit",
+            request_id = %request_id,
+            outcome = "failure",
+            reason = "session_invalid_or_expired",
             "OAuth authentication failed: invalid or expired session"
         );
         cleanup_invalid_persisted_session(oauth_state, state_hash, request_id).await;
