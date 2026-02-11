@@ -138,7 +138,7 @@ impl From<OAuthUser> for OAuthCallbackResponse {
 pub async fn start_oauth_flow(
     provider: AuthProvider,
     oauth_state: State<'_, OAuthState>,
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
 ) -> Result<StartOAuthResponse, String> {
     let request_id = generate_request_id();
     let device_id = get_device_id().map_err(|e| {
@@ -199,7 +199,7 @@ pub async fn start_oauth_flow(
         return Err("Failed to start authentication. Please try again.".to_string());
     }
 
-    persist_oauth_session(&oauth_state, &session, &request_id).await?;
+    persist_oauth_session(&oauth_state, &session, &request_id, &state).await?;
 
     Ok(StartOAuthResponse {
         auth_url,
@@ -207,12 +207,23 @@ pub async fn start_oauth_flow(
     })
 }
 
+fn keyed_state_hash(state: &str, key: &[u8]) -> String {
+    let mut h = Sha256::new();
+    h.update(key);
+    h.update(state.as_bytes());
+    hex::encode(h.finalize())
+}
+
 async fn persist_oauth_session(
     oauth_state: &OAuthState,
     session: &OAuthPkceSession,
     request_id: &str,
+    state: &AppState,
 ) -> Result<(), String> {
-    let state_hash = hex::encode(Sha256::digest(session.state.as_bytes()));
+    let state_hash = keyed_state_hash(
+        &session.state,
+        state.rate_limit_key.expose_secret().as_bytes(),
+    );
     let session_json = serde_json::to_string(session).map_err(|e| {
         tracing::error!(
             target: "security",
@@ -713,10 +724,10 @@ async fn cleanup_invalid_persisted_session(
 async fn retrieve_session(
     state_param: &str,
     oauth_state: &OAuthState,
-    _state: &AppState,
+    state: &AppState,
     request_id: &str,
 ) -> Result<OAuthPkceSession, String> {
-    let state_hash = hex::encode(Sha256::digest(state_param.as_bytes()));
+    let state_hash = keyed_state_hash(state_param, state.rate_limit_key.expose_secret().as_bytes());
 
     // Try warm start first, then cold start
     if let Some(session) = retrieve_warm_session(state_param, oauth_state, &state_hash, request_id)
@@ -1129,42 +1140,6 @@ impl OAuthSessionStore {
         }
     }
 
-    /// Takes a session by its state value, removing it from storage.
-    ///
-    /// Returns `None` if:
-    /// - Session doesn't exist
-    /// - Session has expired
-    #[must_use]
-    pub fn take(&self, state: &str) -> Option<OAuthPkceSession> {
-        let (expired_hashes, removed_session, pkce_storage) = {
-            let mut sessions = self.sessions.lock();
-
-            // Collect expired hashes so we can also delete persisted sessions from keyring.
-            let expired_hashes: Vec<String> = sessions
-                .iter()
-                .filter(|&(_k, s)| s.is_expired())
-                .map(|(k, _s)| hex::encode(Sha256::digest(k.as_bytes())))
-                .collect();
-
-            // Proactively clean up expired sessions to prevent memory leaks
-            sessions.retain(|_, s| !s.is_expired());
-
-            let removed_session = sessions.remove(state);
-
-            (expired_hashes, removed_session, self.pkce_storage.clone())
-        };
-
-        let removed_hash = removed_session
-            .as_ref()
-            .map(|s| hex::encode(Sha256::digest(s.state.as_bytes())));
-
-        Self::perform_keyring_cleanup(expired_hashes, removed_hash, &pkce_storage);
-
-        match removed_session {
-            Some(s) if s.is_valid() => Some(s),
-            _ => None,
-        }
-    }
     /// Performs a background cleanup of stale sessions from the keyring.
     ///
     /// This should be called on application startup to ensure that any
@@ -1392,7 +1367,7 @@ mod tests {
     #[test]
     fn session_store_returns_none_for_unknown_state() {
         let store = create_mock_store();
-        assert!(store.take("unknown-state").is_none());
+        assert!(store.take_valid("unknown-state", "test-req").is_none());
     }
 
     #[test]
@@ -1407,11 +1382,11 @@ mod tests {
         store.store(session);
 
         // First take succeeds
-        let retrieved = store.take("test-state");
+        let retrieved = store.take_valid("test-state", "test-req");
         assert!(retrieved.is_some());
 
         // Second take fails (session consumed)
-        assert!(store.take("test-state").is_none());
+        assert!(store.take_valid("test-state", "test-req").is_none());
     }
 
     #[test]
@@ -1427,17 +1402,17 @@ mod tests {
         store.store(session2);
 
         // Can retrieve both independently
-        let s1 = store.take("state-1");
+        let s1 = store.take_valid("state-1", "test-req");
         assert!(s1.is_some());
         assert_eq!(s1.unwrap().provider, AuthProvider::Google);
 
-        let s2 = store.take("state-2");
+        let s2 = store.take_valid("state-2", "test-req");
         assert!(s2.is_some());
         assert_eq!(s2.unwrap().provider, AuthProvider::GitHub);
 
         // Both consumed
-        assert!(store.take("state-1").is_none());
-        assert!(store.take("state-2").is_none());
+        assert!(store.take_valid("state-1", "test-req").is_none());
+        assert!(store.take_valid("state-2", "test-req").is_none());
     }
 
     #[test]
@@ -1464,9 +1439,9 @@ mod tests {
         store.store(new_session);
 
         // Old session should be gone (expired)
-        assert!(store.take("old-state").is_none());
+        assert!(store.take_valid("old-state", "test-req").is_none());
         // New session should exist
-        assert!(store.take("new-state").is_some());
+        assert!(store.take_valid("new-state", "test-req").is_some());
     }
 
     #[test]
@@ -1493,8 +1468,8 @@ mod tests {
         store.store(new_session);
 
         // Both sessions should still exist
-        assert!(store.take("recent-state").is_some());
-        assert!(store.take("new-state").is_some());
+        assert!(store.take_valid("recent-state", "test-req").is_some());
+        assert!(store.take_valid("new-state", "test-req").is_some());
     }
 
     // ===========================================
