@@ -15,7 +15,14 @@ export const ALLOWED_EXTERNAL_SCHEMES = new Set([
 export function isDangerousHref(href: string): boolean {
   // Normalize by trimming leading whitespace and control characters to prevent bypasses
   // Use trimStart() to remove Unicode whitespace, then manually strip ASCII control chars.
-  let normalized = href.normalize("NFKC").trimStart();
+  let normalized = href;
+  try {
+    normalized = href.normalize("NFKC");
+  } catch {
+    // Fallback: If normalization fails, process the original string to avoid throwing errors.
+    normalized = href;
+  }
+  normalized = normalized.trimStart();
 
   // Strip leading Unicode format/invisible chars that can be used for obfuscation (e.g., BOM/ZW*).
   // This is a defense-in-depth measure against homograph/spoofing attacks.
