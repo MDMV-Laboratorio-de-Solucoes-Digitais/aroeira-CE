@@ -138,7 +138,17 @@ export async function openOAuthAuthUrl(
  * This is called when the app is opened via deep link
  */
 export const handleOAuthCallback = async (url: string): Promise<OAuthUser> => {
-  const parsed = new URL(url);
+  if (url.length > 8192) {
+    throw new Error("Invalid callback URL");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("Invalid callback URL");
+  }
+
   const rawUrl = url;
 
   // Constants
@@ -190,7 +200,7 @@ export const handleOAuthCallback = async (url: string): Promise<OAuthUser> => {
     });
   } catch (err: unknown) {
     console.error("Backend OAuth exchange failed:", err);
-    throw err; // Re-throw to be handled by caller
+    throw err;
   }
 };
 
