@@ -92,6 +92,14 @@
     }
 
     const now = Date.now();
+
+    // Prune old entries to avoid unbounded growth
+    for (const [k, ts] of seenOAuthCallbacks.entries()) {
+      if (now - ts > OAUTH_CALLBACK_DEDUPE_MS) {
+        seenOAuthCallbacks.delete(k);
+      }
+    }
+
     const lastSeen = seenOAuthCallbacks.get(key);
     if (lastSeen && now - lastSeen < OAUTH_CALLBACK_DEDUPE_MS) {
       return Promise.resolve();

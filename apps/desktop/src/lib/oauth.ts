@@ -149,8 +149,6 @@ export const handleOAuthCallback = async (url: string): Promise<OAuthUser> => {
     throw new Error("Invalid callback URL");
   }
 
-  const rawUrl = url;
-
   // Constants
   const CALLBACK_SCHEME = "aroeira";
   const CALLBACK_HOST = "auth";
@@ -187,12 +185,12 @@ export const handleOAuthCallback = async (url: string): Promise<OAuthUser> => {
     throw new Error("Invalid callback URL");
   }
 
-  // Normalize callback to the canonical scheme for backend consistency
-  // This ensures the backend (which expects com.aroeira.app://auth/callback)
-  // always receives a consistent URL format regardless of how the OS invoked the app.
-  const callbackForBackend = isHostlessCallback
-    ? `${CALLBACK_SCHEME}://${CALLBACK_HOST}${CALLBACK_PATH}${parsed.search}`
-    : rawUrl;
+  // Normalize callback to the canonical scheme for backend consistency.
+  // Always send `aroeira://auth/callback?...` to the backend, even in DEV localhost mode.
+  const callbackForBackend =
+    isHostlessCallback || isLocalhostDev
+      ? `${CALLBACK_SCHEME}://${CALLBACK_HOST}${CALLBACK_PATH}${parsed.search}`
+      : `${CALLBACK_SCHEME}://${CALLBACK_HOST}${CALLBACK_PATH}${parsed.search}`;
 
   try {
     return await invoke<OAuthUser>("handle_oauth_callback", {

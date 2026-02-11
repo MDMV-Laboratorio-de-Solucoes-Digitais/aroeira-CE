@@ -28,11 +28,15 @@ pub fn validate_callback_url_base(url: &Url) -> Result<(), String> {
     const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
 
     let is_aroeira_protocol = url.scheme().eq_ignore_ascii_case(OAUTH_CALLBACK_SCHEME);
+    let host = url.host_str().map(|h| h.trim_end_matches('.'));
+    let has_userinfo = !url.username().is_empty() || url.password().is_some();
+
     let is_localhost_dev = cfg!(debug_assertions)
         && url.scheme() == "http"
-        && url.host_str() == Some("localhost")
+        && host == Some("localhost")
         && url.port() == Some(get_dev_port())
-        && url.path() == "/auth/callback";
+        && url.path() == "/auth/callback"
+        && !has_userinfo;
 
     if !is_aroeira_protocol && !is_localhost_dev {
         tracing::warn!(
