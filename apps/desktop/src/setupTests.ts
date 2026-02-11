@@ -3,8 +3,7 @@ import { expect, vi } from "vitest";
 
 expect.extend(matchers);
 
-// eslint-disable-next-line no-undef
-if (process.env.DEBUG_TEST_SETUP) {
+if (globalThis.process?.env?.DEBUG_TEST_SETUP) {
   console.log("SETUP TESTS RUNNING (Manual Extend)");
 }
 
