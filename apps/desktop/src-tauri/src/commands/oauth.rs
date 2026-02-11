@@ -393,7 +393,10 @@ async fn finalize_oauth_login(
     log_oauth_success(user_id, session, user, request_id);
 
     // Clean up persisted session now that login is successful
-    let state_hash = hex::encode(Sha256::digest(session.state.as_bytes()));
+    let state_hash = keyed_state_hash(
+        &session.state,
+        state.rate_limit_key.expose_secret().as_bytes(),
+    );
     let pkce_storage = oauth_state.pkce_storage.clone();
     let request_id_clone = request_id.to_string();
 
@@ -533,8 +536,6 @@ pub async fn handle_oauth_callback(
 pub async fn get_oauth_availability(
     oauth_state: State<'_, OAuthState>,
 ) -> Result<OAuthAvailability, String> {
-    const DEFAULT_GITHUB_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
-
     let google = oauth_state.oauth_service.config.google_client_id.is_some();
 
     let github_client_id_present = oauth_state.oauth_service.config.github_client_id.is_some();
@@ -543,7 +544,7 @@ pub async fn get_oauth_availability(
         .config
         .github_token_url
         .as_deref()
-        .unwrap_or(DEFAULT_GITHUB_TOKEN_URL);
+        .unwrap_or(OAuthServiceImpl::GITHUB_TOKEN_URL);
     let github_secret_present = oauth_state
         .oauth_service
         .config
@@ -552,7 +553,7 @@ pub async fn get_oauth_availability(
         .is_some_and(|s| !s.expose_secret().is_empty());
 
     let github = github_client_id_present
-        && (github_token_url != DEFAULT_GITHUB_TOKEN_URL || github_secret_present);
+        && (github_token_url != OAuthServiceImpl::GITHUB_TOKEN_URL || github_secret_present);
 
     Ok(OAuthAvailability { google, github })
 }
