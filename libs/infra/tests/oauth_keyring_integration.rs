@@ -63,11 +63,6 @@ async fn test_save_and_retrieve_session_roundtrip() {
     }
 
     tokio::task::spawn_blocking(|| {
-        let storage = KeyringPkceStorage;
-        let state_hash = test_state_hash();
-        let session_data =
-            r#"{"verifier":"test-verifier-123","state":"test-state-456","provider":"Google"}"#;
-
         // RAII guard to ensure cleanup happens even if assertions fail
         struct Cleanup<'a> {
             storage: KeyringPkceStorage,
@@ -78,6 +73,11 @@ async fn test_save_and_retrieve_session_roundtrip() {
                 self.storage.delete_session(self.key).ok();
             }
         }
+
+        let storage = KeyringPkceStorage;
+        let state_hash = test_state_hash();
+        let session_data =
+            r#"{"verifier":"test-verifier-123","state":"test-state-456","provider":"Google"}"#;
 
         storage.delete_session(&state_hash).ok();
         let _cleanup = Cleanup {
