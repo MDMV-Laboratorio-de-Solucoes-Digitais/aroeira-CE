@@ -133,7 +133,7 @@ impl AppConfig {
                     "In release builds, GITHUB_CLIENT_SECRET is ignored for security. Use AUTH_PROXY_URL for GitHub OAuth."
                 );
                 warn!(
-                    "GitHub OAuth client ID is set, but no client secret or proxy URL is configured. GitHub OAuth may fail if not using a public client."
+                    "GitHub OAuth client ID is set, but no client secret or proxy URL is configured. GitHub OAuth will be disabled."
                 );
             }
         }

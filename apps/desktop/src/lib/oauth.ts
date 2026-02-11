@@ -237,13 +237,25 @@ export function processOAuthCallback(
   const code = parsed.searchParams.get("code") ?? "";
   const state = parsed.searchParams.get("state") ?? "";
   const oauthError = parsed.searchParams.get("error") ?? "";
-  const callbackKey = `${oauthError}|${state}|${code}`;
+
+  const fingerprint = (() => {
+    // Non-cryptographic, one-way-enough for deduping without retaining secrets in memory.
+    // Keeps only a 32-bit hash.
+    const s = `${oauthError}|${state}|${code}`;
+    let h = 2166136261; // FNV-1a
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0).toString(16);
+  })();
+
   const now = Date.now();
-  if (callbackKey !== "||") {
-    if (lastCallbackKey === callbackKey && now - lastCallbackAt < 5_000) {
+  if (code || state || oauthError) {
+    if (lastCallbackKey === fingerprint && now - lastCallbackAt < 5_000) {
       return Promise.resolve();
     }
-    lastCallbackKey = callbackKey;
+    lastCallbackKey = fingerprint;
     lastCallbackAt = now;
   }
 
@@ -370,7 +382,9 @@ export function processOAuthCallback(
       ]);
 
       if (redirectUriParam && !allowedRedirectSet.has(redirectUriParam)) {
-        console.warn("Blocked unexpected redirect_uri:", redirectUriParam);
+        console.warn("Blocked unexpected redirect_uri parameter", {
+          length: redirectUriParam.length,
+        });
         // We log it but don't throw here to avoid breaking valid flows if the param is missing
         // strict validation happens at start of flow
       }

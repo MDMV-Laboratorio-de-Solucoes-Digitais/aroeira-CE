@@ -1074,25 +1074,32 @@ impl OAuthSessionStore {
         }
 
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            // We are in a runtime, so we can spawn.
-            // Clone data for the async task to avoid moving originals needed for sync fallback path check
-            // (though strictly mutually exclusive, the compiler sees the async move construction)
-            let expired_hashes = expired_hashes.clone();
-            let evicted_hash = evicted_hash.clone();
             let pkce_storage = pkce_storage.clone();
 
             handle.spawn(async move {
-                // Handle expired sessions
-                for state_hash in expired_hashes {
-                    Self::delete_from_keyring_blocking(pkce_storage.clone(), state_hash, false)
-                        .await;
+                let mut to_delete = expired_hashes;
+                if let Some(h) = evicted_hash {
+                    to_delete.push(h);
                 }
 
-                // Handle evicted session
-                if let Some(state_hash) = evicted_hash {
-                    Self::delete_from_keyring_blocking(pkce_storage.clone(), state_hash, true)
-                        .await;
-                }
+                let _ = tokio::task::spawn_blocking(move || {
+                    for state_hash in to_delete {
+                        if let Err(e) = pkce_storage.delete_session(&state_hash) {
+                            tracing::warn!(
+                                target: "security",
+                                state_hash = %state_hash,
+                                "Failed to delete session from keyring during cleanup: {e}"
+                            );
+                        }
+                    }
+                })
+                .await
+                .map_err(|e| {
+                    tracing::warn!(
+                        target: "security",
+                        "Keyring cleanup task join error: {e}"
+                    )
+                });
             });
         } else {
             // Sync fallback for non-async contexts (e.g. tests)
@@ -1119,39 +1126,6 @@ impl OAuthSessionStore {
                     ),
                 }
             }
-        }
-    }
-
-    async fn delete_from_keyring_blocking(
-        pkce_storage: Arc<dyn PkceSessionStorage>,
-        state_hash: String,
-        is_eviction: bool,
-    ) {
-        let state_hash_clone = state_hash.clone();
-        match tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash_clone))
-            .await
-        {
-            Ok(Ok(())) => {
-                if is_eviction {
-                    tracing::debug!(
-                        target: "security",
-                        state_hash = %state_hash,
-                        "Evicted session deleted from keyring"
-                    );
-                }
-            }
-            Ok(Err(e)) => tracing::warn!(
-                target: "security",
-                state_hash = %state_hash,
-                "Failed to delete {} session from keyring: {e}",
-                if is_eviction { "evicted" } else { "expired" }
-            ),
-            Err(e) => tracing::warn!(
-                target: "security",
-                state_hash = %state_hash,
-                "Task failed when deleting {} session from keyring: {e}",
-                if is_eviction { "evicted" } else { "expired" }
-            ),
         }
     }
 

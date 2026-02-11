@@ -17,6 +17,13 @@ export function isDangerousHref(href: string): boolean {
   // Use trimStart() to remove Unicode whitespace, then manually strip ASCII control chars.
   let normalized = href.trimStart();
 
+  // Strip leading Unicode format/invisible chars that can be used for obfuscation (e.g., BOM/ZW*).
+  // This is a defense-in-depth measure against homograph/spoofing attacks.
+  normalized = normalized.replace(
+    /^[\uFEFF\u200B-\u200F\u2060\u2066-\u2069]+/g,
+    "",
+  );
+
   let start = 0;
   while (start < normalized.length) {
     const code = normalized.charCodeAt(start);

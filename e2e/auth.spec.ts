@@ -6,7 +6,7 @@ test.describe("Authentication Flow", () => {
     await page.addInitScript(() => {
       // Mock for Tauri v2
       interface TauriMockWindow {
-        __TAURI_INTERNALS__: {
+        __TAURI_INTERNALS__?: {
           invoke: (
             _cmd: string,
             _args?: Record<string, unknown>,

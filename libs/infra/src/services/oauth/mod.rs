@@ -182,8 +182,8 @@ impl PkceSessionStorage for KeyringPkceStorage {
     fn save_session(&self, state_hash: &str, session_json: &str) -> Result<(), String> {
         #[cfg(not(test))]
         {
-            let entry =
-                keyring::Entry::new("aroeira-oauth-pkce", state_hash).map_err(|e| e.to_string())?;
+            let entry = keyring::Entry::new(PKCE_SESSION_KEYRING_SERVICE, state_hash)
+                .map_err(|e| e.to_string())?;
             entry
                 .set_password(session_json)
                 .map_err(|e| e.to_string())?;
@@ -199,8 +199,8 @@ impl PkceSessionStorage for KeyringPkceStorage {
     fn get_session(&self, state_hash: &str) -> Result<Option<String>, String> {
         #[cfg(not(test))]
         {
-            let entry =
-                keyring::Entry::new("aroeira-oauth-pkce", state_hash).map_err(|e| e.to_string())?;
+            let entry = keyring::Entry::new(PKCE_SESSION_KEYRING_SERVICE, state_hash)
+                .map_err(|e| e.to_string())?;
             match entry.get_password() {
                 Ok(password) => Ok(Some(password)),
                 Err(keyring::Error::NoEntry) => Ok(None),
@@ -217,8 +217,8 @@ impl PkceSessionStorage for KeyringPkceStorage {
     fn delete_session(&self, state_hash: &str) -> Result<(), String> {
         #[cfg(not(test))]
         {
-            let entry =
-                keyring::Entry::new("aroeira-oauth-pkce", state_hash).map_err(|e| e.to_string())?;
+            let entry = keyring::Entry::new(PKCE_SESSION_KEYRING_SERVICE, state_hash)
+                .map_err(|e| e.to_string())?;
             match entry.delete_credential() {
                 Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
                 Err(e) => Err(e.to_string()),
