@@ -46,15 +46,13 @@ fn keyring_available() -> bool {
 
 #[tokio::test]
 async fn test_keyring_availability() {
-    if !keyring_available() {
+    let available = keyring_available();
+    if !available {
         eprintln!("Keyring not available - skipping keyring integration tests");
         return;
     }
 
-    assert!(
-        keyring_available(),
-        "Keyring should be available for this test"
-    );
+    assert!(available, "Keyring should be available for this test");
 }
 
 #[tokio::test]

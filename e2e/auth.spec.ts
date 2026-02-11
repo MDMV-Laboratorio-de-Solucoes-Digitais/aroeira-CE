@@ -23,55 +23,61 @@ test.describe("Authentication Flow", () => {
       }
 
       const w = globalThis as unknown as TauriMockWindow;
+      // Initialize if undefined
       w.__TAURI_INTERNALS__ = w.__TAURI_INTERNALS__ || ({} as any);
-      w.__TAURI_INTERNALS__.invoke = async (
-        cmd: string,
-        args?: Record<string, unknown>,
-      ) => {
-        // Sanitize logging to remove sensitive arguments
-        console.log(`[Tauri Mock] invoke: ${cmd}`);
 
-        switch (cmd) {
-          case "get_password_policy":
-            return { level: "secure", min_length: 8 };
+      if (w.__TAURI_INTERNALS__) {
+        w.__TAURI_INTERNALS__.invoke = async (
+          cmd: string,
+          args?: Record<string, unknown>,
+        ) => {
+          // Sanitize logging to remove sensitive arguments
+          console.log(`[Tauri Mock] invoke: ${cmd}`);
 
-          case "has_auth_token":
-            return false; // Default to not logged in
+          switch (cmd) {
+            case "get_password_policy":
+              return { level: "secure", min_length: 8 };
 
-          case "login":
-            if (
-              args &&
-              args.email === "test@example.com" &&
-              args.password === "password123"
-            ) {
+            case "has_auth_token":
+              return false; // Default to not logged in
+
+            case "login":
+              if (
+                args &&
+                args.email === "test@example.com" &&
+                args.password === "password123"
+              ) {
+                return null; // Success
+              }
+              throw new Error("Invalid credentials");
+
+            case "register":
+              if (args && args.email === "new@example.com") {
+                return null; // Success
+              }
+              throw new Error("Registration failed");
+
+            case "get_notes":
+              return []; // Return empty notes list
+
+            case "logout":
               return null; // Success
-            }
-            throw new Error("Invalid credentials");
 
-          case "register":
-            if (args && args.email === "new@example.com") {
-              return null; // Success
-            }
-            throw new Error("Registration failed");
-
-          case "get_notes":
-            return []; // Return empty notes list
-
-          case "logout":
-            return null; // Success
-
-          default:
-            console.warn(`[Tauri Mock] Unhandled command: ${cmd}`);
-            throw new Error(`Command ${cmd} not mocked`);
-        }
-      };
+            default:
+              console.warn(`[Tauri Mock] Unhandled command: ${cmd}`);
+              throw new Error(`Command ${cmd} not mocked`);
+          }
+        };
+      }
 
       // Some versions of Tauri api might look for this or use the internals directly
-      w.__TAURI__ = {
-        core: {
-          invoke: w.__TAURI_INTERNALS__.invoke,
-        },
-      };
+      if (w.__TAURI_INTERNALS__) {
+        w.__TAURI__ = {
+          core: {
+            invoke: w.__TAURI_INTERNALS__.invoke,
+          },
+        };
+      }
     });
   });
 
@@ -144,16 +150,21 @@ test.describe("Authentication Flow", () => {
     // Override mock to simulate failure
     await page.addInitScript(() => {
       interface TauriMockWindow {
-        __TAURI_INTERNALS__: {
+        __TAURI_INTERNALS__?: {
           invoke: (_cmd: string) => Promise<unknown>;
         };
       }
       const w = globalThis as unknown as TauriMockWindow;
-      w.__TAURI_INTERNALS__.invoke = async (cmd: string) => {
-        if (cmd === "get_password_policy")
-          return { level: "secure", min_length: 8 };
-        throw new Error("Network Error");
-      };
+      // Initialize if undefined
+      w.__TAURI_INTERNALS__ = w.__TAURI_INTERNALS__ || ({} as any);
+
+      if (w.__TAURI_INTERNALS__) {
+        w.__TAURI_INTERNALS__.invoke = async (cmd: string) => {
+          if (cmd === "get_password_policy")
+            return { level: "secure", min_length: 8 };
+          throw new Error("Network Error");
+        };
+      }
     });
 
     await page.goto("/login");
