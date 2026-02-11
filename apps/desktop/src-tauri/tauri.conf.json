@@ -20,8 +20,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:; font-src 'self' asset: data:; connect-src 'self' ipc: https:; frame-src 'self'; form-action 'self'",
-      "devCsp": "default-src 'self' http://localhost:1420; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; script-src 'self' 'unsafe-eval' http://localhost:1420; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data: http://localhost:1420; font-src 'self' asset: data: http://localhost:1420; connect-src 'self' ipc: https: http://localhost:1420 ws://localhost:1420; frame-src 'self' http://localhost:1420; form-action 'self'"
+      "csp": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:; font-src 'self' asset: data:; connect-src 'self' ipc: https://accounts.google.com https://github.com https://api.github.com; frame-src 'self'; form-action 'self'",
+      "devCsp": "default-src 'self' http://localhost:1420; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; script-src 'self' 'unsafe-eval' http://localhost:1420; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data: http://localhost:1420; font-src 'self' asset: data: http://localhost:1420; connect-src 'self' ipc: https://accounts.google.com https://github.com https://api.github.com http://localhost:1420 ws://localhost:1420; frame-src 'self' http://localhost:1420; form-action 'self'"
     }
   },
   "bundle": {
