@@ -21,7 +21,7 @@
     ],
     "security": {
       "csp": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:; font-src 'self' asset: data:; connect-src 'self' ipc:; frame-src 'self'; form-action 'self'",
-      "devCsp": null
+      "devCsp": "default-src 'self' http://localhost:1420; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; script-src 'self' 'unsafe-eval' http://localhost:1420; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data: http://localhost:1420; font-src 'self' asset: data: http://localhost:1420; connect-src 'self' ipc: http://localhost:1420 ws://localhost:1420; frame-src 'self' http://localhost:1420; form-action 'self'"
     }
   },
   "bundle": {
