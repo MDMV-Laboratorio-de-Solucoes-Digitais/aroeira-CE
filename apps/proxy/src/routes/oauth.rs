@@ -21,11 +21,10 @@ pub async fn github_token_exchange(
 
     validate_github_token_request(
         &payload,
-        &state.config.github_redirect_uri,
+        &payload.redirect_uri,
         &state.config.github_token_url,
         &state.config.github_allowed_hosts,
-    )
-    .await?;
+    )?;
 
     // 2. Exchange code for token with GitHub
     let client = &state.http_client;
@@ -96,7 +95,7 @@ pub async fn github_token_exchange(
     Ok(Json(token_response))
 }
 
-async fn validate_github_token_request(
+fn validate_github_token_request(
     request: &GitHubTokenRequest,
     expected_redirect_uri: &str,
     github_token_url: &str,
