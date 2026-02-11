@@ -24,6 +24,7 @@ pub struct AppState {
 }
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
 
@@ -107,7 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return scheme == "https"
                             && port == Some(443)
                             && host != suffix
-                            && host.ends_with(&format!(".{}", suffix));
+                            && host.ends_with(&format!(".{suffix}"));
                     }
 
                     if let Some(suffix) = rule.strip_prefix("http://*.") {
@@ -116,7 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return scheme == "http"
                             && port == Some(80)
                             && host != suffix
-                            && host.ends_with(&format!(".{}", suffix));
+                            && host.ends_with(&format!(".{suffix}"));
                     }
 
                     false
