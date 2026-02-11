@@ -7,7 +7,6 @@ use axum::{
     extract::{Json, State},
     response::IntoResponse,
 };
-use reqwest::Client;
 use secrecy::ExposeSecret;
 use validator::Validate;
 
@@ -21,25 +20,33 @@ pub async fn github_token_exchange(
         .map_err(|_| AppError::BadRequest("Invalid OAuth request payload".to_string()))?;
 
     // 1. Validate the redirect_uri to prevent open redirect abuse or misuse
-    validate_github_token_request(&payload, &state.config.github_allowed_hosts).await?;
+    validate_github_token_request(
+        &payload,
+        &state.config.github_redirect_uri,
+        &state.config.github_token_url,
+        &state.config.github_allowed_hosts,
+    )
+    .await?;
 
     // 2. Exchange code for token with GitHub
-    let client = Client::new();
+    let client = &state.http_client;
 
     let client_id = &state.config.github_client_id;
     let client_secret = state.config.github_client_secret.expose_secret();
     let code = &payload.code;
     let redirect_uri = &payload.redirect_uri;
+    let code_verifier = &payload.code_verifier;
 
     let params = [
         ("client_id", client_id.as_str()),
         ("client_secret", client_secret),
         ("code", code.as_str()),
         ("redirect_uri", redirect_uri.as_str()),
+        ("code_verifier", code_verifier.as_str()),
     ];
 
     let response = client
-        .post("https://github.com/login/oauth/access_token")
+        .post(&state.config.github_token_url)
         .header("Accept", "application/json")
         .form(&params)
         .send()
@@ -86,10 +93,18 @@ pub async fn github_token_exchange(
 
 async fn validate_github_token_request(
     request: &GitHubTokenRequest,
+    expected_redirect_uri: &str,
+    github_token_url: &str,
     allowed_hosts: &[String],
 ) -> Result<(), AppError> {
-    let parsed_url = url::Url::parse(&request.redirect_uri)
-        .map_err(|_| AppError::GitHubError("Invalid redirect URI format".to_string()))?;
+    // 1) Ensure the client cannot choose arbitrary redirect URIs
+    if request.redirect_uri != expected_redirect_uri {
+        tracing::error!("Blocked GitHub token exchange due to mismatched redirect_uri");
+        return Err(AppError::BadRequest("Invalid redirect URI".to_string()));
+    }
+
+    let parsed_url = url::Url::parse(github_token_url)
+        .map_err(|_| AppError::GitHubError("Invalid provider token URL format".to_string()))?;
 
     let scheme = parsed_url.scheme();
     let host = parsed_url

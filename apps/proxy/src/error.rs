@@ -12,10 +12,6 @@ pub enum AppError {
     EnvError(#[from] std::env::VarError),
     #[error("GitHub API error: {0}")]
     GitHubError(String),
-    #[allow(dead_code)]
-    #[error("Database error: {0}")]
-    DbError(String),
-    #[allow(dead_code)]
     #[error("Bad request: {0}")]
     BadRequest(String),
     #[error("Internal server error")]
@@ -30,7 +26,7 @@ impl IntoResponse for AppError {
                 StatusCode::BAD_GATEWAY,
                 "OAuth provider error. Please try again.".to_string(),
             ),
-            Self::InternalServerError | Self::EnvError(_) | Self::DbError(_) => (
+            Self::InternalServerError | Self::EnvError(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal server error".to_string(),
             ),

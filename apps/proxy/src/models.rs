@@ -30,15 +30,3 @@ pub struct GitHubTokenResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_description: Option<String>,
 }
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-pub struct GitHubRawTokenResponse {
-    pub access_token: String,
-    #[serde(default)]
-    pub refresh_token: Option<String>,
-    pub token_type: String,
-    #[serde(default)]
-    pub expires_in: Option<i64>,
-    pub scope: String,
-}
