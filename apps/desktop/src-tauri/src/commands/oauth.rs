@@ -13,20 +13,19 @@
 use crate::commands::auth::{
     generate_request_id, get_device_id, handle_successful_login, hash_email_for_logging,
 };
+use crate::oauth::session_store::OAuthSessionStore;
+use crate::oauth_utils::parse_oauth_callback_url;
 use crate::state::AppState;
 use domain::modules::auth::AuthError;
 use domain::modules::auth::oauth::{AuthProvider, OAuthPkceSession, OAuthService, OAuthUser};
 use hex;
 use infra::services::oauth::{OAuthConfig, OAuthServiceImpl, PkceSessionStorage};
 use infra::utils::hash_password;
-use parking_lot::Mutex;
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::State;
-use url::Url;
 use uuid::Uuid;
 
 /// OAuth state managed by Tauri.
@@ -760,6 +759,62 @@ async fn harden_unverified_user(
     Ok(())
 }
 
+/// Creates a new user record for an authenticated OAuth account.
+///
+/// Handles concurrency conflicts (e.g. two simultaneous callbacks for the same new user)
+/// by falling back to the existing record and applying hardening if needed.
+async fn create_oauth_user(
+    email: &str,
+    state: &AppState,
+    request_id: &str,
+) -> Result<Uuid, String> {
+    // Generate a random high-entropy password that will never be shown to the user
+    // This ensures the account cannot be accessed via password login unless explicitly reset
+    let password_hash = generate_and_hash_oauth_password().await?;
+
+    let new_user = domain::modules::auth::User {
+        id: Uuid::new_v4(),
+        email: email.to_string(),
+        password_hash,
+        email_verified: true, // We already verified this above
+        verification_token: None,
+        verification_token_expires_at: None,
+    };
+
+    match state.user_repo.save(&new_user).await {
+        Ok(saved) => Ok(saved.id),
+        Err(AuthError::EmailAlreadyExists) => {
+            // Concurrency safety: if another callback created the same email concurrently,
+            // re-fetch and proceed instead of failing the login.
+            tracing::warn!(
+                request_id = %request_id,
+                "User creation from OAuth failed due to concurrent insert (EmailAlreadyExists)"
+            );
+
+            if let Ok(Some(mut existing)) = state.user_repo.find_by_email(email).await {
+                if !existing.email_verified {
+                    harden_unverified_user(&mut existing, state, request_id).await?;
+                }
+
+                Ok(existing.id)
+            } else {
+                tracing::error!(
+                    request_id = %request_id,
+                    "Failed to recover user after OAuth create conflict"
+                );
+                Err("Authentication failed: User creation conflict.".to_string())
+            }
+        }
+        Err(e) => {
+            tracing::error!(
+                request_id = %request_id,
+                "Failed to save new OAuth user due to unexpected database error: {e}"
+            );
+            Err("Authentication failed: Database error.".to_string())
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 async fn authenticate_or_create_user(
     user: &OAuthUser,
@@ -805,55 +860,7 @@ async fn authenticate_or_create_user(
         }
         Ok(None) => {
             // Create new user for OAuth
-
-            // Generate a random high-entropy password that will never be shown to the user
-            // This ensures the account cannot be accessed via password login unless explicitly reset
-            let password_hash = generate_and_hash_oauth_password().await?;
-
-            let new_user = domain::modules::auth::User {
-                id: Uuid::new_v4(),
-                email: normalized_email.clone(),
-                password_hash,
-                email_verified: true, // We already verified this above
-                verification_token: None,
-                verification_token_expires_at: None,
-            };
-
-            match state.user_repo.save(&new_user).await {
-                Ok(saved) => Ok(saved.id),
-                Err(AuthError::EmailAlreadyExists) => {
-                    // Concurrency safety: if another callback created the same email concurrently,
-                    // re-fetch and proceed instead of failing the login.
-                    tracing::warn!(
-                        request_id = %request_id,
-                        "User creation from OAuth failed due to concurrent insert (EmailAlreadyExists)"
-                    );
-
-                    if let Ok(Some(mut existing)) =
-                        state.user_repo.find_by_email(&normalized_email).await
-                    {
-                        if !existing.email_verified {
-                            harden_unverified_user(&mut existing, state, request_id).await?;
-                        }
-
-                        Ok(existing.id)
-                    } else {
-                        tracing::error!(
-                            request_id = %request_id,
-                            "Failed to recover user after OAuth create conflict"
-                        );
-                        Err("Authentication failed: User creation conflict.".to_string())
-                    }
-                }
-
-                Err(e) => {
-                    tracing::error!(
-                        request_id = %request_id,
-                        "Failed to save new OAuth user due to unexpected database error: {e}"
-                    );
-                    Err("Authentication failed: Database error.".to_string())
-                }
-            }
+            create_oauth_user(&normalized_email, state, request_id).await
         }
         Err(e) => {
             tracing::error!(
@@ -914,678 +921,4 @@ fn log_oauth_success(
         outcome = "success",
         "OAuth authentication completed"
     );
-}
-
-/// Thread-safe storage for OAuth PKCE sessions.
-///
-/// Sessions are stored temporarily between:
-/// 1. Generating the authorization URL
-/// 2. Receiving the callback with authorization code
-///
-/// Sessions are automatically cleaned up when expired.
-/// Uses `parking_lot::Mutex` for better async performance.
-///
-/// # Security Note
-///
-/// When evicting sessions due to capacity limits, also deletes from
-/// the persistent keyring storage to prevent stale data accumulation.
-#[derive(Clone)]
-pub struct OAuthSessionStore {
-    sessions: Arc<Mutex<HashMap<String, OAuthPkceSession>>>,
-    pkce_storage: Arc<dyn PkceSessionStorage>,
-}
-
-impl OAuthSessionStore {
-    /// Creates a new empty session store with keyring storage.
-    #[must_use]
-    pub fn new(pkce_storage: Arc<dyn PkceSessionStorage>) -> Self {
-        Self {
-            sessions: Arc::new(Mutex::new(HashMap::new())),
-            pkce_storage,
-        }
-    }
-
-    /// Takes a session by its state value, validating it before removal.
-    ///
-    /// Returns `None` if:
-    /// - Session doesn't exist
-    /// - Session state doesn't match
-    /// - Session is invalid or has expired
-    #[must_use]
-    pub fn take_valid(&self, state: &str, request_id: &str) -> Option<OAuthPkceSession> {
-        let (expired_hashes, removed_state_hash_if_invalid, session_to_return) = {
-            let mut sessions = self.sessions.lock();
-
-            // Collect expired hashes so we can also delete persisted sessions from keyring.
-            let expired_hashes: Vec<String> = sessions
-                .iter()
-                .filter(|&(_k, s)| s.is_expired())
-                .map(|(k, _s)| hex::encode(Sha256::digest(k.as_bytes())))
-                .collect();
-
-            sessions.retain(|_, s| !s.is_expired());
-
-            let is_valid = sessions
-                .get(state)
-                .is_some_and(|s| s.state == state && s.is_valid() && !s.is_expired());
-
-            if is_valid {
-                (expired_hashes, None, sessions.remove(state))
-            } else {
-                tracing::warn!(
-                    target: "audit",
-                    request_id = %request_id,
-                    outcome = "failure",
-                    reason = "session_invalid_or_expired",
-                    "OAuth authentication failed: invalid or expired session"
-                );
-
-                // If present but invalid, remove it to prevent reuse.
-                let removed = sessions.remove(state);
-                let removed_state_hash_if_invalid = removed
-                    .as_ref()
-                    .map(|_| hex::encode(Sha256::digest(state.as_bytes())));
-
-                (expired_hashes, removed_state_hash_if_invalid, None)
-            }
-        };
-
-        // Cleanup *after* releasing the lock to prevent blocking all OAuth flows.
-        Self::perform_keyring_cleanup(
-            expired_hashes,
-            removed_state_hash_if_invalid,
-            &self.pkce_storage,
-        );
-
-        session_to_return
-    }
-
-    /// Stores a session, keyed by its state value.
-    ///
-    /// Automatically cleans up expired sessions during this operation.
-    /// When evicting due to capacity limits, also deletes from keyring.
-    pub fn store(&self, session: OAuthPkceSession) {
-        const MAX_SESSIONS: usize = 512;
-
-        let (expired_hashes, evicted_hash, pkce_storage) = {
-            let mut sessions = self.sessions.lock();
-
-            let expired_hashes = Self::collect_and_remove_expired(&mut sessions);
-            let evicted_hash = Self::evict_if_full(&mut sessions, MAX_SESSIONS);
-
-            // Store new session while still holding the lock to preserve the cap invariant.
-            sessions.insert(session.state.clone(), session);
-
-            (expired_hashes, evicted_hash, self.pkce_storage.clone())
-        };
-
-        Self::perform_keyring_cleanup(expired_hashes, evicted_hash, &pkce_storage);
-    }
-
-    fn collect_and_remove_expired(sessions: &mut HashMap<String, OAuthPkceSession>) -> Vec<String> {
-        let expired_hashes: Vec<String> = sessions
-            .iter()
-            .filter(|&(_k, s)| s.is_expired())
-            .map(|(k, _)| hex::encode(Sha256::digest(k.as_bytes())))
-            .collect();
-
-        // Clean up expired sessions
-        sessions.retain(|_, s| !s.is_expired());
-        expired_hashes
-    }
-
-    fn evict_if_full(
-        sessions: &mut HashMap<String, OAuthPkceSession>,
-        max_sessions: usize,
-    ) -> Option<String> {
-        if sessions.len() < max_sessions {
-            return None;
-        }
-
-        // Enforce a hard cap to prevent memory growth (DoS prevention)
-        // Find oldest first, then remove in separate step to avoid borrow checker issues
-        let oldest_key = sessions
-            .iter()
-            .min_by_key(|(_, s)| s.created_at)
-            .map(|(k, _)| k.clone());
-
-        oldest_key.map(|key| {
-            let state_hash = hex::encode(Sha256::digest(key.as_bytes()));
-            tracing::warn!(
-                target: "security",
-                reason = "session_store_full",
-                evicted_state_hash = %state_hash,
-                "OAuth session store reached max capacity ({max_sessions}). Evicting oldest session."
-            );
-            sessions.remove(&key);
-            state_hash
-        })
-    }
-
-    fn perform_keyring_cleanup(
-        expired_hashes: Vec<String>,
-        evicted_hash: Option<String>,
-        pkce_storage: &Arc<dyn PkceSessionStorage>,
-    ) {
-        if expired_hashes.is_empty() && evicted_hash.is_none() {
-            return;
-        }
-
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let pkce_storage = pkce_storage.clone();
-
-            handle.spawn(async move {
-                let mut to_delete = expired_hashes;
-                if let Some(h) = evicted_hash {
-                    to_delete.push(h);
-                }
-
-                let _ = tokio::task::spawn_blocking(move || {
-                    for state_hash in to_delete {
-                        if let Err(e) = pkce_storage.delete_session(&state_hash) {
-                            tracing::warn!(
-                                target: "security",
-                                state_hash = %state_hash,
-                                "Failed to delete session from keyring during cleanup: {e}"
-                            );
-                        }
-                    }
-                })
-                .await
-                .map_err(|e| {
-                    tracing::warn!(
-                        target: "security",
-                        "Keyring cleanup task join error: {e}"
-                    );
-                });
-            });
-        } else {
-            // Sync fallback for non-async contexts (e.g. tests)
-            for state_hash in expired_hashes {
-                if let Err(e) = pkce_storage.delete_session(&state_hash) {
-                    tracing::warn!(
-                        target: "security",
-                        state_hash = %state_hash,
-                        "Failed to delete expired session from keyring (sync fallback): {e}"
-                    );
-                }
-            }
-            if let Some(state_hash) = evicted_hash {
-                match pkce_storage.delete_session(&state_hash) {
-                    Ok(()) => tracing::debug!(
-                        target: "security",
-                        state_hash = %state_hash,
-                        "Evicted session deleted from keyring (sync fallback)"
-                    ),
-                    Err(e) => tracing::warn!(
-                        target: "security",
-                        state_hash = %state_hash,
-                        "Failed to delete evicted session from keyring (sync fallback): {e}"
-                    ),
-                }
-            }
-        }
-    }
-
-    /// Performs a background cleanup of stale sessions from the keyring.
-    ///
-    /// This should be called on application startup to ensure that any
-    /// sessions left over from crashes or forceful terminations are removed.
-    pub fn cleanup_stale_sessions(&self) {
-        // This is a placeholder for future implementation.
-        // Currently, the keyring API doesn't support listing entries, so we can't
-        // easily sweep for stale sessions without maintaining a separate index.
-        // For now, we rely on the "consume-once" and "evict-on-full" policies
-        // to keep the keyring usage bounded.
-        tracing::debug!("OAuth session cleanup initiated (placeholder)");
-    }
-}
-
-impl Default for OAuthSessionStore {
-    fn default() -> Self {
-        let pkce_storage: Arc<dyn PkceSessionStorage> =
-            Arc::new(infra::services::oauth::KeyringPkceStorage);
-        Self::new(pkce_storage)
-    }
-}
-
-/// Helper to extract query parameters manually, preserving '+' signs.
-///
-/// `Url::query_pairs()` treats '+' as space (application/x-www-form-urlencoded).
-/// OAuth codes (and potentially state) are often base64-like and may contain '+'.
-/// We use `percent_encoding` directly to decode '%XX' but leave '+' as is.
-fn parse_query_preserving_plus(query: &str) -> Result<Vec<(String, String)>, String> {
-    const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
-    const MAX_QUERY_PAIRS: usize = 64;
-    const MAX_KEY_LEN: usize = 64;
-    const MAX_VALUE_LEN: usize = 4096;
-
-    let mut query_pairs = Vec::new();
-    for pair in query.split('&') {
-        if pair.is_empty() {
-            continue;
-        }
-        if query_pairs.len() >= MAX_QUERY_PAIRS {
-            return Err(GENERIC_ERROR.to_string());
-        }
-        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
-
-        // Cheap pre-checks to avoid decoding obviously oversized inputs.
-        if k.len() > MAX_KEY_LEN * 3 || v.len() > MAX_VALUE_LEN * 3 {
-            return Err(GENERIC_ERROR.to_string());
-        }
-
-        let k = percent_encoding::percent_decode_str(k)
-            .decode_utf8()
-            .map_err(|_| GENERIC_ERROR.to_string())?
-            .to_string();
-        let v = percent_encoding::percent_decode_str(v)
-            .decode_utf8()
-            .map_err(|_| GENERIC_ERROR.to_string())?
-            .to_string();
-
-        if k.len() > MAX_KEY_LEN || v.len() > MAX_VALUE_LEN {
-            return Err(GENERIC_ERROR.to_string());
-        }
-
-        query_pairs.push((k, v));
-    }
-    Ok(query_pairs)
-}
-
-/// Parses an OAuth callback URL to extract code and state.
-///
-/// # Arguments
-///
-/// * `callback_url` - The full callback URL (e.g., `<aroeira://auth/callback?code=...&state=...>`)
-///
-/// # Returns
-///
-/// * `Ok((code, state))` - The authorization code and state parameter
-/// * `Err(String)` - Generic user-safe error message (details logged internally)
-///
-/// # Errors
-///
-/// Returns a generic error if:
-/// - URL cannot be parsed
-/// - URL scheme is not "aroeira"
-/// - URL host is not "auth" or path is not "/callback"
-/// - Code or state parameters are missing or empty
-/// - Error parameter is present (OAuth error response)
-///
-/// # Security
-///
-/// This function returns generic error messages to prevent leaking internal
-/// validation logic. Specific details are logged internally for debugging.
-pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), String> {
-    // Generic error message for all validation failures
-    const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
-
-    let url = Url::parse(callback_url).map_err(|e| {
-        tracing::warn!("OAuth callback URL parse error: {e}");
-        GENERIC_ERROR.to_string()
-    })?;
-
-    validate_callback_url_base(&url)?;
-    extract_and_validate_params(&url)
-}
-
-/// Validates the basic structure (scheme, host, path) of the callback URL.
-fn validate_callback_url_base(url: &Url) -> Result<(), String> {
-    const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
-
-    crate::oauth_utils::validate_callback_url_base(url).map_err(|e| {
-        tracing::warn!(target: "audit", reason = %e, "OAuth callback base validation failed");
-        GENERIC_ERROR.to_string()
-    })
-}
-
-/// Extracts and performs security validation on the OAuth code and state parameters.
-fn extract_and_validate_params(url: &Url) -> Result<(String, String), String> {
-    const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
-    const MAX_CODE_LEN: usize = 4096;
-    const MAX_STATE_LEN: usize = 512;
-
-    // Security: Validate state charset to prevent injection/ambiguity.
-    // Accept RFC3986 "unreserved" characters: ALPHA / DIGIT / "-" / "." / "_" / "~".
-    fn is_unreserved(b: u8) -> bool {
-        b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~')
-    }
-
-    // Helper to extract query parameters.
-    let query = url.query().unwrap_or("");
-    let query_pairs = parse_query_preserving_plus(query)?;
-
-    // Check for error response from OAuth provider
-    if let Some((_, error_code)) = query_pairs.iter().find(|(k, _)| k == "error") {
-        // Log only the error code (standard OAuth error codes like "access_denied")
-        // Do NOT log error_description as it may contain sensitive user-specific details
-        tracing::info!(
-            error_code = %error_code,
-            "OAuth provider returned error"
-        );
-        return Err("Authentication was denied or failed. Please try again.".to_string());
-    }
-
-    let get_unique_query_param = |key: &str| -> Result<String, String> {
-        let mut values = query_pairs
-            .iter()
-            .filter(|(k, _)| k == key)
-            .map(|(_, v)| v.clone())
-            .filter(|v| !v.is_empty());
-
-        let first = values.next().ok_or_else(|| {
-            tracing::warn!("OAuth callback: missing or empty {} parameter", key);
-            GENERIC_ERROR.to_string()
-        })?;
-
-        if values.next().is_some() {
-            tracing::warn!("OAuth callback: duplicate {} parameter", key);
-            return Err(GENERIC_ERROR.to_string());
-        }
-
-        Ok(first)
-    };
-
-    let code = get_unique_query_param("code")?;
-    let state = get_unique_query_param("state")?;
-
-    if code.len() > MAX_CODE_LEN || state.len() > MAX_STATE_LEN {
-        tracing::warn!(
-            code_len = code.len(),
-            state_len = state.len(),
-            "OAuth callback: code/state too large"
-        );
-        return Err(GENERIC_ERROR.to_string());
-    }
-
-    if state.is_empty() || !state.as_bytes().iter().copied().all(is_unreserved) {
-        tracing::warn!(
-            target: "audit",
-            outcome = "failure",
-            reason = "invalid_state_charset",
-            "OAuth callback: state contains invalid characters"
-        );
-        return Err(GENERIC_ERROR.to_string());
-    }
-
-    // Security: Validate code charset to prevent injection attacks or anomalies
-    // Code should not contain control characters
-    if code.chars().any(char::is_control) {
-        tracing::warn!(
-            target: "audit",
-            outcome = "failure",
-            reason = "invalid_code_charset",
-            "OAuth callback: code contains control characters"
-        );
-        return Err(GENERIC_ERROR.to_string());
-    }
-
-    Ok((code, state))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use domain::modules::auth::oauth::{AuthProvider, OAuthPkceSession};
-
-    /// Mock PKCE storage for testing that does nothing (no-op).
-    struct MockPkceStorage;
-    impl PkceSessionStorage for MockPkceStorage {
-        fn save_session(&self, _state_hash: &str, _session: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn get_session(&self, _state_hash: &str) -> Result<Option<String>, String> {
-            Ok(None)
-        }
-        fn delete_session(&self, _state_hash: &str) -> Result<(), String> {
-            Ok(())
-        }
-    }
-
-    fn create_mock_store() -> OAuthSessionStore {
-        OAuthSessionStore::new(Arc::new(MockPkceStorage))
-    }
-
-    // ===========================================
-    // OAuthSessionStore Tests
-    // ===========================================
-
-    #[test]
-    fn session_store_returns_none_for_unknown_state() {
-        let store = create_mock_store();
-        assert!(store.take_valid("unknown-state", "test-req").is_none());
-    }
-
-    #[test]
-    fn session_store_returns_session_once_then_removes() {
-        let store = create_mock_store();
-        let session = OAuthPkceSession::new(
-            "test-state".to_string(),
-            "a".repeat(43),
-            AuthProvider::Google,
-        );
-
-        store.store(session);
-
-        // First take succeeds
-        let retrieved = store.take_valid("test-state", "test-req");
-        assert!(retrieved.is_some());
-
-        // Second take fails (session consumed)
-        assert!(store.take_valid("test-state", "test-req").is_none());
-    }
-
-    #[test]
-    fn session_store_handles_multiple_sessions() {
-        let store = create_mock_store();
-
-        let session1 =
-            OAuthPkceSession::new("state-1".to_string(), "a".repeat(43), AuthProvider::Google);
-        let session2 =
-            OAuthPkceSession::new("state-2".to_string(), "b".repeat(43), AuthProvider::GitHub);
-
-        store.store(session1);
-        store.store(session2);
-
-        // Can retrieve both independently
-        let s1 = store.take_valid("state-1", "test-req");
-        assert!(s1.is_some());
-        assert_eq!(s1.unwrap().provider, AuthProvider::Google);
-
-        let s2 = store.take_valid("state-2", "test-req");
-        assert!(s2.is_some());
-        assert_eq!(s2.unwrap().provider, AuthProvider::GitHub);
-
-        // Both consumed
-        assert!(store.take_valid("state-1", "test-req").is_none());
-        assert!(store.take_valid("state-2", "test-req").is_none());
-    }
-
-    #[test]
-    fn session_store_cleans_expired_sessions_on_store() {
-        use chrono::{Duration as ChronoDuration, Utc};
-
-        let store = create_mock_store();
-
-        // Store an expired session
-        let mut old_session = OAuthPkceSession::new(
-            "old-state".to_string(),
-            "a".repeat(43),
-            AuthProvider::Google,
-        );
-        old_session.created_at = Utc::now() - ChronoDuration::minutes(15);
-        store.store(old_session);
-
-        // Store a new session (triggers cleanup)
-        let new_session = OAuthPkceSession::new(
-            "new-state".to_string(),
-            "a".repeat(43),
-            AuthProvider::GitHub,
-        );
-        store.store(new_session);
-
-        // Old session should be gone (expired)
-        assert!(store.take_valid("old-state", "test-req").is_none());
-        // New session should exist
-        assert!(store.take_valid("new-state", "test-req").is_some());
-    }
-
-    #[test]
-    fn session_store_preserves_unexpired_sessions() {
-        use chrono::{Duration as ChronoDuration, Utc};
-
-        let store = create_mock_store();
-
-        // Store a session that's 5 minutes old (not expired - TTL is 10 min)
-        let mut recent_session = OAuthPkceSession::new(
-            "recent-state".to_string(),
-            "a".repeat(43),
-            AuthProvider::Google,
-        );
-        recent_session.created_at = Utc::now() - ChronoDuration::minutes(5);
-        store.store(recent_session);
-
-        // Store another session (triggers cleanup, but shouldn't remove the 5-min-old one)
-        let new_session = OAuthPkceSession::new(
-            "new-state".to_string(),
-            "b".repeat(43),
-            AuthProvider::GitHub,
-        );
-        store.store(new_session);
-
-        // Both sessions should still exist
-        assert!(store.take_valid("recent-state", "test-req").is_some());
-        assert!(store.take_valid("new-state", "test-req").is_some());
-    }
-
-    // ===========================================
-    // URL Parsing Tests
-    // ===========================================
-
-    #[test]
-    fn parse_callback_url_extracts_code_and_state() {
-        let url = "aroeira://auth/callback?code=abc123&state=xyz789";
-        let (code, state) = parse_oauth_callback_url(url).expect("Should parse valid URL");
-
-        assert_eq!(code, "abc123");
-        assert_eq!(state, "xyz789");
-    }
-
-    #[test]
-    fn parse_callback_url_fails_without_code() {
-        let url = "aroeira://auth/callback?state=xyz789";
-        let result = parse_oauth_callback_url(url);
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn parse_callback_url_fails_without_state() {
-        let url = "aroeira://auth/callback?code=abc123";
-        let result = parse_oauth_callback_url(url);
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn parse_callback_url_fails_on_invalid_url() {
-        let url = "not a valid url";
-        let result = parse_oauth_callback_url(url);
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn parse_callback_url_handles_url_encoded_values() {
-        // state uses only allowed unreserved characters (RFC 3986)
-        // code uses + which is allowed in code but not state (per our strict rule)
-        // %2B encodes +
-        let url = "aroeira://auth/callback?code=abc%2B123&state=xyz-789";
-        let (code, state) = parse_oauth_callback_url(url).expect("Should parse URL-encoded values");
-
-        assert_eq!(code, "abc+123");
-        assert_eq!(state, "xyz-789");
-    }
-
-    #[test]
-    fn parse_callback_url_handles_error_response() {
-        let url = "aroeira://auth/callback?error=access_denied&error_description=User%20denied";
-        let result = parse_oauth_callback_url(url);
-
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        // Error should be generic, not expose provider details
-        assert!(err.contains("denied") || err.contains("failed"));
-    }
-
-    #[test]
-    fn parse_callback_url_rejects_wrong_scheme() {
-        let url = "https://auth/callback?code=abc123&state=xyz789";
-        let result = parse_oauth_callback_url(url);
-
-        assert!(result.is_err());
-        // Error should be generic, not exposing internal validation details
-        assert!(
-            result
-                .unwrap_err()
-                .contains("Invalid authentication callback")
-        );
-    }
-
-    #[test]
-    fn parse_callback_url_rejects_wrong_host() {
-        let url = "aroeira://malicious/callback?code=abc123&state=xyz789";
-        let result = parse_oauth_callback_url(url);
-
-        assert!(result.is_err());
-        // Error should be generic, not exposing internal validation details
-        assert!(
-            result
-                .unwrap_err()
-                .contains("Invalid authentication callback")
-        );
-    }
-
-    #[test]
-    fn parse_callback_url_rejects_wrong_path() {
-        let url = "aroeira://auth/malicious?code=abc123&state=xyz789";
-        let result = parse_oauth_callback_url(url);
-
-        assert!(result.is_err());
-        // Error should be generic, not exposing internal validation details
-        assert!(
-            result
-                .unwrap_err()
-                .contains("Invalid authentication callback")
-        );
-    }
-
-    #[test]
-    fn parse_callback_url_rejects_empty_code() {
-        let url = "aroeira://auth/callback?code=&state=xyz789";
-        let result = parse_oauth_callback_url(url);
-
-        assert!(result.is_err());
-        // Error should be generic, not exposing internal validation details
-        assert!(
-            result
-                .unwrap_err()
-                .contains("Invalid authentication callback")
-        );
-    }
-
-    #[test]
-    fn parse_callback_url_rejects_empty_state() {
-        let url = "aroeira://auth/callback?code=abc123&state=";
-        let result = parse_oauth_callback_url(url);
-
-        assert!(result.is_err());
-        // Error should be generic, not exposing internal validation details
-        assert!(
-            result
-                .unwrap_err()
-                .contains("Invalid authentication callback")
-        );
-    }
 }

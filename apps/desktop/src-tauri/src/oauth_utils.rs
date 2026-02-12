@@ -1,4 +1,5 @@
 use infra::constants::{OAUTH_CALLBACK_HOST, OAUTH_CALLBACK_PATH, OAUTH_CALLBACK_SCHEME};
+use sha2::{Digest, Sha256};
 use url::Url;
 
 /// The path for "hostless" custom scheme URLs (e.g., aroeira:auth/callback)
@@ -83,4 +84,227 @@ pub fn validate_callback_url_base(url: &Url) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Helper to extract query parameters manually, preserving '+' signs.
+///
+/// `Url::query_pairs()` treats '+' as space (application/x-www-form-urlencoded).
+/// OAuth codes (and potentially state) are often base64-like and may contain '+'.
+/// We use `percent_encoding` directly to decode '%XX' but leave '+' as is.
+fn parse_query_preserving_plus(query: &str) -> Result<Vec<(String, String)>, String> {
+    const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
+    const MAX_QUERY_PAIRS: usize = 64;
+    const MAX_KEY_LEN: usize = 64;
+    const MAX_VALUE_LEN: usize = 4096;
+
+    let mut query_pairs = Vec::new();
+    for pair in query.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        if query_pairs.len() >= MAX_QUERY_PAIRS {
+            return Err(GENERIC_ERROR.to_string());
+        }
+        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+
+        // Cheap pre-checks to avoid decoding obviously oversized inputs.
+        if k.len() > MAX_KEY_LEN * 3 || v.len() > MAX_VALUE_LEN * 3 {
+            return Err(GENERIC_ERROR.to_string());
+        }
+
+        let k = percent_encoding::percent_decode_str(k)
+            .decode_utf8()
+            .map_err(|_| GENERIC_ERROR.to_string())?
+            .to_string();
+        let v = percent_encoding::percent_decode_str(v)
+            .decode_utf8()
+            .map_err(|_| GENERIC_ERROR.to_string())?
+            .to_string();
+
+        if k.len() > MAX_KEY_LEN || v.len() > MAX_VALUE_LEN {
+            return Err(GENERIC_ERROR.to_string());
+        }
+
+        query_pairs.push((k, v));
+    }
+    Ok(query_pairs)
+}
+
+/// Parses an OAuth callback URL to extract code and state.
+///
+/// # Arguments
+///
+/// * `callback_url` - The full callback URL (e.g., `<aroeira://auth/callback?code=...&state=...>`)
+///
+/// # Returns
+///
+/// * `Ok((code, state))` - The authorization code and state parameter
+/// * `Err(String)` - Generic user-safe error message (details logged internally)
+///
+/// # Errors
+///
+/// Returns a generic error if:
+/// - URL cannot be parsed
+/// - URL scheme is not "aroeira"
+/// - URL host is not "auth" or path is not "/callback"
+/// - Code or state parameters are missing or empty
+/// - Error parameter is present (OAuth error response)
+///
+/// # Security
+///
+/// This function returns generic error messages to prevent leaking internal
+/// validation logic. Specific details are logged internally for debugging.
+pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), String> {
+    // Generic error message for all validation failures
+    const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
+
+    let url = Url::parse(callback_url).map_err(|e| {
+        tracing::warn!("OAuth callback URL parse error: {e}");
+        GENERIC_ERROR.to_string()
+    })?;
+
+    validate_callback_url_base(&url)?;
+    extract_and_validate_params(&url)
+}
+
+/// Extracts and performs security validation on the OAuth code and state parameters.
+fn extract_and_validate_params(url: &Url) -> Result<(String, String), String> {
+    const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
+    const MAX_CODE_LEN: usize = 4096;
+    const MAX_STATE_LEN: usize = 512;
+
+    // Security: Validate state charset to prevent injection/ambiguity.
+    // Accept RFC3986 "unreserved" characters: ALPHA / DIGIT / "-" / "." / "_" / "~".
+    fn is_unreserved(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~')
+    }
+
+    // Helper to extract query parameters.
+    let query = url.query().unwrap_or("");
+    let query_pairs = parse_query_preserving_plus(query)?;
+
+    // Check for error response from OAuth provider
+    if let Some((_, error_code)) = query_pairs.iter().find(|(k, _)| k == "error") {
+        // Log only the error code (standard OAuth error codes like "access_denied")
+        // Do NOT log error_description as it may contain sensitive user-specific details
+        tracing::info!(
+            error_code = %error_code,
+            "OAuth provider returned error"
+        );
+        return Err("Authentication was denied or failed. Please try again.".to_string());
+    }
+
+    let get_unique_query_param = |key: &str| -> Result<String, String> {
+        let mut values = query_pairs
+            .iter()
+            .filter(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+            .filter(|v| !v.is_empty());
+
+        let first = values.next().ok_or_else(|| {
+            tracing::warn!("OAuth callback: missing or empty {} parameter", key);
+            GENERIC_ERROR.to_string()
+        })?;
+
+        if values.next().is_some() {
+            tracing::warn!("OAuth callback: duplicate {} parameter", key);
+            return Err(GENERIC_ERROR.to_string());
+        }
+
+        Ok(first)
+    };
+
+    let code = get_unique_query_param("code")?;
+    let state = get_unique_query_param("state")?;
+
+    if code.len() > MAX_CODE_LEN || state.len() > MAX_STATE_LEN {
+        tracing::warn!(
+            code_len = code.len(),
+            state_len = state.len(),
+            "OAuth callback: code/state too large"
+        );
+        return Err(GENERIC_ERROR.to_string());
+    }
+
+    if state.is_empty() || !state.as_bytes().iter().copied().all(is_unreserved) {
+        tracing::warn!(
+            target: "audit",
+            outcome = "failure",
+            reason = "invalid_state_charset",
+            "OAuth callback: state contains invalid characters"
+        );
+        return Err(GENERIC_ERROR.to_string());
+    }
+
+    // Security: Validate code charset to prevent injection attacks or anomalies
+    // Code should not contain control characters
+    if code.chars().any(char::is_control) {
+        tracing::warn!(
+            target: "audit",
+            outcome = "failure",
+            reason = "invalid_code_charset",
+            "OAuth callback: code contains control characters"
+        );
+        return Err(GENERIC_ERROR.to_string());
+    }
+
+    // Hash state for logging purposes (to avoid logging sensitive value)
+    let state_hash_for_log = hex::encode(Sha256::digest(state.as_bytes()));
+    tracing::info!(
+        target: "oauth_debug",
+        state_hash = %state_hash_for_log,
+        "Callback parsed successfully"
+    );
+
+    Ok((code, state))
+}
+
+/// Validates the OAuth callback URL and extracts code and state.
+pub fn validate_and_parse_callback(
+    callback_url: &str,
+    request_id: &str,
+    device_id_hash: &str,
+) -> Result<(String, String), String> {
+    const MAX_CALLBACK_LEN: usize = 8192;
+
+    // Prevent DoS via excessive URL length
+    if callback_url.len() > MAX_CALLBACK_LEN {
+        tracing::warn!(
+            target: "audit",
+            request_id = %request_id,
+            outcome = "failure",
+            reason = "callback_too_long",
+            device_id = %device_id_hash,
+            "OAuth callback URL exceeded max length"
+        );
+        return Err("Invalid authentication request".to_string());
+    }
+
+    // Parse callback URL
+    let (code, state_param) = parse_oauth_callback_url(callback_url).inspect_err(|e| {
+        tracing::error!(
+            target: "oauth_debug",
+            request_id = %request_id,
+            error = %e,
+            "Failed to parse OAuth callback URL"
+        );
+        tracing::warn!(
+            target: "audit",
+            request_id = %request_id,
+            outcome = "failure",
+            reason = "invalid_callback",
+            device_id = %device_id_hash,
+            "OAuth authentication failed: invalid callback URL"
+        );
+    })?;
+
+    let state_hash_for_log = hex::encode(Sha256::digest(state_param.as_bytes()));
+    tracing::info!(
+        target: "oauth_debug",
+        request_id = %request_id,
+        state_hash = %state_hash_for_log,
+        "Callback parsed successfully"
+    );
+
+    Ok((code, state_param))
 }

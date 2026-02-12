@@ -15,6 +15,7 @@ pub mod auth_utils;
 pub mod commands;
 pub mod constants;
 pub mod error_codes;
+pub mod oauth;
 pub mod oauth_utils;
 #[cfg(test)]
 mod security_tests;
