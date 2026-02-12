@@ -23,6 +23,10 @@ pub static ASYNC_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
 });
 
 /// Helper to read response body with a size limit to prevent `DoS`.
+///
+/// # Errors
+///
+/// Returns an error if response body size exceeds the limit.
 pub async fn read_response_body_with_limit(
     mut response: reqwest::Response,
     limit: usize,
@@ -46,6 +50,10 @@ pub async fn read_response_body_with_limit(
 }
 
 /// Custom async HTTP client for oauth2 crate with timeout and proper configuration.
+///
+/// # Errors
+///
+/// Returns an error if the request fails or response body exceeds the limit.
 pub async fn async_http_client(request: HttpRequest) -> Result<HttpResponse, OAuthHttpClientError> {
     // Use static client for connection pooling
     let client = &*ASYNC_HTTP_CLIENT;

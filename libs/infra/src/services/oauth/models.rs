@@ -21,7 +21,7 @@ pub struct GitHubUserInfo {
     /// Unique user identifier
     pub id: u64,
     /// User's email (may be null if not public)
-    pub _email: Option<String>,
+    pub email: Option<String>,
     /// User's name
     pub name: Option<String>,
     /// Avatar URL

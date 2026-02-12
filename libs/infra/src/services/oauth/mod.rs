@@ -22,7 +22,7 @@ use oauth2::{
 };
 use secrecy::ExposeSecret;
 use sha2::{Digest, Sha256};
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 // Constants for keyring service names to prevent typo-based fragmentation

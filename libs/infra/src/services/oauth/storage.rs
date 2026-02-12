@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use super::PKCE_SESSION_KEYRING_SERVICE;
 use keyring::Entry;
 
