@@ -11,7 +11,7 @@ pub enum OAuthHttpClientError {
     Io(#[from] std::io::Error),
 }
 
-const MAX_OAUTH_HTTP_BODY_BYTES: usize = 1_048_576; // 1 MiB
+pub const MAX_OAUTH_HTTP_BODY_BYTES: usize = 1_048_576; // 1 MiB
 
 // Static HTTP client for async_http_client callback (connection pooling)
 pub static ASYNC_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
@@ -46,17 +46,12 @@ pub async fn read_response_body_with_limit(
 }
 
 /// Custom async HTTP client for oauth2 crate with timeout and proper configuration.
-///
-/// This replaces `oauth2::reqwest::async_http_client` which doesn't have a timeout by default.
-pub async fn async_http_client(
-    request: HttpRequest,
-) -> Result<HttpResponse, OAuthHttpClientError> {
+pub async fn async_http_client(request: HttpRequest) -> Result<HttpResponse, OAuthHttpClientError> {
     // Use static client for connection pooling
     let client = &*ASYNC_HTTP_CLIENT;
 
     let mut request_builder = client.request(request.method().clone(), request.uri().to_string());
     // Only set body for methods that typically have one (POST, PUT, PATCH)
-    // GET requests should not have a body per HTTP/1.1 spec
     if *request.method() != oauth2::http::Method::GET && !request.body().is_empty() {
         request_builder = request_builder.body(request.body().clone());
     }
