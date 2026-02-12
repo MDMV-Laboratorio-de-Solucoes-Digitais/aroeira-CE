@@ -522,6 +522,29 @@ impl OAuthService for OAuthServiceImpl {
         let (client_id, _client_secret, auth_url_str, token_url_str) =
             self.get_provider_config(provider)?;
 
+        // Security: Enforce HTTPS for production URLs to prevent credential leakage
+        let validate_secure_url = |url_str: &str, context: &str| -> Result<(), OAuthError> {
+            let u = url::Url::parse(url_str).map_err(|e| {
+                OAuthError::ProviderNotConfigured(format!("Invalid {context} URL format: {e}"))
+            })?;
+
+            if u.scheme() != "https" {
+                let is_local = u
+                    .host_str()
+                    .is_some_and(|h| h == "localhost" || h == "127.0.0.1");
+                // Allow non-HTTPS only for localhost in debug builds
+                if !is_local || !cfg!(debug_assertions) {
+                    return Err(OAuthError::ProviderNotConfigured(format!(
+                        "{context} URL must be HTTPS in production"
+                    )));
+                }
+            }
+            Ok(())
+        };
+
+        validate_secure_url(auth_url_str, "authorization")?;
+        validate_secure_url(token_url_str, "token")?;
+
         // Parse URLs
         let auth_url = AuthUrl::new(auth_url_str.to_string()).map_err(|e| {
             OAuthError::ProviderNotConfigured(format!("Invalid authorization URL: {e}"))
