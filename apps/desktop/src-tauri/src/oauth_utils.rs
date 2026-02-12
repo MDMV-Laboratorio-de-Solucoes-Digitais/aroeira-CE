@@ -88,9 +88,9 @@ pub fn validate_callback_url_base(url: &Url) -> Result<(), String> {
 
 /// Helper to extract query parameters manually, preserving '+' signs.
 ///
-/// `Url::query_pairs()` treats '+' as space (application/x-www-form-urlencoded).
-/// OAuth codes (and potentially state) are often base64-like and may contain '+'.
-/// We use `percent_encoding` directly to decode '%XX' but leave '+' as is.
+/// # Errors
+///
+/// Returns an error if the query is malformed or exceeds size limits.
 fn parse_query_preserving_plus(query: &str) -> Result<Vec<(String, String)>, String> {
     const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
     const MAX_QUERY_PAIRS: usize = 64;
@@ -132,28 +132,9 @@ fn parse_query_preserving_plus(query: &str) -> Result<Vec<(String, String)>, Str
 
 /// Parses an OAuth callback URL to extract code and state.
 ///
-/// # Arguments
-///
-/// * `callback_url` - The full callback URL (e.g., `<aroeira://auth/callback?code=...&state=...>`)
-///
-/// # Returns
-///
-/// * `Ok((code, state))` - The authorization code and state parameter
-/// * `Err(String)` - Generic user-safe error message (details logged internally)
-///
 /// # Errors
 ///
-/// Returns a generic error if:
-/// - URL cannot be parsed
-/// - URL scheme is not "aroeira"
-/// - URL host is not "auth" or path is not "/callback"
-/// - Code or state parameters are missing or empty
-/// - Error parameter is present (OAuth error response)
-///
-/// # Security
-///
-/// This function returns generic error messages to prevent leaking internal
-/// validation logic. Specific details are logged internally for debugging.
+/// Returns a generic error if the URL is invalid or missing required parameters.
 pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), String> {
     // Generic error message for all validation failures
     const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
@@ -168,6 +149,10 @@ pub fn parse_oauth_callback_url(callback_url: &str) -> Result<(String, String), 
 }
 
 /// Extracts and performs security validation on the OAuth code and state parameters.
+///
+/// # Errors
+///
+/// Returns an error if parameters are missing, invalid, or exceed size limits.
 fn extract_and_validate_params(url: &Url) -> Result<(String, String), String> {
     const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
     const MAX_CODE_LEN: usize = 4096;
@@ -260,6 +245,10 @@ fn extract_and_validate_params(url: &Url) -> Result<(String, String), String> {
 }
 
 /// Validates the OAuth callback URL and extracts code and state.
+///
+/// # Errors
+///
+/// Returns an error if validation fails or parameters are invalid.
 pub fn validate_and_parse_callback(
     callback_url: &str,
     request_id: &str,
