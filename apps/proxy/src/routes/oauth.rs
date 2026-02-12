@@ -50,6 +50,7 @@ pub async fn github_token_exchange(
     let response = client
         .post(token_url)
         .header("Accept", "application/json")
+        .header("Content-Type", "application/x-www-form-urlencoded")
         .form(&params)
         .send()
         .await

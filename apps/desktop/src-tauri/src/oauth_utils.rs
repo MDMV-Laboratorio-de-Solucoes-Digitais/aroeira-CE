@@ -26,6 +26,12 @@ pub fn get_dev_port() -> u16 {
 /// Returns an error string if the URL is invalid or not allowed.
 pub fn validate_callback_url_base(url: &Url) -> Result<(), String> {
     const GENERIC_ERROR: &str = "Invalid authentication callback. Please try again.";
+    const MAX_CALLBACK_URL_LEN: usize = 8192;
+
+    if url.as_str().len() > MAX_CALLBACK_URL_LEN {
+        tracing::warn!("OAuth callback: url too large");
+        return Err(GENERIC_ERROR.to_string());
+    }
 
     let is_aroeira_protocol = url.scheme().eq_ignore_ascii_case(OAUTH_CALLBACK_SCHEME);
     let host = url.host_str().map(|h| h.trim_end_matches('.'));

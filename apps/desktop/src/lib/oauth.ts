@@ -316,7 +316,12 @@ export function processOAuthCallback(
       // Restore loading state from localStorage if not already set
       let oauthLoading = getLoadingState();
       if (!oauthLoading) {
-        const savedProvider = localStorage.getItem("oauth_pending_provider");
+        let savedProvider: string | null = null;
+        try {
+          savedProvider = localStorage.getItem("oauth_pending_provider");
+        } catch {
+          // Ignore
+        }
         oauthLoading =
           savedProvider === "google" || savedProvider === "github"
             ? (savedProvider as OAuthProvider)
@@ -325,17 +330,25 @@ export function processOAuthCallback(
         if (oauthLoading) {
           callbacks.setLoading(oauthLoading);
         } else if (savedProvider) {
-          localStorage.removeItem("oauth_pending_provider");
-          localStorage.removeItem("oauth_pending_state");
+          try {
+            localStorage.removeItem("oauth_pending_provider");
+            localStorage.removeItem("oauth_pending_state");
+          } catch {
+            // Ignore
+          }
         }
       }
 
       // Check for OAuth provider errors (user denied/cancelled)
       const oauthError = callbackUrl.searchParams.get("error");
       if (oauthError) {
-        localStorage.removeItem("oauth_pending_provider");
-        localStorage.removeItem("oauth_pending_state");
-        localStorage.removeItem("oauth_pending_started_at");
+        try {
+          localStorage.removeItem("oauth_pending_provider");
+          localStorage.removeItem("oauth_pending_state");
+          localStorage.removeItem("oauth_pending_started_at");
+        } catch {
+          // Ignore
+        }
 
         callbacks.resetState(
           "Authentication was cancelled or denied. Please try again.",
@@ -346,9 +359,13 @@ export function processOAuthCallback(
       // Validate callback contains authorization code
       const code = callbackUrl.searchParams.get("code");
       if (!code) {
-        localStorage.removeItem("oauth_pending_provider");
-        localStorage.removeItem("oauth_pending_state");
-        localStorage.removeItem("oauth_pending_started_at");
+        try {
+          localStorage.removeItem("oauth_pending_provider");
+          localStorage.removeItem("oauth_pending_state");
+          localStorage.removeItem("oauth_pending_started_at");
+        } catch {
+          // Ignore
+        }
 
         callbacks.resetState(
           "Authentication callback was invalid. Please try again.",
@@ -357,14 +374,23 @@ export function processOAuthCallback(
       }
 
       // Expire stale OAuth pending state (align with backend PKCE session TTL: 10 minutes)
-      const startedAtStr = localStorage.getItem("oauth_pending_started_at");
-      const startedAt = startedAtStr ? Number(startedAtStr) : NaN;
+      let startedAt = NaN;
+      try {
+        const startedAtStr = localStorage.getItem("oauth_pending_started_at");
+        startedAt = startedAtStr ? Number(startedAtStr) : NaN;
+      } catch {
+        // Ignore
+      }
       const maxAgeMs = 10 * 60 * 1000;
 
       if (!Number.isFinite(startedAt) || Date.now() - startedAt > maxAgeMs) {
-        localStorage.removeItem("oauth_pending_provider");
-        localStorage.removeItem("oauth_pending_state");
-        localStorage.removeItem("oauth_pending_started_at");
+        try {
+          localStorage.removeItem("oauth_pending_provider");
+          localStorage.removeItem("oauth_pending_state");
+          localStorage.removeItem("oauth_pending_started_at");
+        } catch {
+          // Ignore
+        }
 
         callbacks.resetState(
           "Authentication session expired. Please try again.",
@@ -373,12 +399,21 @@ export function processOAuthCallback(
       }
 
       // Validate state before invoking backend exchange
-      const pendingState = localStorage.getItem("oauth_pending_state");
+      let pendingState: string | null = null;
+      try {
+        pendingState = localStorage.getItem("oauth_pending_state");
+      } catch {
+        // Ignore
+      }
       const callbackState = callbackUrl.searchParams.get("state");
       if (!pendingState || !callbackState || pendingState !== callbackState) {
-        localStorage.removeItem("oauth_pending_provider");
-        localStorage.removeItem("oauth_pending_state");
-        localStorage.removeItem("oauth_pending_started_at");
+        try {
+          localStorage.removeItem("oauth_pending_provider");
+          localStorage.removeItem("oauth_pending_state");
+          localStorage.removeItem("oauth_pending_started_at");
+        } catch {
+          // Ignore
+        }
 
         callbacks.resetState(
           "Authentication session was invalid. Please try again.",

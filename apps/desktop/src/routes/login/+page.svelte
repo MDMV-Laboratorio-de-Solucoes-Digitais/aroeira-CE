@@ -36,9 +36,13 @@
    */
   function resetOAuthState(message?: string): void {
     oauthLoading = null;
-    localStorage.removeItem("oauth_pending_provider");
-    localStorage.removeItem("oauth_pending_state");
-    localStorage.removeItem("oauth_pending_started_at");
+    try {
+      localStorage.removeItem("oauth_pending_provider");
+      localStorage.removeItem("oauth_pending_state");
+      localStorage.removeItem("oauth_pending_started_at");
+    } catch {
+      // Ignore storage errors
+    }
     if (message) error = message;
     if (oauthTimeout) clearTimeout(oauthTimeout);
     oauthTimeout = null;
@@ -316,8 +320,12 @@
     error = "";
 
     // Save provider to localStorage for cold start recovery
-    localStorage.setItem("oauth_pending_provider", provider);
-    localStorage.setItem("oauth_pending_started_at", String(Date.now()));
+    try {
+      localStorage.setItem("oauth_pending_provider", provider);
+      localStorage.setItem("oauth_pending_started_at", String(Date.now()));
+    } catch {
+      // Ignore storage errors
+    }
 
     // Prevent the UI from getting stuck if the callback never arrives
     if (oauthTimeout) clearTimeout(oauthTimeout);
@@ -334,7 +342,11 @@
     try {
       const { auth_url, state } = await startOAuthFlow(provider);
       if (destroyed) return;
-      localStorage.setItem("oauth_pending_state", state);
+      try {
+        localStorage.setItem("oauth_pending_state", state);
+      } catch {
+        // Ignore storage errors
+      }
       await openOAuthAuthUrl(provider, auth_url);
       // The browser will open and redirect back via deep link
       // The callback is handled by processOAuthCallback
