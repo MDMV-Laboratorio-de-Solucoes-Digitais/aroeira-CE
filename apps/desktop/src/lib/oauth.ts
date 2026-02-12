@@ -173,7 +173,7 @@ export const handleOAuthCallback = async (url: string): Promise<OAuthUser> => {
     parsed.pathname.replace(/^\/+/, "") === HOSTLESS_PATH;
 
   const devPort =
-    Number(window.location.port) ||
+    Number(typeof window !== "undefined" ? window.location.port : undefined) ||
     Number((import.meta as any).env?.VITE_DEV_PORT) ||
     1420;
 
@@ -284,7 +284,7 @@ export function processOAuthCallback(
     parsed.pathname.replace(/^\/+/, "") === HOSTLESS_PATH;
 
   const devPort =
-    Number(window.location.port) ||
+    Number(typeof window !== "undefined" ? window.location.port : undefined) ||
     Number((import.meta as any).env?.VITE_DEV_PORT) ||
     1420;
 
@@ -425,7 +425,7 @@ export function processOAuthCallback(
 
       // Normalize callback to the canonical scheme for backend consistency.
       // Always send `aroeira://auth/callback?...` to the backend, even in DEV localhost mode.
-      const callbackForBackend = `${CALLBACK_SCHEME}://${CALLBACK_HOST}${CALLBACK_PATH}${parsed.search}`;
+      const callbackForBackend = `${CALLBACK_SCHEME}://${CALLBACK_HOST}${CALLBACK_PATH}${callbackUrl.search}`;
 
       // Validate redirect_uri to prevent unauthorized redirect destinations
       const redirectUriParam = parsed.searchParams.get("redirect_uri");
@@ -464,9 +464,13 @@ export function processOAuthCallback(
         setSessionId();
 
         // Consume pending markers only after a successful exchange.
-        localStorage.removeItem("oauth_pending_provider");
-        localStorage.removeItem("oauth_pending_state");
-        localStorage.removeItem("oauth_pending_started_at");
+        try {
+          localStorage.removeItem("oauth_pending_provider");
+          localStorage.removeItem("oauth_pending_state");
+          localStorage.removeItem("oauth_pending_started_at");
+        } catch {
+          // Ignore
+        }
 
         callbacks.resetState();
         await goto(resolve("/dashboard"), { replaceState: true });
@@ -477,9 +481,13 @@ export function processOAuthCallback(
         });
 
         // Clear stale pending markers so the user can retry cleanly.
-        localStorage.removeItem("oauth_pending_provider");
-        localStorage.removeItem("oauth_pending_state");
-        localStorage.removeItem("oauth_pending_started_at");
+        try {
+          localStorage.removeItem("oauth_pending_provider");
+          localStorage.removeItem("oauth_pending_state");
+          localStorage.removeItem("oauth_pending_started_at");
+        } catch {
+          // Ignore
+        }
 
         callbacks.setError(handleError(err, "OAuth authentication"));
         callbacks.setLoading(null);
