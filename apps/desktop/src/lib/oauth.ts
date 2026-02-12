@@ -116,7 +116,14 @@ export async function openOAuthAuthUrl(
   const path = parsed.pathname;
 
   if (provider === "google") {
-    if (host !== "accounts.google.com" || path !== "/o/oauth2/v2/auth") {
+    const allowedGooglePaths = new Set(["/o/oauth2/v2/auth", "/o/oauth2/auth"]);
+    const normalizedPath =
+      path.endsWith("/") && path.length > 1 ? path.slice(0, -1) : path;
+
+    if (
+      host !== "accounts.google.com" ||
+      !allowedGooglePaths.has(normalizedPath)
+    ) {
       throw new Error("Blocked untrusted Google authorization endpoint");
     }
   } else {
@@ -187,10 +194,7 @@ export const handleOAuthCallback = async (url: string): Promise<OAuthUser> => {
 
   // Normalize callback to the canonical scheme for backend consistency.
   // Always send `aroeira://auth/callback?...` to the backend, even in DEV localhost mode.
-  const callbackForBackend =
-    isHostlessCallback || isLocalhostDev
-      ? `${CALLBACK_SCHEME}://${CALLBACK_HOST}${CALLBACK_PATH}${parsed.search}`
-      : `${CALLBACK_SCHEME}://${CALLBACK_HOST}${CALLBACK_PATH}${parsed.search}`;
+  const callbackForBackend = `${CALLBACK_SCHEME}://${CALLBACK_HOST}${CALLBACK_PATH}${parsed.search}`;
 
   try {
     return await invoke<OAuthUser>("handle_oauth_callback", {
@@ -329,6 +333,10 @@ export function processOAuthCallback(
       // Check for OAuth provider errors (user denied/cancelled)
       const oauthError = callbackUrl.searchParams.get("error");
       if (oauthError) {
+        localStorage.removeItem("oauth_pending_provider");
+        localStorage.removeItem("oauth_pending_state");
+        localStorage.removeItem("oauth_pending_started_at");
+
         callbacks.resetState(
           "Authentication was cancelled or denied. Please try again.",
         );
@@ -338,6 +346,10 @@ export function processOAuthCallback(
       // Validate callback contains authorization code
       const code = callbackUrl.searchParams.get("code");
       if (!code) {
+        localStorage.removeItem("oauth_pending_provider");
+        localStorage.removeItem("oauth_pending_state");
+        localStorage.removeItem("oauth_pending_started_at");
+
         callbacks.resetState(
           "Authentication callback was invalid. Please try again.",
         );
@@ -350,6 +362,10 @@ export function processOAuthCallback(
       const maxAgeMs = 10 * 60 * 1000;
 
       if (!Number.isFinite(startedAt) || Date.now() - startedAt > maxAgeMs) {
+        localStorage.removeItem("oauth_pending_provider");
+        localStorage.removeItem("oauth_pending_state");
+        localStorage.removeItem("oauth_pending_started_at");
+
         callbacks.resetState(
           "Authentication session expired. Please try again.",
         );
@@ -360,6 +376,10 @@ export function processOAuthCallback(
       const pendingState = localStorage.getItem("oauth_pending_state");
       const callbackState = callbackUrl.searchParams.get("state");
       if (!pendingState || !callbackState || pendingState !== callbackState) {
+        localStorage.removeItem("oauth_pending_provider");
+        localStorage.removeItem("oauth_pending_state");
+        localStorage.removeItem("oauth_pending_started_at");
+
         callbacks.resetState(
           "Authentication session was invalid. Please try again.",
         );
@@ -368,12 +388,9 @@ export function processOAuthCallback(
 
       callbacks.setError("");
 
-      // Normalize callback to the canonical scheme for backend consistency
-      // This ensures the backend (which expects com.aroeira.app://auth/callback)
-      // always receives a consistent URL format regardless of how the OS invoked the app.
-      const callbackForBackend = isHostlessCallback
-        ? `${CALLBACK_SCHEME}://${CALLBACK_HOST}${CALLBACK_PATH}${parsed.search}`
-        : rawUrl;
+      // Normalize callback to the canonical scheme for backend consistency.
+      // Always send `aroeira://auth/callback?...` to the backend, even in DEV localhost mode.
+      const callbackForBackend = `${CALLBACK_SCHEME}://${CALLBACK_HOST}${CALLBACK_PATH}${parsed.search}`;
 
       // Validate redirect_uri to prevent unauthorized redirect destinations
       const redirectUriParam = parsed.searchParams.get("redirect_uri");

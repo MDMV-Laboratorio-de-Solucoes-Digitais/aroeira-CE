@@ -491,8 +491,19 @@ pub async fn handle_oauth_callback(
             );
         })?;
 
+    let state_hash = state_hash(&state_param);
+
     let user =
-        exchange_code_for_user(&oauth_state, &session, code, &request_id, &device_id_hash).await?;
+        match exchange_code_for_user(&oauth_state, &session, code, &request_id, &device_id_hash)
+            .await
+        {
+            Ok(user) => user,
+            Err(e) => {
+                // Avoid leaving stale PKCE sessions persisted on terminal failure paths.
+                cleanup_invalid_persisted_session(&oauth_state, &state_hash, &request_id).await;
+                return Err(e);
+            }
+        };
 
     finalize_oauth_login(
         &user,
@@ -528,26 +539,12 @@ pub async fn handle_oauth_callback(
 pub async fn get_oauth_availability(
     oauth_state: State<'_, OAuthState>,
 ) -> Result<OAuthAvailability, String> {
-    let google = oauth_state.oauth_service.config.google_client_id.is_some();
-
-    let github_client_id_present = oauth_state.oauth_service.config.github_client_id.is_some();
-    let github_token_url = oauth_state
+    let google = oauth_state
         .oauth_service
-        .config
-        .github_token_url
-        .as_deref()
-        .unwrap_or(OAuthServiceImpl::GITHUB_TOKEN_URL);
-    let github_secret_present = oauth_state
+        .is_provider_available(AuthProvider::Google);
+    let github = oauth_state
         .oauth_service
-        .config
-        .github_client_secret
-        .as_ref()
-        .is_some_and(|s| !s.expose_secret().is_empty());
-
-    let is_direct_mode_with_secret =
-        github_token_url == OAuthServiceImpl::GITHUB_TOKEN_URL && github_secret_present;
-    let is_proxy_mode = github_token_url != OAuthServiceImpl::GITHUB_TOKEN_URL;
-    let github = github_client_id_present && (is_proxy_mode || is_direct_mode_with_secret);
+        .is_provider_available(AuthProvider::GitHub);
 
     Ok(OAuthAvailability { google, github })
 }

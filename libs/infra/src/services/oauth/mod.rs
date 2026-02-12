@@ -509,6 +509,34 @@ impl OAuthServiceImpl {
         // This provides clearer intent and avoids ambiguity
         Ok((email_obj.email.clone(), true))
     }
+
+    /// Checks if a given OAuth provider is configured and available for use.
+    #[must_use]
+    pub fn is_provider_available(&self, provider: AuthProvider) -> bool {
+        match provider {
+            AuthProvider::Google => self.config.google_client_id.is_some(),
+            AuthProvider::GitHub => {
+                if self.config.github_client_id.is_none() {
+                    return false;
+                }
+                let token_url = self
+                    .config
+                    .github_token_url
+                    .as_deref()
+                    .unwrap_or(Self::GITHUB_TOKEN_URL);
+                let has_secret = self
+                    .config
+                    .github_client_secret
+                    .as_ref()
+                    .is_some_and(|s| !s.expose_secret().is_empty());
+
+                let is_direct_mode_ok = token_url == Self::GITHUB_TOKEN_URL && has_secret;
+                let is_proxy_mode_ok = token_url != Self::GITHUB_TOKEN_URL;
+
+                is_direct_mode_ok || is_proxy_mode_ok
+            }
+        }
+    }
 }
 
 #[async_trait]

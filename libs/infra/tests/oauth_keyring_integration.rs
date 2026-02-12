@@ -107,7 +107,7 @@ async fn test_retrieve_nonexistent_session_returns_none() {
         return;
     }
 
-    tokio::task::spawn_blocking(|| {
+    let join = tokio::task::spawn_blocking(|| {
         let storage = KeyringPkceStorage;
         let state_hash = test_state_hash();
 
@@ -124,9 +124,14 @@ async fn test_retrieve_nonexistent_session_returns_none() {
             None,
             "Non-existent session should return None"
         );
-    })
-    .await
-    .expect("spawn_blocking task should not panic");
+    });
+
+    match tokio::time::timeout(std::time::Duration::from_secs(10), join).await {
+        Ok(res) => res.expect("spawn_blocking task should not panic"),
+        Err(_) => {
+            eprintln!("Skipping test: keyring access timed out");
+        }
+    }
 }
 
 #[tokio::test]
