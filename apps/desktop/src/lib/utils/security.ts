@@ -43,9 +43,15 @@ export function isDangerousHref(href: string): boolean {
   }
   normalized = normalized.slice(start);
 
-  // Strip any remaining ASCII control chars to avoid scheme obfuscation like "java\u0000script:".
-  // eslint-disable-next-line no-control-regex
-  normalized = normalized.replace(/[\u0000-\u001F\u007F]/g, "");
+  // Strip all remaining ASCII control chars to avoid scheme obfuscation like "java\u0000script:".
+  let stripped = "";
+  for (let i = 0; i < normalized.length; i++) {
+    const code = normalized.charCodeAt(i);
+    if (!(code <= 0x1f || code === 0x7f)) {
+      stripped += normalized[i];
+    }
+  }
+  normalized = stripped;
 
   if (normalized.startsWith("//")) return true;
 
