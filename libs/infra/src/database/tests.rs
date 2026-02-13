@@ -171,7 +171,6 @@ mod database_tests {
     #[cfg(unix)]
     #[test]
     fn test_set_file_permissions_600() {
-        use std::fs;
         use std::os::unix::fs::PermissionsExt;
 
         let temp_dir = TempDir::new().unwrap();
@@ -325,8 +324,6 @@ mod database_tests {
     fn test_securely_create_db_file_with_symlink() {
         // Serialize tests that rely on global environment state (TMPDIR)
         let _guard = ENV_MUTEX.lock().expect("Failed to acquire env var lock");
-
-        use std::fs;
 
         let temp_dir = TempDir::new().unwrap();
         let real_file = temp_dir.path().join("real.db");
