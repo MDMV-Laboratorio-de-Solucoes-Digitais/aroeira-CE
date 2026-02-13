@@ -5,61 +5,59 @@ test.describe("Authentication Flow", () => {
     // Mock Tauri invoke mechanism
     await page.addInitScript(() => {
       // Mock for Tauri v2
-      // @ts-ignore - Playwright executes this in browser context
-      const w = globalThis;
+      const w = globalThis as any;
 
       // Initialize if undefined
       w.__TAURI_INTERNALS__ = w.__TAURI_INTERNALS__ || {};
 
-      if (w.__TAURI_INTERNALS__) {
-        w.__TAURI_INTERNALS__.invoke = async (cmd, args) => {
-          // Sanitize logging to remove sensitive arguments
-          console.log(`[Tauri Mock] invoke: ${cmd}`);
+      w.__TAURI_INTERNALS__.invoke = async (
+        cmd: string,
+        args?: Record<string, unknown>,
+      ) => {
+        // Sanitize logging to remove sensitive arguments
+        console.log(`[Tauri Mock] invoke: ${cmd}`);
 
-          switch (cmd) {
-            case "get_password_policy":
-              return { level: "secure", min_length: 8 };
+        switch (cmd) {
+          case "get_password_policy":
+            return { level: "secure", min_length: 8 };
 
-            case "has_auth_token":
-              return false; // Default to not logged in
+          case "has_auth_token":
+            return false; // Default to not logged in
 
-            case "login":
-              if (
-                args &&
-                args.email === "test@example.com" &&
-                args.password === "password123"
-              ) {
-                return null; // Success
-              }
-              throw new Error("Invalid credentials");
-
-            case "register":
-              if (args && args.email === "new@example.com") {
-                return null; // Success
-              }
-              throw new Error("Registration failed");
-
-            case "get_notes":
-              return []; // Return empty notes list
-
-            case "logout":
+          case "login":
+            if (
+              args &&
+              (args as any).email === "test@example.com" &&
+              (args as any).password === "password123"
+            ) {
               return null; // Success
+            }
+            throw new Error("Invalid credentials");
 
-            default:
-              console.warn(`[Tauri Mock] Unhandled command: ${cmd}`);
-              throw new Error(`Command ${cmd} not mocked`);
-          }
-        };
-      }
+          case "register":
+            if (args && (args as any).email === "new@example.com") {
+              return null; // Success
+            }
+            throw new Error("Registration failed");
+
+          case "get_notes":
+            return []; // Return empty notes list
+
+          case "logout":
+            return null; // Success
+
+          default:
+            console.warn(`[Tauri Mock] Unhandled command: ${cmd}`);
+            throw new Error(`Command ${cmd} not mocked`);
+        }
+      };
 
       // Some versions of Tauri api might look for this or use the internals directly
-      if (w.__TAURI_INTERNALS__) {
-        w.__TAURI__ = {
-          core: {
-            invoke: w.__TAURI_INTERNALS__.invoke,
-          },
-        };
-      }
+      w.__TAURI__ = {
+        core: {
+          invoke: w.__TAURI_INTERNALS__.invoke,
+        },
+      };
     });
   });
 
@@ -131,18 +129,15 @@ test.describe("Authentication Flow", () => {
   }) => {
     // Override mock to simulate failure
     await page.addInitScript(() => {
-      // @ts-ignore - Playwright executes this in browser context
-      const w = globalThis;
+      const w = globalThis as any;
       // Initialize if undefined
       w.__TAURI_INTERNALS__ = w.__TAURI_INTERNALS__ || {};
 
-      if (w.__TAURI_INTERNALS__) {
-        w.__TAURI_INTERNALS__.invoke = async (cmd) => {
-          if (cmd === "get_password_policy")
-            return { level: "secure", min_length: 8 };
-          throw new Error("Network Error");
-        };
-      }
+      w.__TAURI_INTERNALS__.invoke = async (cmd: string) => {
+        if (cmd === "get_password_policy")
+          return { level: "secure", min_length: 8 };
+        throw new Error("Network Error");
+      };
 
       // Keep the public API in sync with internals
       w.__TAURI__ = w.__TAURI__ || { core: { invoke: async () => null } };

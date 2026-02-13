@@ -114,12 +114,17 @@
       rawUrl,
       {
         setLoading: (p) => {
+          if (destroyed) return;
           oauthLoading = p;
         },
         setError: (msg) => {
+          if (destroyed) return;
           error = msg;
         },
-        resetState: resetOAuthState,
+        resetState: (msg) => {
+          if (destroyed) return;
+          resetOAuthState(msg);
+        },
       },
       () => oauthLoading,
     );

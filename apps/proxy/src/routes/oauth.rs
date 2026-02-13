@@ -82,17 +82,9 @@ pub async fn github_token_exchange(
     })?;
 
     if let Some(error) = &token_response.error {
-        tracing::error!(
-            "GitHub returned error in payload: {} - {}",
-            error,
-            token_response.error_description.as_deref().unwrap_or("")
-        );
-        return Err(AppError::GitHubError(
-            token_response
-                .error_description
-                .clone()
-                .unwrap_or_else(|| "GitHub OAuth error".to_string()),
-        ));
+        // Do not log `error_description` (may contain sensitive/user-specific details).
+        tracing::error!("GitHub returned error in payload: {}", error);
+        return Err(AppError::GitHubError("GitHub OAuth error".to_string()));
     }
 
     if token_response.access_token.is_none()

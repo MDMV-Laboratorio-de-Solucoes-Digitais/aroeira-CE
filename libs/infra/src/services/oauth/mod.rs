@@ -605,9 +605,14 @@ async fn store_tokens(
         oauth2::basic::BasicTokenType,
     >,
 ) -> Result<(), OAuthError> {
-    let user_key = format!("{}:{}", user.provider, user.provider_user_id);
+    let provider_key = match user.provider {
+        AuthProvider::Google => "google",
+        AuthProvider::GitHub => "github",
+    };
+    let user_key = format!("{provider_key}:{}", user.provider_user_id);
 
     let mut hasher = Sha256::new();
+
     hasher.update(user_key.as_bytes());
     let user_key_hash = hex::encode(hasher.finalize());
 

@@ -14,7 +14,7 @@ use crate::commands::auth::{
     generate_request_id, get_device_id, handle_successful_login, hash_email_for_logging,
 };
 use crate::oauth::session_store::OAuthSessionStore;
-use crate::oauth_utils::parse_oauth_callback_url;
+use crate::oauth_utils::validate_and_parse_callback;
 use crate::state::AppState;
 use domain::modules::auth::AuthError;
 use domain::modules::auth::oauth::{AuthProvider, OAuthPkceSession, OAuthService, OAuthUser};
@@ -137,7 +137,6 @@ impl From<OAuthUser> for OAuthCallbackResponse {
 pub async fn start_oauth_flow(
     provider: AuthProvider,
     oauth_state: State<'_, OAuthState>,
-    state: State<'_, AppState>,
 ) -> Result<StartOAuthResponse, String> {
     let request_id = generate_request_id();
     let device_id = get_device_id().map_err(|e| {
@@ -198,7 +197,7 @@ pub async fn start_oauth_flow(
         return Err("Failed to start authentication. Please try again.".to_string());
     }
 
-    persist_oauth_session(&oauth_state, &session, &request_id, &state).await?;
+    persist_oauth_session(&oauth_state, &session, &request_id).await?;
 
     Ok(StartOAuthResponse {
         auth_url,
@@ -214,10 +213,9 @@ async fn persist_oauth_session(
     oauth_state: &OAuthState,
     session: &OAuthPkceSession,
     request_id: &str,
-    state: &AppState,
 ) -> Result<(), String> {
-    let _ = state; // `AppState` no longer needed for hashing the keyring key
     let state_hash = state_hash(&session.state);
+
     let session_json = serde_json::to_string(session).map_err(|e| {
         tracing::error!(
             target: "security",
@@ -282,56 +280,8 @@ async fn store_session_in_keyring(
     }
 }
 
-/// Validates the OAuth callback URL and extracts code and state.
-fn validate_and_parse_callback(
-    callback_url: &str,
-    request_id: &str,
-    device_id_hash: &str,
-) -> Result<(String, String), String> {
-    const MAX_CALLBACK_LEN: usize = 8192;
-
-    // Prevent DoS via excessive URL length
-    if callback_url.len() > MAX_CALLBACK_LEN {
-        tracing::warn!(
-            target: "audit",
-            request_id = %request_id,
-            outcome = "failure",
-            reason = "callback_too_long",
-            device_id = %device_id_hash,
-            "OAuth callback URL exceeded max length"
-        );
-        return Err("Invalid authentication request".to_string());
-    }
-
-    // Parse callback URL
-    let (code, state_param) = parse_oauth_callback_url(callback_url).inspect_err(|e| {
-        tracing::error!(
-            target: "oauth_debug",
-            request_id = %request_id,
-            error = %e,
-            "Failed to parse OAuth callback URL"
-        );
-        tracing::warn!(
-            target: "audit",
-            request_id = %request_id,
-            outcome = "failure",
-            reason = "invalid_callback",
-            device_id = %device_id_hash,
-            "OAuth authentication failed: invalid callback URL"
-        );
-    })?;
-
-    let state_hash_for_log = hex::encode(Sha256::digest(state_param.as_bytes()));
-    tracing::info!(
-        target: "oauth_debug",
-        request_id = %request_id,
-        state_hash = %state_hash_for_log,
-        "Callback parsed successfully"
-    );
-
-    Ok((code, state_param))
-}
-
+/// This is re-exported from `oauth_utils` for clarity in command orchestration.
+/// Re-defining locally would cause duplication.
 /// Exchanges OAuth code for user info with logging.
 async fn exchange_code_for_user(
     oauth_state: &OAuthState,
@@ -470,7 +420,7 @@ pub async fn handle_oauth_callback(
     let (code, state_param) =
         validate_and_parse_callback(&callback_url, &request_id, &device_id_hash)?;
 
-    let session = retrieve_session(&state_param, &oauth_state, &state, &request_id)
+    let session = retrieve_session(&state_param, &oauth_state, &request_id)
         .await
         .inspect_err(|e| {
             tracing::error!(
@@ -552,7 +502,6 @@ pub async fn get_oauth_availability(
 fn retrieve_warm_session(
     state_param: &str,
     oauth_state: &OAuthState,
-    _state_hash: &str,
     request_id: &str,
 ) -> Option<OAuthPkceSession> {
     let session = oauth_state
@@ -717,15 +666,12 @@ async fn cleanup_invalid_persisted_session(
 async fn retrieve_session(
     state_param: &str,
     oauth_state: &OAuthState,
-    state: &AppState,
     request_id: &str,
 ) -> Result<OAuthPkceSession, String> {
-    let _ = state; // `AppState` no longer needed for hashing the keyring key
     let state_hash = state_hash(state_param);
 
     // Try warm start first, then cold start
-    if let Some(session) = retrieve_warm_session(state_param, oauth_state, &state_hash, request_id)
-    {
+    if let Some(session) = retrieve_warm_session(state_param, oauth_state, request_id) {
         Ok(session)
     } else {
         retrieve_cold_session(state_param, oauth_state, &state_hash, request_id).await
