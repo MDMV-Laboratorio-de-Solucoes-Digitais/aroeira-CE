@@ -225,7 +225,7 @@ async fn persist_oauth_session(
             error = %e,
             "Failed to serialize OAuth PKCE session"
         );
-        "Failed to start authentication. Please try again.".to_string()
+        "Authentication failed. Please try again.".to_string()
     })?;
 
     // Store PKCE session in OS keyring for secure persistence (encryption at rest).
@@ -543,7 +543,7 @@ async fn retrieve_cold_session(
                     error = %e,
                     "Failed to read persisted OAuth session from keyring"
                 );
-                "Authentication session is invalid or expired. Please try again.".to_string()
+                "Authentication failed. Please try again.".to_string()
             })?
             .map_err(|e| {
                 tracing::error!(
@@ -554,7 +554,7 @@ async fn retrieve_cold_session(
                     error = %e,
                     "Failed to read persisted OAuth session from keyring"
                 );
-                "Authentication session is invalid or expired. Please try again.".to_string()
+                "Authentication failed. Please try again.".to_string()
             })?
             .ok_or_else(|| {
                 tracing::warn!(
@@ -564,7 +564,7 @@ async fn retrieve_cold_session(
                     reason = "session_not_found",
                     "OAuth authentication failed: invalid or expired session"
                 );
-                "Authentication session is invalid or expired. Please try again.".to_string()
+                "Authentication failed. Please try again.".to_string()
             })?;
 
     if session_json.len() > MAX_SESSION_JSON_BYTES {
@@ -578,7 +578,7 @@ async fn retrieve_cold_session(
 
         cleanup_invalid_persisted_session(oauth_state, state_hash, request_id).await;
 
-        return Err("Invalid or expired OAuth session. Please try again.".to_string());
+        return Err("Authentication failed. Please try again.".to_string());
     }
 
     let recovered = match serde_json::from_str::<OAuthPkceSession>(&session_json) {
@@ -595,7 +595,7 @@ async fn retrieve_cold_session(
 
             cleanup_invalid_persisted_session(oauth_state, state_hash, request_id).await;
 
-            return Err("Invalid or expired OAuth session. Please try again.".to_string());
+            return Err("Authentication failed. Please try again.".to_string());
         }
     };
 
@@ -625,7 +625,7 @@ async fn validate_session_and_log(
             "OAuth authentication failed: invalid or expired session"
         );
         cleanup_invalid_persisted_session(oauth_state, state_hash, request_id).await;
-        return Err("Invalid or expired OAuth session. Please try again.".to_string());
+        return Err("Authentication failed. Please try again.".to_string());
     }
 
     // Security: Validate session integrity (expiry/validity) for recovered sessions.
@@ -639,7 +639,7 @@ async fn validate_session_and_log(
             "OAuth authentication failed: invalid or expired session"
         );
         cleanup_invalid_persisted_session(oauth_state, state_hash, request_id).await;
-        return Err("Invalid or expired OAuth session. Please try again.".to_string());
+        return Err("Authentication failed. Please try again.".to_string());
     }
 
     Ok(())
@@ -714,7 +714,7 @@ fn validate_oauth_user(
             provider = %session.provider,
             "OAuth login rejected due to invalid email"
         );
-        return Err("Authentication failed: Invalid email. Please try again.".to_string());
+        return Err("Authentication failed. Please try again.".to_string());
     }
 
     // Fail closed: OAuth sign-in must only accept provider-verified emails.
@@ -761,7 +761,6 @@ async fn find_or_create_local_user(
         }
     }
 }
-
 /// Hardens an existing, unverified user account during an OAuth flow
 /// by generating a new secure password and marking the email as verified.
 async fn harden_unverified_user(
