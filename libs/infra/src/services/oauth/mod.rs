@@ -377,7 +377,25 @@ impl OAuthServiceImpl {
             .map_err(|e| OAuthError::ProviderNotConfigured(format!("Invalid redirect URI: {e}")))
     }
 
-    #[must_use]
+    fn validate_secure_url(&self, url_str: &str, context: &str) -> Result<(), OAuthError> {
+        let u = url::Url::parse(url_str).map_err(|e| {
+            OAuthError::ProviderNotConfigured(format!("Invalid {context} URL format: {e}"))
+        })?;
+
+        if u.scheme() != "https" {
+            let is_local = u
+                .host_str()
+                .is_some_and(|h| h == "localhost" || h == "127.0.0.1");
+            if !is_local || !cfg!(debug_assertions) {
+                return Err(OAuthError::ProviderNotConfigured(format!(
+                    "{context} URL must be HTTPS in production"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Checks if a given OAuth provider is configured and available for use.
     pub fn is_provider_available(&self, provider: AuthProvider) -> bool {
         match provider {
             AuthProvider::Google => self
@@ -426,26 +444,8 @@ impl OAuthService for OAuthServiceImpl {
         let (client_id, _client_secret, auth_url_str, token_url_str) =
             self.get_provider_config(provider)?;
 
-        let validate_secure_url = |url_str: &str, context: &str| -> Result<(), OAuthError> {
-            let u = url::Url::parse(url_str).map_err(|e| {
-                OAuthError::ProviderNotConfigured(format!("Invalid {context} URL format: {e}"))
-            })?;
-
-            if u.scheme() != "https" {
-                let is_local = u
-                    .host_str()
-                    .is_some_and(|h| h == "localhost" || h == "127.0.0.1");
-                if !is_local || !cfg!(debug_assertions) {
-                    return Err(OAuthError::ProviderNotConfigured(format!(
-                        "{context} URL must be HTTPS in production"
-                    )));
-                }
-            }
-            Ok(())
-        };
-
-        validate_secure_url(auth_url_str, "authorization")?;
-        validate_secure_url(token_url_str, "token")?;
+        self.validate_secure_url(auth_url_str, "authorization")?;
+        self.validate_secure_url(token_url_str, "token")?;
 
         let auth_url = AuthUrl::new(auth_url_str.to_string()).map_err(|e| {
             OAuthError::ProviderNotConfigured(format!("Invalid authorization URL: {e}"))
@@ -492,26 +492,8 @@ impl OAuthService for OAuthServiceImpl {
         let (client_id, client_secret, auth_url_str, token_url_str) =
             self.get_provider_config(session.provider)?;
 
-        let validate_secure_url = |url_str: &str, context: &str| -> Result<(), OAuthError> {
-            let u = url::Url::parse(url_str).map_err(|e| {
-                OAuthError::ProviderNotConfigured(format!("Invalid {context} URL format: {e}"))
-            })?;
-
-            if u.scheme() != "https" {
-                let is_local = u
-                    .host_str()
-                    .is_some_and(|h| h == "localhost" || h == "127.0.0.1");
-                if !is_local || !cfg!(debug_assertions) {
-                    return Err(OAuthError::ProviderNotConfigured(format!(
-                        "{context} URL must be HTTPS in production"
-                    )));
-                }
-            }
-            Ok(())
-        };
-
-        validate_secure_url(auth_url_str, "authorization")?;
-        validate_secure_url(token_url_str, "token")?;
+        self.validate_secure_url(auth_url_str, "authorization")?;
+        self.validate_secure_url(token_url_str, "token")?;
 
         let auth_url = AuthUrl::new(auth_url_str.to_string())
             .map_err(|e| OAuthError::CodeExchangeFailed(e.to_string()))?;

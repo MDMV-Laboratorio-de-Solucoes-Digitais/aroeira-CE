@@ -112,33 +112,13 @@ impl From<OAuthUser> for OAuthCallbackResponse {
 }
 
 /// Starts an OAuth authentication flow for the given provider.
-///
-/// This command:
-/// 1. Generates a PKCE challenge and authorization URL
-/// 2. Stores the PKCE session for later verification
-/// 3. Returns the URL to open in the system browser
-///
-/// # Arguments
-///
-/// * `provider` - The OAuth provider (google or github)
-///
-/// # Returns
-///
-/// * `Ok(StartOAuthResponse)` - Authorization URL and state parameter
-/// * `Err(String)` - If provider is not configured
-///
-/// # Errors
-///
-/// Returns an error string if:
-/// - The provider is not configured (missing Client ID)
-/// - URL generation fails
-/// - Session storage fails
 #[tauri::command]
 pub async fn start_oauth_flow(
     provider: AuthProvider,
     oauth_state: State<'_, OAuthState>,
 ) -> Result<StartOAuthResponse, String> {
     let request_id = generate_request_id();
+
     let device_id = get_device_id().map_err(|e| {
         tracing::error!(
             target: "security",
@@ -171,7 +151,7 @@ pub async fn start_oauth_flow(
                 error = %e,
                 "OAuth URL generation failed"
             );
-            "Failed to start authentication. Please try again.".to_string()
+            "Authentication failed. Please try again.".to_string()
         })?;
 
     tracing::info!(
@@ -194,7 +174,7 @@ pub async fn start_oauth_flow(
             reason = "generated_session_invalid",
             "OAuth service produced an invalid/expired PKCE session"
         );
-        return Err("Failed to start authentication. Please try again.".to_string());
+        return Err("Authentication failed. Please try again.".to_string());
     }
 
     persist_oauth_session(&oauth_state, &session, &request_id).await?;
@@ -264,7 +244,7 @@ async fn store_session_in_keyring(
                 error = %e,
                 "Failed to persist OAuth session to keyring"
             );
-            Err("Failed to start authentication. Please try again.".to_string())
+            Err("Authentication failed. Please try again.".to_string())
         }
         Err(e) => {
             tracing::error!(
@@ -275,13 +255,11 @@ async fn store_session_in_keyring(
                 error = %e,
                 "Failed to persist OAuth session to keyring (task join error)"
             );
-            Err("Failed to start authentication. Please try again.".to_string())
+            Err("Authentication failed. Please try again.".to_string())
         }
     }
 }
 
-/// This is re-exported from `oauth_utils` for clarity in command orchestration.
-/// Re-defining locally would cause duplication.
 /// Exchanges OAuth code for user info with logging.
 async fn exchange_code_for_user(
     oauth_state: &OAuthState,
@@ -361,31 +339,6 @@ async fn finalize_oauth_login(
 }
 
 /// Handles an OAuth callback URL from deep linking.
-///
-/// This command:
-/// 1. Parses the callback URL to extract code and state
-/// 2. Verifies the state matches a pending session (CSRF protection)
-/// 3. Exchanges the code for tokens and user info
-/// 4. Creates/Updates local user record
-/// 5. Establishes an authenticated session (JWT)
-/// 6. Returns the authenticated user information
-///
-/// # Arguments
-///
-/// * `callback_url` - The full callback URL (e.g., `<aroeira://auth/callback?code=...&state=...>`)
-///
-/// # Returns
-///
-/// * `Ok(OAuthCallbackResponse)` - Authenticated user information
-/// * `Err(String)` - If callback parsing fails, state mismatch, or exchange fails
-///
-/// # Errors
-///
-/// Returns an error string if:
-/// - Callback URL is invalid
-/// - Session is expired or invalid
-/// - Token exchange fails
-/// - User creation/retrieval fails
 #[tauri::command]
 pub async fn handle_oauth_callback(
     callback_url: String,
@@ -472,24 +425,6 @@ pub async fn handle_oauth_callback(
 }
 
 /// Checks which OAuth providers are available by querying the backend configuration.
-///
-/// This command:
-/// 1. Checks if Google client ID is configured
-/// 2. Checks if GitHub client ID is configured
-///
-/// # Arguments
-///
-/// * `oauth_state` - The OAuth managed state containing service configuration
-///
-/// # Returns
-///
-/// * `Ok(OAuthAvailability)` - Availability status for each provider
-/// * `Err(String)` - If backend check fails
-///
-/// # Errors
-///
-/// Returns an error string if:
-/// - Configuration check fails
 #[tauri::command]
 pub async fn get_oauth_availability(
     oauth_state: State<'_, OAuthState>,
@@ -725,7 +660,6 @@ fn validate_oauth_user(
             outcome = "failure",
             reason = "oauth_email_not_verified",
             provider = %session.provider,
-            email_domain = %normalized_email.rsplit_once('@').map_or("unknown", |(_, d)| d),
             "OAuth login rejected due to unverified email"
         );
         return Err("Authentication failed. Please use a verified email.".to_string());
@@ -761,6 +695,7 @@ async fn find_or_create_local_user(
         }
     }
 }
+
 /// Hardens an existing, unverified user account during an OAuth flow
 /// by generating a new secure password and marking the email as verified.
 async fn harden_unverified_user(
@@ -819,12 +754,10 @@ async fn create_oauth_user(
                 request_id = %request_id,
                 "User creation from OAuth failed due to concurrent insert (EmailAlreadyExists)"
             );
-
             if let Ok(Some(mut existing)) = state.user_repo.find_by_email(email).await {
                 if !existing.email_verified {
                     harden_unverified_user(&mut existing, state, request_id).await?;
                 }
-
                 Ok(existing.id)
             } else {
                 tracing::error!(
@@ -876,11 +809,6 @@ fn log_oauth_success(
 ) {
     // Log successful OAuth login (audit trail) with essential context
     // Note: email and provider_user_id are hashed/redacted for privacy in logs
-    let email_domain = user
-        .email
-        .rsplit_once('@')
-        .map_or("unknown", |(_, domain)| domain);
-
     let mut hasher = Sha256::new();
     hasher.update(user.provider_user_id.as_bytes());
     let hashed_user_id = hex::encode(hasher.finalize());
@@ -891,7 +819,6 @@ fn log_oauth_success(
         user_id = %user_id,
         provider = %session.provider,
         provider_user_id_hash = %hashed_user_id,
-        email_domain = %email_domain,
         outcome = "success",
         "OAuth authentication completed"
     );

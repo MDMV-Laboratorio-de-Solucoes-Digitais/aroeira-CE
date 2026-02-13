@@ -123,7 +123,11 @@ impl AppConfig {
             if github_client_secret.is_some() {
                 info!("GitHub OAuth configured with client secret (Direct Mode).");
             } else if let Some(ref proxy_url) = auth_proxy_url {
-                info!("GitHub OAuth configured with Proxy Mode via {}.", proxy_url);
+                let proxy_host = url::Url::parse(proxy_url)
+                    .ok()
+                    .and_then(|u| u.host_str().map(|h| h.to_string()))
+                    .unwrap_or_else(|| "unknown host".to_string());
+                info!("GitHub OAuth configured with Proxy Mode via {proxy_host}.");
                 // Configure token URL to point to the proxy
                 // Proxy expects: POST /oauth/github/token
                 let base = proxy_url.trim_end_matches('/');

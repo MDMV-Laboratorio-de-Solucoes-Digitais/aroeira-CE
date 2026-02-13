@@ -10,10 +10,7 @@ test.describe("Authentication Flow", () => {
       // Initialize if undefined
       w.__TAURI_INTERNALS__ = w.__TAURI_INTERNALS__ || {};
 
-      w.__TAURI_INTERNALS__.invoke = async (
-        cmd: string,
-        args?: Record<string, unknown>,
-      ) => {
+      w.__TAURI_INTERNALS__.invoke = async (cmd, args) => {
         // Sanitize logging to remove sensitive arguments
         console.log(`[Tauri Mock] invoke: ${cmd}`);
 
@@ -27,15 +24,15 @@ test.describe("Authentication Flow", () => {
           case "login":
             if (
               args &&
-              (args as any).email === "test@example.com" &&
-              (args as any).password === "password123"
+              args.email === "test@example.com" &&
+              args.password === "password123"
             ) {
               return null; // Success
             }
             throw new Error("Invalid credentials");
 
           case "register":
-            if (args && (args as any).email === "new@example.com") {
+            if (args && args.email === "new@example.com") {
               return null; // Success
             }
             throw new Error("Registration failed");
@@ -133,7 +130,7 @@ test.describe("Authentication Flow", () => {
       // Initialize if undefined
       w.__TAURI_INTERNALS__ = w.__TAURI_INTERNALS__ || {};
 
-      w.__TAURI_INTERNALS__.invoke = async (cmd: string) => {
+      w.__TAURI_INTERNALS__.invoke = async (cmd) => {
         if (cmd === "get_password_policy")
           return { level: "secure", min_length: 8 };
         throw new Error("Network Error");
