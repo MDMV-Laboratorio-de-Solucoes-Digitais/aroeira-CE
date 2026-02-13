@@ -486,6 +486,69 @@ impl OAuthService for OAuthServiceImpl {
         let (client_id, client_secret, auth_url_str, token_url_str) =
             self.get_provider_config(session.provider)?;
 
+        let validate_secure_url = |url_str: &str, context: &str| -> Result<(), OAuthError> {
+            let u = url::Url::parse(url_str).map_err(|e| {
+                OAuthError::ProviderNotConfigured(format!("Invalid {context} URL format: {e}"))
+            })?;
+
+            if u.scheme() != "https" {
+                let is_local = u
+                    .host_str()
+                    .is_some_and(|h| h == "localhost" || h == "127.0.0.1");
+                if !is_local || !cfg!(debug_assertions) {
+                    return Err(OAuthError::ProviderNotConfigured(format!(
+                        "{context} URL must be HTTPS in production"
+                    )));
+                }
+            }
+            Ok(())
+        };
+
+        validate_secure_url(auth_url_str, "authorization")?;
+        validate_secure_url(token_url_str, "token")?;
+
+        let ru_url = url::Url::parse(self.config.redirect_uri.as_str())
+            .map_err(|e| OAuthError::ProviderNotConfigured(format!("Invalid redirect URI: {e}")))?;
+
+        if !ru_url.username().is_empty()
+            || ru_url.password().is_some()
+            || ru_url.fragment().is_some()
+            || ru_url.query().is_some()
+        {
+            return Err(OAuthError::ProviderNotConfigured(
+                "Invalid redirect URI: contains disallowed components".to_string(),
+            ));
+        }
+
+        let is_allowed_prod_scheme = matches!(ru_url.scheme(), "com.aroeira.app" | "aroeira");
+        let is_prod = is_allowed_prod_scheme
+            && ru_url.host_str() == Some(OAUTH_CALLBACK_HOST)
+            && ru_url.path() == OAUTH_CALLBACK_PATH;
+
+        let dev_port: u16 = std::env::var("AROEIRA_DEV_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(1420);
+
+        let allow_dev_redirect = cfg!(debug_assertions)
+            && std::env::var("AROEIRA_ALLOW_DEV_REDIRECT")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+
+        let is_dev = allow_dev_redirect
+            && ru_url.scheme() == "http"
+            && ru_url.host_str() == Some("localhost")
+            && ru_url.port() == Some(dev_port)
+            && ru_url.path() == "/auth/callback"
+            && ru_url.query().is_none()
+            && ru_url.fragment().is_none();
+
+        if !is_prod && !is_dev {
+            return Err(OAuthError::ProviderNotConfigured(
+                "Invalid redirect URI: not allowlisted".to_string(),
+            ));
+        }
+
         let auth_url = AuthUrl::new(auth_url_str.to_string())
             .map_err(|e| OAuthError::CodeExchangeFailed(e.to_string()))?;
         let token_url = TokenUrl::new(token_url_str.to_string())

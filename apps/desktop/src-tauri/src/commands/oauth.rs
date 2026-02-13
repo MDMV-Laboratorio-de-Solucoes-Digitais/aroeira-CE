@@ -450,6 +450,12 @@ pub async fn handle_oauth_callback(
             Err(e) => {
                 // Avoid leaving stale PKCE sessions persisted on terminal failure paths.
                 cleanup_invalid_persisted_session(&oauth_state, &state_hash, &request_id).await;
+
+                // Also ensure any warm session is removed to prevent inconsistent retries.
+                let _ = oauth_state
+                    .session_store
+                    .take_valid(&state_param, &request_id);
+
                 return Err(e);
             }
         };
@@ -678,6 +684,84 @@ async fn retrieve_session(
     }
 }
 
+async fn authenticate_or_create_user(
+    user: &OAuthUser,
+    session: &OAuthPkceSession,
+    state: &AppState,
+    request_id: &str,
+) -> Result<Uuid, String> {
+    validate_oauth_user(user, session, request_id)?;
+
+    let normalized_email = user.email.trim().to_ascii_lowercase();
+    find_or_create_local_user(&normalized_email, state, request_id).await
+}
+
+/// Validates that the user data from the OAuth provider meets security requirements.
+fn validate_oauth_user(
+    user: &OAuthUser,
+    session: &OAuthPkceSession,
+    request_id: &str,
+) -> Result<(), String> {
+    let normalized_email = user.email.trim().to_ascii_lowercase();
+
+    // Fail closed: must have a plausible, non-empty email before any lookup/logging.
+    if normalized_email.is_empty() || !normalized_email.contains('@') {
+        tracing::warn!(
+            target: "audit",
+            request_id = %request_id,
+            outcome = "failure",
+            reason = "oauth_email_invalid",
+            provider = %session.provider,
+            "OAuth login rejected due to invalid email"
+        );
+        return Err("Authentication failed: Invalid email. Please try again.".to_string());
+    }
+
+    // Fail closed: OAuth sign-in must only accept provider-verified emails.
+    if !user.email_verified {
+        tracing::warn!(
+            target: "audit",
+            request_id = %request_id,
+            outcome = "failure",
+            reason = "oauth_email_not_verified",
+            provider = %session.provider,
+            email_domain = %normalized_email.rsplit_once('@').map_or("unknown", |(_, d)| d),
+            "OAuth login rejected due to unverified email"
+        );
+        return Err("Authentication failed. Please use a verified email.".to_string());
+    }
+
+    Ok(())
+}
+
+/// Finds a user by email or creates a new one if they don't exist.
+/// Also handles hardening of existing unverified accounts.
+async fn find_or_create_local_user(
+    normalized_email: &str,
+    state: &AppState,
+    request_id: &str,
+) -> Result<Uuid, String> {
+    match state.user_repo.find_by_email(normalized_email).await {
+        Ok(Some(mut user)) => {
+            if !user.email_verified {
+                harden_unverified_user(&mut user, state, request_id).await?;
+            }
+            Ok(user.id)
+        }
+        Ok(None) => {
+            // Create new user for OAuth
+            create_oauth_user(normalized_email, state, request_id).await
+        }
+        Err(e) => {
+            tracing::error!(
+                request_id = %request_id,
+                "Database error finding user: {e}"
+            );
+            Err("Authentication failed. Please try again.".to_string())
+        }
+    }
+}
+
 /// Hardens an existing, unverified user account during an OAuth flow
 /// by generating a new secure password and marking the email as verified.
 async fn harden_unverified_user(
@@ -699,7 +783,7 @@ async fn harden_unverified_user(
             request_id = %request_id,
             "Failed to update user verification from OAuth: {e}"
         );
-        "Authentication failed: System error during verification update.".to_string()
+        "Authentication failed. Please try again.".to_string()
     })?;
 
     Ok(())
@@ -748,7 +832,7 @@ async fn create_oauth_user(
                     request_id = %request_id,
                     "Failed to recover user after OAuth create conflict"
                 );
-                Err("Authentication failed: User creation conflict.".to_string())
+                Err("Authentication failed. Please try again.".to_string())
             }
         }
         Err(e) => {
@@ -756,69 +840,14 @@ async fn create_oauth_user(
                 request_id = %request_id,
                 "Failed to save new OAuth user due to unexpected database error: {e}"
             );
-            Err("Authentication failed: Database error.".to_string())
-        }
-    }
-}
-
-#[allow(clippy::too_many_lines)]
-async fn authenticate_or_create_user(
-    user: &OAuthUser,
-    session: &OAuthPkceSession,
-    state: &AppState,
-    request_id: &str,
-) -> Result<Uuid, String> {
-    let normalized_email = user.email.trim().to_ascii_lowercase();
-
-    // Fail closed: must have a plausible, non-empty email before any lookup/logging.
-    if normalized_email.is_empty() || !normalized_email.contains('@') {
-        tracing::warn!(
-            target: "audit",
-            request_id = %request_id,
-            outcome = "failure",
-            reason = "oauth_email_invalid",
-            provider = %session.provider,
-            "OAuth login rejected due to invalid email"
-        );
-        return Err("Authentication failed: Invalid email. Please try again.".to_string());
-    }
-
-    // Fail closed: OAuth sign-in must only accept provider-verified emails.
-    if !user.email_verified {
-        tracing::warn!(
-            target: "audit",
-            request_id = %request_id,
-            outcome = "failure",
-            reason = "oauth_email_not_verified",
-            provider = %session.provider,
-            email_domain = %normalized_email.rsplit_once('@').map_or("unknown", |(_, d)| d),
-            "OAuth login rejected due to unverified email"
-        );
-        return Err("Authentication failed. Please use a verified email.".to_string());
-    }
-
-    match state.user_repo.find_by_email(&normalized_email).await {
-        Ok(Some(mut user)) => {
-            if !user.email_verified {
-                harden_unverified_user(&mut user, state, request_id).await?;
-            }
-            Ok(user.id)
-        }
-        Ok(None) => {
-            // Create new user for OAuth
-            create_oauth_user(&normalized_email, state, request_id).await
-        }
-        Err(e) => {
-            tracing::error!(
-                request_id = %request_id,
-                "Database error finding user: {e}"
-            );
-            Err("Authentication failed: Database error finding user.".to_string())
+            Err("Authentication failed. Please try again.".to_string())
         }
     }
 }
 
 async fn generate_and_hash_oauth_password() -> Result<String, String> {
+    // Generate a high-entropy password that will never be shown to the user.
+    // Use a cryptographically secure random number generator.
     let mut random_bytes = [0u8; 32]; // 256 bits of entropy
     getrandom::getrandom(&mut random_bytes).map_err(|e| {
         tracing::error!("Failed to generate random bytes for OAuth password: {e}");

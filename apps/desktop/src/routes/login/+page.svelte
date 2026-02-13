@@ -176,9 +176,7 @@
             lengths: urls.map((u) => u.length),
           });
         }
-        for (const url of urls) {
-          await handleDeepLink(url);
-        }
+        await Promise.all(urls.map((url) => handleDeepLink(url)));
       });
       if (import.meta.env.DEV) {
         console.debug("Deep link listener setup successfully");

@@ -18,8 +18,11 @@ export function isDangerousHref(href: string): boolean {
   let normalized = href;
   try {
     normalized = href.normalize("NFKC");
-  } catch {
+  } catch (e) {
     // Fallback: If normalization fails, process the original string to avoid throwing errors.
+    if (import.meta.env.DEV) {
+      console.warn(`[Security] Failed to normalize href: "${href}"`, e);
+    }
     normalized = href;
   }
   normalized = normalized.trimStart();
@@ -39,6 +42,11 @@ export function isDangerousHref(href: string): boolean {
     start++;
   }
   normalized = normalized.slice(start);
+
+  // Strip any remaining ASCII control chars to avoid scheme obfuscation like "java\u0000script:".
+  // eslint-disable-next-line no-control-regex
+  normalized = normalized.replace(/[\u0000-\u001F\u007F]/g, "");
+
   if (normalized.startsWith("//")) return true;
 
   const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):/i.exec(normalized);

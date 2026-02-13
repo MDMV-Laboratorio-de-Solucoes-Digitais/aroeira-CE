@@ -406,7 +406,10 @@ export function processOAuthCallback(
         // Ignore
       }
       const callbackState = callbackUrl.searchParams.get("state");
-      if (!pendingState || !callbackState || pendingState !== callbackState) {
+
+      // If we have a pending state, enforce exact match.
+      // If we *don't* (cold start / storage cleared), still allow backend to validate.
+      if (!callbackState || (pendingState && pendingState !== callbackState)) {
         try {
           localStorage.removeItem("oauth_pending_provider");
           localStorage.removeItem("oauth_pending_state");
