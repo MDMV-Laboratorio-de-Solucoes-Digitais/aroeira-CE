@@ -420,7 +420,7 @@ pub async fn handle_oauth_callback(
             }
         };
 
-    finalize_oauth_login(
+    let finalize_result = finalize_oauth_login(
         &user,
         &session,
         &oauth_state,
@@ -428,7 +428,17 @@ pub async fn handle_oauth_callback(
         &device_id,
         &request_id,
     )
-    .await
+    .await;
+
+    if finalize_result.is_err() {
+        // Best-effort cleanup: after a successful code exchange the PKCE verifier is no longer needed.
+        cleanup_invalid_persisted_session(&oauth_state, &state_hash, &request_id).await;
+        let _ = oauth_state
+            .session_store
+            .take_valid(&state_param, &request_id);
+    }
+
+    finalize_result
 }
 
 /// Checks which OAuth providers are available by querying the backend configuration.
