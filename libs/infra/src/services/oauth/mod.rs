@@ -617,6 +617,7 @@ async fn perform_token_exchange(
 }
 
 const MAX_TOKEN_PAYLOAD_BYTES: usize = 16 * 1024;
+const MAX_TOKEN_LENGTH: usize = 8 * 1024;
 
 async fn store_tokens(
     storage: &std::sync::Arc<dyn TokenStorage>,
@@ -638,16 +639,16 @@ async fn store_tokens(
     let user_key_hash = hex::encode(hasher.finalize());
 
     let access_token = token_result.access_token().secret().clone();
-    if access_token.trim().is_empty() {
+    if access_token.trim().is_empty() || access_token.len() > MAX_TOKEN_LENGTH {
         return Err(OAuthError::TokenRequestFailed(
-            "Provider returned an empty access token".to_string(),
+            "Provider returned an invalid access token".to_string(),
         ));
     }
 
     let refresh_token = token_result
         .refresh_token()
         .map(|t| t.secret().clone())
-        .filter(|t| !t.trim().is_empty());
+        .filter(|t| !t.trim().is_empty() && t.len() <= MAX_TOKEN_LENGTH);
 
     let mut token_payload = serde_json::json!({
         "access_token": access_token,
