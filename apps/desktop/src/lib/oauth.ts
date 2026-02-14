@@ -167,13 +167,20 @@ export const handleOAuthCallback = async (url: string): Promise<OAuthUser> => {
   const CALLBACK_PATH = "/callback";
   const HOSTLESS_PATH = "auth/callback";
 
+  const hasUserInfo = Boolean(parsed.username) || Boolean(parsed.password);
+  const hasPort = Boolean(parsed.port);
+
   const isCanonicalCallback =
     parsed.protocol === `${CALLBACK_SCHEME}:` &&
+    !hasUserInfo &&
+    !hasPort &&
     parsed.hostname === CALLBACK_HOST &&
     parsed.pathname === CALLBACK_PATH;
 
   const isHostlessCallback =
     parsed.protocol === `${CALLBACK_SCHEME}:` &&
+    !hasUserInfo &&
+    !hasPort &&
     parsed.hostname === "" &&
     parsed.pathname.replace(/^\/+/, "") === HOSTLESS_PATH;
 
@@ -277,8 +284,13 @@ export function processOAuthCallback(
     lastCallbackAt = now;
   }
 
+  const hasUserInfo = Boolean(parsed.username) || Boolean(parsed.password);
+  const hasPort = Boolean(parsed.port);
+
   const isCanonicalCallback =
     parsed.protocol === `${CALLBACK_SCHEME}:` &&
+    !hasUserInfo &&
+    !hasPort &&
     parsed.hostname === CALLBACK_HOST &&
     parsed.pathname === CALLBACK_PATH;
 
@@ -286,6 +298,8 @@ export function processOAuthCallback(
   // Some OS implementations might strip the // authority markers
   const isHostlessCallback =
     parsed.protocol === `${CALLBACK_SCHEME}:` &&
+    !hasUserInfo &&
+    !hasPort &&
     parsed.hostname === "" &&
     parsed.pathname.replace(/^\/+/, "") === HOSTLESS_PATH;
 
