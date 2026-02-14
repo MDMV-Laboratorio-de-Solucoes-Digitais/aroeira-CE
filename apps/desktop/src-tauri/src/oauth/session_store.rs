@@ -54,13 +54,15 @@ impl OAuthSessionStore {
 
             sessions.retain(|_, s| !s.is_expired());
 
-            let is_valid = sessions
-                .get(state)
-                .is_some_and(|s| s.state == state && s.is_valid() && !s.is_expired());
+            let existing = sessions.get(state);
+
+            let is_valid =
+                existing.is_some_and(|s| s.state == state && s.is_valid() && !s.is_expired());
 
             if is_valid {
                 (expired_hashes, None, sessions.remove(state))
-            } else {
+            } else if existing.is_some() {
+                // Session exists but is invalid/expired: log warning and remove it.
                 tracing::warn!(
                     target: "audit",
                     request_id = %request_id,
@@ -69,13 +71,14 @@ impl OAuthSessionStore {
                     "OAuth authentication failed: invalid or expired session"
                 );
 
-                // If present but invalid, remove it to prevent reuse.
-                let removed = sessions.remove(state);
-                let removed_state_hash_if_invalid = removed
-                    .as_ref()
-                    .map(|_| hex::encode(Sha256::digest(state.as_bytes())));
+                sessions.remove(state);
+                let removed_state_hash_if_invalid =
+                    Some(hex::encode(Sha256::digest(state.as_bytes())));
 
                 (expired_hashes, removed_state_hash_if_invalid, None)
+            } else {
+                // Missing session: do not emit "invalid" audit warning (prevents noise/log-flooding).
+                (expired_hashes, None, None)
             }
         };
 

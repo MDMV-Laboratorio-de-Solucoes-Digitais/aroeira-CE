@@ -55,12 +55,13 @@ fn map_note_error(e: NoteError, uid: Uuid, note_id: Option<Uuid>, action: &str) 
             ))
         }
         other => {
+            // SECURITY: Log only error type, not full error details to avoid leaking sensitive info
             error!(
                 user_id = %uid,
                 note_id = ?note_id,
                 action = action,
                 outcome = "failure",
-                error = %other,
+                error_type = std::any::type_name_of_val(&other),
                 message = format!("Failed to {action} note in repository")
             );
             String::from(ErrorResponse::new(

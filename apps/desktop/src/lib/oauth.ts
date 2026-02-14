@@ -156,6 +156,11 @@ export const handleOAuthCallback = async (url: string): Promise<OAuthUser> => {
     throw new Error("Invalid callback URL");
   }
 
+  // Reject URL fragments (must not contain OAuth response in fragment for this app)
+  if (parsed.hash && parsed.hash.length > 1) {
+    throw new Error("Invalid callback URL");
+  }
+
   // Constants
   const CALLBACK_SCHEME = "aroeira";
   const CALLBACK_HOST = "auth";

@@ -396,7 +396,6 @@ pub async fn handle_oauth_callback(
                 outcome = "failure",
                 reason = "session_retrieval_failed",
                 device_id = %device_id_hash,
-                error = %e,
                 "OAuth session retrieval failed"
             );
         })?;
@@ -791,11 +790,24 @@ async fn create_oauth_user(
 async fn generate_and_hash_oauth_password() -> Result<String, String> {
     // Generate a high-entropy password that will never be shown to the user.
     // Use a cryptographically secure random number generator.
-    let mut random_bytes = [0u8; 32]; // 256 bits of entropy
-    getrandom::getrandom(&mut random_bytes).map_err(|e| {
+    let random_bytes = tauri::async_runtime::spawn_blocking(|| {
+        let mut bytes = [0u8; 32]; // 256 bits of entropy
+        getrandom::getrandom(&mut bytes).map_err(|e| {
+            tracing::error!("Failed to generate random bytes for OAuth password: {e}");
+            e
+        })?;
+        Ok::<_, getrandom::Error>(bytes)
+    })
+    .await
+    .map_err(|e| {
+        tracing::error!("Task join error during random byte generation: {e}");
+        "Authentication failed".to_string()
+    })?
+    .map_err(|e| {
         tracing::error!("Failed to generate random bytes for OAuth password: {e}");
         "Authentication failed".to_string()
     })?;
+
     let oauth_random_password = hex::encode(random_bytes);
 
     // Use infra's hash_password which handles security config correctly

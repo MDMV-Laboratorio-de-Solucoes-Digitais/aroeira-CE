@@ -44,18 +44,21 @@ export function isDangerousHref(href: string): boolean {
   normalized = normalized.slice(start);
 
   // Strip all remaining ASCII control chars to avoid scheme obfuscation like "java\u0000script:".
-  let stripped = "";
-  for (let i = 0; i < normalized.length; i++) {
-    const code = normalized.charCodeAt(i);
-    if (!(code <= 0x1f || code === 0x7f)) {
-      stripped += normalized[i];
-    }
-  }
-  normalized = stripped;
+  // eslint-disable-next-line no-control-regex
+  normalized = normalized.replace(/[\u0000-\u001F\u007F]/g, "");
 
   if (normalized.startsWith("//")) return true;
 
-  const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):/i.exec(normalized);
+  // Harden scheme detection by removing whitespace/invisible chars from scheme portion.
+  const colonIndex = normalized.indexOf(":");
+  const schemeCandidate =
+    colonIndex === -1
+      ? normalized
+      : normalized
+          .slice(0, colonIndex)
+          .replace(/[\s\uFEFF\u200B-\u200F\u2060\u2066-\u2069]+/g, "") + ":";
+
+  const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):/i.exec(schemeCandidate);
   if (!schemeMatch) return false;
 
   const scheme = schemeMatch[1].toLowerCase();
