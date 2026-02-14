@@ -62,9 +62,18 @@
   let unlistenDeepLink: UnlistenFn | null = null;
   let unlistenDeepLinkEvent: UnlistenFn | null = null;
 
-  // De-dupe cache for OAuth callbacks
+  // De-dupe cache for OAuth callbacks (store only non-sensitive fingerprints)
   const seenOAuthCallbacks = new Map<string, number>();
   const OAUTH_CALLBACK_DEDUPE_MS = 10_000;
+
+  function fnv1a32Hex(input: string): string {
+    let h = 2166136261; // FNV-1a 32-bit offset basis
+    for (let i = 0; i < input.length; i++) {
+      h ^= input.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0).toString(16);
+  }
 
   type PasswordSecurityLevel =
     | "none"
@@ -86,14 +95,15 @@
   function handleDeepLink(rawUrl: string): Promise<void> {
     if (destroyed) return Promise.resolve();
 
-    // De-dupe using `state` when present (preferred), otherwise the raw URL
-    let key = rawUrl;
+    // De-dupe using a fingerprint of `state` when present, otherwise fingerprint raw URL.
+    let keyMaterial = rawUrl;
     try {
       const u = new URL(rawUrl);
-      key = u.searchParams.get("state") ?? rawUrl;
+      keyMaterial = u.searchParams.get("state") ?? rawUrl;
     } catch {
       // ignore parse errors here; processOAuthCallback will handle validation
     }
+    const key = fnv1a32Hex(keyMaterial);
 
     const now = Date.now();
 
