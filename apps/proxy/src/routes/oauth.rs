@@ -177,7 +177,7 @@ fn resolve_github_token_url(
     let scheme = parsed_url.scheme();
     let host = parsed_url
         .host_str()
-        .unwrap_or_default()
+        .ok_or_else(|| AppError::GitHubError("Untrusted OAuth provider URL".to_string()))?
         .trim_end_matches('.')
         .to_ascii_lowercase();
 
