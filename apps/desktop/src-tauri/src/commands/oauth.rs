@@ -198,6 +198,8 @@ async fn persist_oauth_session(
     session: &OAuthPkceSession,
     request_id: &str,
 ) -> Result<(), String> {
+    const MAX_SESSION_JSON_BYTES: usize = 16 * 1024;
+
     let state_hash = state_hash(&session.state);
 
     let session_json = serde_json::to_string(session).map_err(|e| {
@@ -211,8 +213,6 @@ async fn persist_oauth_session(
         );
         "Authentication failed. Please try again.".to_string()
     })?;
-
-    const MAX_SESSION_JSON_BYTES: usize = 16 * 1024;
     if session_json.len() > MAX_SESSION_JSON_BYTES {
         tracing::warn!(
             target: "security",
