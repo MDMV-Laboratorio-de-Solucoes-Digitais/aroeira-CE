@@ -206,7 +206,7 @@ export const handleOAuthCallback = async (url: string): Promise<OAuthUser> => {
       url: callbackForBackend,
     });
   } catch (err: unknown) {
-    console.error("Backend OAuth exchange failed:", err);
+    console.error("Backend OAuth exchange failed:", sanitizeErrorForAudit(err));
     throw err;
   }
 };
