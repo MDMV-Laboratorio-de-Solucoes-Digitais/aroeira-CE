@@ -396,6 +396,7 @@ impl OAuthServiceImpl {
     }
 
     /// Checks if a given OAuth provider is configured and available for use.
+    #[must_use]
     pub fn is_provider_available(&self, provider: AuthProvider) -> bool {
         match provider {
             AuthProvider::Google => self
