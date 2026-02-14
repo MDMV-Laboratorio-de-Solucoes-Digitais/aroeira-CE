@@ -663,19 +663,33 @@ async fn cleanup_invalid_persisted_session(
 ) {
     let pkce_storage = oauth_state.pkce_storage.clone();
     let state_hash_clone = state_hash.to_string();
-    match tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash_clone)).await
-    {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => tracing::warn!(
-            target: "security",
-            request_id = %request_id,
-            "Failed to delete invalid persisted OAuth session from keyring: {e}"
-        ),
-        Err(e) => tracing::warn!(
-            target: "security",
-            request_id = %request_id,
-            "Failed to delete invalid persisted OAuth session from keyring due to task failure: {e}"
-        ),
+    let mut delete_handle =
+        tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash_clone));
+
+    tokio::select! {
+        result = &mut delete_handle => {
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => tracing::warn!(
+                    target: "security",
+                    request_id = %request_id,
+                    "Failed to delete invalid persisted OAuth session from keyring: {e}"
+                ),
+                Err(e) => tracing::warn!(
+                    target: "security",
+                    request_id = %request_id,
+                    "Failed to delete invalid persisted OAuth session from keyring due to task failure: {e}"
+                ),
+            }
+        }
+        _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+            delete_handle.abort();
+            tracing::warn!(
+                target: "security",
+                request_id = %request_id,
+                "Timed out deleting invalid persisted OAuth session from keyring"
+            );
+        }
     }
 }
 
@@ -853,26 +867,13 @@ async fn create_oauth_user(
 }
 
 async fn generate_and_hash_oauth_password() -> Result<String, String> {
-    // Generate a high-entropy password that will never be shown to the user.
-    // Use a cryptographically secure random number generator.
-    let random_bytes = tauri::async_runtime::spawn_blocking(|| {
-        let mut bytes = [0u8; 32]; // 256 bits of entropy
-        getrandom::getrandom(&mut bytes).inspect_err(|e| {
-            tracing::error!("Failed to generate random bytes for OAuth password: {e}");
-        })?;
-        Ok::<_, getrandom::Error>(bytes)
-    })
-    .await
-    .map_err(|e| {
-        tracing::error!("Task join error during random byte generation: {e}");
-        "Authentication failed".to_string()
-    })?
-    .map_err(|e| {
+    let mut bytes = [0u8; 32]; // 256 bits of entropy
+    getrandom::getrandom(&mut bytes).map_err(|e| {
         tracing::error!("Failed to generate random bytes for OAuth password: {e}");
         "Authentication failed".to_string()
     })?;
 
-    let oauth_random_password = hex::encode(random_bytes);
+    let oauth_random_password = hex::encode(bytes);
 
     // Use infra's hash_password which handles security config correctly
     // spawn_blocking is required because bcrypt is CPU-intensive and would block the async runtime
