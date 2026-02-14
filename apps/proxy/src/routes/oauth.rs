@@ -67,7 +67,10 @@ pub async fn github_token_exchange(
 
         let mut body = Vec::new();
         let mut resp = response;
-        while let Some(chunk) = resp.chunk().await.unwrap_or(None) {
+        while let Some(chunk) = resp.chunk().await.map_err(|e| {
+            tracing::error!("Failed reading GitHub error response body: {}", e);
+            AppError::GitHubError("Failed to read response from GitHub".to_string())
+        })? {
             if body.len().saturating_add(chunk.len()) > MAX_ERROR_BODY_BYTES {
                 break;
             }
