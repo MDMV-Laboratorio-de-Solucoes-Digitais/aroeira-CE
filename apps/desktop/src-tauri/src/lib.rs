@@ -125,7 +125,7 @@ impl AppConfig {
             } else if let Some(ref proxy_url) = auth_proxy_url {
                 let proxy_host = url::Url::parse(proxy_url)
                     .ok()
-                    .and_then(|u| u.host_str().map(|h| h.to_string()))
+                    .and_then(|u| u.host_str().map(ToString::to_string))
                     .unwrap_or_else(|| "unknown host".to_string());
                 info!("GitHub OAuth configured with Proxy Mode via {proxy_host}.");
                 // Configure token URL to point to the proxy

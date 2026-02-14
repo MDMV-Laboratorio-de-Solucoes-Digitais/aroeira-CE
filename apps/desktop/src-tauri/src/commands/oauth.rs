@@ -112,6 +112,10 @@ impl From<OAuthUser> for OAuthCallbackResponse {
 }
 
 /// Starts an OAuth authentication flow for the given provider.
+///
+/// # Errors
+/// Returns an error if the OAuth flow cannot be started (e.g., device ID unavailable,
+/// provider not configured, or session persistence fails).
 #[tauri::command]
 pub async fn start_oauth_flow(
     provider: AuthProvider,
@@ -339,6 +343,10 @@ async fn finalize_oauth_login(
 }
 
 /// Handles an OAuth callback URL from deep linking.
+///
+/// # Errors
+/// Returns an error if the callback URL is invalid, the session cannot be retrieved,
+/// the code exchange fails, or the user cannot be authenticated/created.
 #[tauri::command]
 pub async fn handle_oauth_callback(
     callback_url: String,
@@ -425,6 +433,9 @@ pub async fn handle_oauth_callback(
 }
 
 /// Checks which OAuth providers are available by querying the backend configuration.
+///
+/// # Errors
+/// This function currently does not return errors, but returns a `Result` for API consistency.
 #[tauri::command]
 pub async fn get_oauth_availability(
     oauth_state: State<'_, OAuthState>,
