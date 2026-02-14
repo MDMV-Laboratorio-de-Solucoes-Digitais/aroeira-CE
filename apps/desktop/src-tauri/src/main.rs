@@ -8,8 +8,9 @@ fn main() {
 
 fn load_env_for_oauth_config() {
     #[cfg(debug_assertions)]
-    if let Err(e) = dotenvy::dotenv() {
-        // Using eprintln as tracing might not be initialized yet.
-        eprintln!("[WARN] Failed to load .env file: {e}");
+    {
+        // Silently ignore missing .env file - it's optional in development.
+        // Using .ok() is idiomatic for optional configuration files.
+        let _ = dotenvy::dotenv();
     }
 }
