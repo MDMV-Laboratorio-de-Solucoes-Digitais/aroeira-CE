@@ -61,10 +61,21 @@ pub async fn github_token_exchange(
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+
+        // Bounded read to avoid DoS via huge error bodies.
+        const MAX_ERROR_BODY_BYTES: usize = 8 * 1024; // enough for diagnostics
+        let mut body = Vec::new();
+        let mut resp = response;
+        while let Some(chunk) = resp.chunk().await.unwrap_or(None) {
+            if body.len().saturating_add(chunk.len()) > MAX_ERROR_BODY_BYTES {
+                break;
+            }
+            body.extend_from_slice(&chunk);
+        }
 
         // Avoid logging potentially sensitive payloads; keep a small bounded snippet.
-        let snippet: String = body.chars().take(512).collect();
+        let body_str = String::from_utf8_lossy(&body);
+        let snippet: String = body_str.chars().take(512).collect();
 
         tracing::error!(
             "GitHub token exchange failed: status={}, body_snippet={}",
