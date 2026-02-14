@@ -538,9 +538,9 @@ async fn retrieve_cold_session(
                 target: "security",
                 request_id = %request_id,
                 outcome = "failure",
-                reason = "session_read_failed",
+                reason = "session_read_task_failed",
                 error = %e,
-                "Failed to read persisted OAuth session from keyring"
+                "Failed to read persisted OAuth session: task join error"
             );
             "Authentication failed. Please try again.".to_string()
         })?

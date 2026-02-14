@@ -203,7 +203,7 @@ export const handleOAuthCallback = async (url: string): Promise<OAuthUser> => {
 
   try {
     return await invoke<OAuthUser>("handle_oauth_callback", {
-      url: callbackForBackend,
+      callback_url: callbackForBackend,
     });
   } catch (err: unknown) {
     console.error("Backend OAuth exchange failed:", sanitizeErrorForAudit(err));
