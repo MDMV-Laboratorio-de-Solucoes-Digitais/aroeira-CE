@@ -134,12 +134,25 @@ fn validate_redirect_uri(
     let expected = url::Url::parse(expected_redirect_uri)
         .map_err(|_| AppError::GitHubError("Server misconfiguration".to_string()))?;
 
-    // Reject any authority tricks / dynamic parts
+    // Reject any authority tricks / dynamic parts (request)
     let has_userinfo = !req.username().is_empty() || req.password().is_some();
     let has_query_or_fragment = req.query().is_some() || req.fragment().is_some();
     if has_userinfo || has_query_or_fragment {
         tracing::error!("Blocked GitHub token exchange due to unexpected redirect_uri components");
         return Err(AppError::BadRequest("Invalid redirect URI".to_string()));
+    }
+
+    // Fail closed on unsafe/misconfigured expected redirect URI (server config)
+    let expected_has_userinfo = !expected.username().is_empty() || expected.password().is_some();
+    let expected_has_query_or_fragment = expected.query().is_some() || expected.fragment().is_some();
+    if expected_has_userinfo || expected_has_query_or_fragment {
+        tracing::error!("Server misconfiguration: expected redirect URI contains forbidden components");
+        return Err(AppError::GitHubError("Server misconfiguration".to_string()));
+    }
+    let expected_scheme = expected.scheme();
+    if expected_scheme != "http" && expected_scheme != "https" && expected_scheme != "aroeira" {
+        tracing::error!("Server misconfiguration: expected redirect URI has unsupported scheme");
+        return Err(AppError::GitHubError("Server misconfiguration".to_string()));
     }
 
     // Compare normalized base (scheme/host/port/path), ignoring formatting differences.
