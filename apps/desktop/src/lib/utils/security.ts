@@ -47,6 +47,13 @@ export function isDangerousHref(href: string): boolean {
   // eslint-disable-next-line no-control-regex
   normalized = normalized.replace(/[\u0000-\u001F\u007F]/g, "");
 
+  // Reject percent-encoded ASCII controls/whitespace (e.g. "java%0d%0ascript:", "%09javascript:").
+  // Fail closed because decoding rules vary by parser and context.
+  const hasEncodedControlsOrWs =
+    /%(0[0-9a-f]|1[0-9a-f]|7f)/i.test(normalized) ||
+    /%(09|0a|0b|0c|0d|20)/i.test(normalized);
+  if (hasEncodedControlsOrWs) return true;
+
   // Backslash can be interpreted/normalized inconsistently by parsers and used for obfuscation.
   // Fail closed: treat any backslash as dangerous rather than rewriting it.
   if (normalized.includes("\\")) return true;
@@ -61,6 +68,9 @@ export function isDangerousHref(href: string): boolean {
       : normalized
           .slice(0, colonIndex)
           .replace(/[\s\uFEFF\u200B-\u200F\u2060\u2066-\u2069]+/g, "") + ":";
+
+  // Reject percent-encoding inside the scheme token itself (e.g. "java%73cript:").
+  if (schemeCandidate.includes("%")) return true;
 
   const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):/i.exec(schemeCandidate);
   if (!schemeMatch) return false;
