@@ -77,15 +77,25 @@ pub async fn github_token_exchange(
             body.extend_from_slice(&chunk);
         }
 
-        // Avoid logging potentially sensitive payloads; keep a small bounded snippet.
-        let body_str = String::from_utf8_lossy(&body);
-        let snippet: String = body_str.chars().take(512).collect();
+        // Avoid logging raw bodies (can include sensitive OAuth artifacts).
+        // Try to extract a safe, allowlisted `error` string if the payload is JSON.
+        let error_code = serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| {
+                v.get("error")
+                    .and_then(|e| e.as_str())
+                    .map(ToString::to_string)
+            });
 
-        tracing::error!(
-            "GitHub token exchange failed: status={}, body_snippet={}",
-            status,
-            snippet
-        );
+        if let Some(code) = error_code {
+            tracing::error!(
+                "GitHub token exchange failed: status={}, error_code={}",
+                status,
+                code
+            );
+        } else {
+            tracing::error!("GitHub token exchange failed: status={}", status);
+        }
         return Err(AppError::GitHubError(
             "GitHub refused the token exchange".to_string(),
         ));
