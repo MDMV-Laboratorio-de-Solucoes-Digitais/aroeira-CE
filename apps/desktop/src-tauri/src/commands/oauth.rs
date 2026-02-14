@@ -792,9 +792,8 @@ async fn generate_and_hash_oauth_password() -> Result<String, String> {
     // Use a cryptographically secure random number generator.
     let random_bytes = tauri::async_runtime::spawn_blocking(|| {
         let mut bytes = [0u8; 32]; // 256 bits of entropy
-        getrandom::getrandom(&mut bytes).map_err(|e| {
+        getrandom::getrandom(&mut bytes).inspect_err(|&e| {
             tracing::error!("Failed to generate random bytes for OAuth password: {e}");
-            e
         })?;
         Ok::<_, getrandom::Error>(bytes)
     })
