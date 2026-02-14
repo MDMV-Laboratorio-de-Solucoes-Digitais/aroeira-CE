@@ -251,14 +251,15 @@ export function processOAuthCallback(
   }
 
   // Deduplicate repeated delivery of the same callback (warm start can emit via multiple sources).
-  const code = parsed.searchParams.get("code") ?? "";
   const state = parsed.searchParams.get("state") ?? "";
   const oauthError = parsed.searchParams.get("error") ?? "";
 
   const fingerprint = (() => {
-    // Non-cryptographic, one-way-enough for deduping without retaining secrets in memory.
-    // Keeps only a 32-bit hash.
-    const s = `${oauthError}|${state}|${code}`;
+    // Dedupe using non-sensitive identifiers only; avoid retaining auth codes in memory.
+    // Prefer `state` (CSRF token) and `error` where present; fall back to URL shape.
+    const s = state
+      ? `${oauthError}|${state}`
+      : `${oauthError}|${parsed.protocol}|${parsed.hostname}|${parsed.pathname}|${parsed.search.length}`;
     let h = 2166136261; // FNV-1a
     for (let i = 0; i < s.length; i++) {
       h ^= s.charCodeAt(i);
@@ -268,7 +269,7 @@ export function processOAuthCallback(
   })();
 
   const now = Date.now();
-  if (code || state || oauthError) {
+  if (state || oauthError) {
     if (lastCallbackKey === fingerprint && now - lastCallbackAt < 5_000) {
       return Promise.resolve();
     }
