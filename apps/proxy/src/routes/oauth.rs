@@ -15,6 +15,9 @@ pub async fn github_token_exchange(
     State(state): State<AppState>,
     Json(payload): Json<GitHubTokenRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    // Bounded read to avoid DoS via huge error bodies.
+    const MAX_ERROR_BODY_BYTES: usize = 8 * 1024; // enough for diagnostics
+
     payload
         .validate()
         .map_err(|_| AppError::BadRequest("Invalid OAuth request payload".to_string()))?;
@@ -62,8 +65,6 @@ pub async fn github_token_exchange(
     if !response.status().is_success() {
         let status = response.status();
 
-        // Bounded read to avoid DoS via huge error bodies.
-        const MAX_ERROR_BODY_BYTES: usize = 8 * 1024; // enough for diagnostics
         let mut body = Vec::new();
         let mut resp = response;
         while let Some(chunk) = resp.chunk().await.unwrap_or(None) {
