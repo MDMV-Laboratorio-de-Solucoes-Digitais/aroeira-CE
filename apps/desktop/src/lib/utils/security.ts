@@ -47,11 +47,18 @@ export function isDangerousHref(href: string): boolean {
   // eslint-disable-next-line no-control-regex
   normalized = normalized.replace(/[\u0000-\u001F\u007F]/g, "");
 
-  // Reject percent-encoded ASCII controls/whitespace (e.g. "java%0d%0ascript:", "%09javascript:").
-  // Fail closed because decoding rules vary by parser and context.
+  // Harden scheme detection by removing whitespace/invisible chars from scheme portion.
+  const colonIndex = normalized.indexOf(":");
+
+  // Reject percent-encoded ASCII controls/whitespace used for scheme obfuscation.
+  // Only scan the potential scheme prefix to avoid false positives in path/query (e.g. "%20" in URLs).
+  const prefixEnd =
+    colonIndex !== -1 ? colonIndex + 1 : Math.min(normalized.length, 64);
+  const schemePrefix = normalized.slice(0, prefixEnd);
+
   const hasEncodedControlsOrWs =
-    /%(0[0-9a-f]|1[0-9a-f]|7f)/i.test(normalized) ||
-    /%(09|0a|0b|0c|0d|20)/i.test(normalized);
+    /%(0[0-9a-f]|1[0-9a-f]|7f)/i.test(schemePrefix) ||
+    /%(09|0a|0b|0c|0d|20)/i.test(schemePrefix);
   if (hasEncodedControlsOrWs) return true;
 
   // Backslash can be interpreted/normalized inconsistently by parsers and used for obfuscation.
@@ -60,8 +67,6 @@ export function isDangerousHref(href: string): boolean {
 
   if (normalized.startsWith("//")) return true;
 
-  // Harden scheme detection by removing whitespace/invisible chars from scheme portion.
-  const colonIndex = normalized.indexOf(":");
   const schemeCandidate =
     colonIndex === -1
       ? normalized
