@@ -47,6 +47,10 @@ export function isDangerousHref(href: string): boolean {
   // eslint-disable-next-line no-control-regex
   normalized = normalized.replace(/[\u0000-\u001F\u007F]/g, "");
 
+  // Backslash can be normalized to "/" by some parsers and used for scheme/authority obfuscation.
+  if (normalized.startsWith("\\") || normalized.startsWith("\\\\")) return true;
+  normalized = normalized.replace(/\\/g, "/");
+
   if (normalized.startsWith("//")) return true;
 
   // Harden scheme detection by removing whitespace/invisible chars from scheme portion.
