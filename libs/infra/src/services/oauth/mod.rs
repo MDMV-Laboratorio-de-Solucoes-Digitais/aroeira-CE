@@ -516,6 +516,11 @@ impl OAuthService for OAuthServiceImpl {
         .await?;
 
         let access_token = token_result.access_token().secret();
+        if access_token.trim().is_empty() {
+            return Err(OAuthError::TokenRequestFailed(
+                "Provider returned an empty access token".to_string(),
+            ));
+        }
 
         let user = match session.provider {
             AuthProvider::Google => self.fetch_google_user(access_token).await,
