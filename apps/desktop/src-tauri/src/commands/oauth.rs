@@ -256,34 +256,39 @@ async fn store_session_in_keyring(
     session_json: String,
     request_id: &str,
 ) -> Result<(), String> {
-    let write_future =
+    let mut write_handle =
         tokio::task::spawn_blocking(move || pkce_storage.save_session(&state_hash, &session_json));
 
-    match tokio::time::timeout(std::time::Duration::from_secs(5), write_future).await {
-        Ok(Ok(Ok(()))) => Ok(()),
-        Ok(Ok(Err(e))) => {
-            tracing::error!(
-                target: "security",
-                request_id = %request_id,
-                outcome = "failure",
-                reason = "session_persistence_failed",
-                error = %e,
-                "Failed to persist OAuth session to keyring"
-            );
-            Err("Authentication failed. Please try again.".to_string())
+    tokio::select! {
+        result = &mut write_handle => {
+            match result {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => {
+                    tracing::error!(
+                        target: "security",
+                        request_id = %request_id,
+                        outcome = "failure",
+                        reason = "session_persistence_failed",
+                        error = %e,
+                        "Failed to persist OAuth session to keyring"
+                    );
+                    Err("Authentication failed. Please try again.".to_string())
+                }
+                Err(e) => {
+                    tracing::error!(
+                        target: "security",
+                        request_id = %request_id,
+                        outcome = "failure",
+                        reason = "session_persistence_task_failed",
+                        error = %e,
+                        "Failed to persist OAuth session to keyring (task join error)"
+                    );
+                    Err("Authentication failed. Please try again.".to_string())
+                }
+            }
         }
-        Ok(Err(e)) => {
-            tracing::error!(
-                target: "security",
-                request_id = %request_id,
-                outcome = "failure",
-                reason = "session_persistence_task_failed",
-                error = %e,
-                "Failed to persist OAuth session to keyring (task join error)"
-            );
-            Err("Authentication failed. Please try again.".to_string())
-        }
-        Err(_) => {
+        _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+            write_handle.abort();
             tracing::error!(
                 target: "security",
                 request_id = %request_id,
@@ -518,12 +523,49 @@ async fn retrieve_cold_session(
 
     let pkce_storage = oauth_state.pkce_storage.clone();
     let state_hash_clone = state_hash.to_string();
-    let read_task =
+    let mut read_handle =
         tokio::task::spawn_blocking(move || pkce_storage.get_session(&state_hash_clone));
 
-    let session_json = tokio::time::timeout(std::time::Duration::from_secs(5), read_task)
-        .await
-        .map_err(|_| {
+    let session_json = tokio::select! {
+        result = &mut read_handle => {
+            match result {
+                Ok(Ok(Some(json))) => json,
+                Ok(Ok(None)) => {
+                    tracing::warn!(
+                        target: "audit",
+                        request_id = %request_id,
+                        outcome = "failure",
+                        reason = "session_not_found",
+                        "OAuth authentication failed: invalid or expired session"
+                    );
+                    return Err("Authentication failed. Please try again.".to_string());
+                }
+                Ok(Err(e)) => {
+                    tracing::error!(
+                        target: "security",
+                        request_id = %request_id,
+                        outcome = "failure",
+                        reason = "session_read_failed",
+                        error = %e,
+                        "Failed to read persisted OAuth session from keyring"
+                    );
+                    return Err("Authentication failed. Please try again.".to_string());
+                }
+                Err(e) => {
+                    tracing::error!(
+                        target: "security",
+                        request_id = %request_id,
+                        outcome = "failure",
+                        reason = "session_read_task_failed",
+                        error = %e,
+                        "Failed to read persisted OAuth session: task join error"
+                    );
+                    return Err("Authentication failed. Please try again.".to_string());
+                }
+            }
+        }
+        _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+            read_handle.abort();
             tracing::error!(
                 target: "security",
                 request_id = %request_id,
@@ -531,40 +573,9 @@ async fn retrieve_cold_session(
                 reason = "session_read_timed_out",
                 "Timed out reading persisted OAuth session from keyring"
             );
-            "Authentication failed. Please try again.".to_string()
-        })?
-        .map_err(|e| {
-            tracing::error!(
-                target: "security",
-                request_id = %request_id,
-                outcome = "failure",
-                reason = "session_read_task_failed",
-                error = %e,
-                "Failed to read persisted OAuth session: task join error"
-            );
-            "Authentication failed. Please try again.".to_string()
-        })?
-        .map_err(|e| {
-            tracing::error!(
-                target: "security",
-                request_id = %request_id,
-                outcome = "failure",
-                reason = "session_read_failed",
-                error = %e,
-                "Failed to read persisted OAuth session from keyring"
-            );
-            "Authentication failed. Please try again.".to_string()
-        })?
-        .ok_or_else(|| {
-            tracing::warn!(
-                target: "audit",
-                request_id = %request_id,
-                outcome = "failure",
-                reason = "session_not_found",
-                "OAuth authentication failed: invalid or expired session"
-            );
-            "Authentication failed. Please try again.".to_string()
-        })?;
+            return Err("Authentication failed. Please try again.".to_string());
+        }
+    };
 
     if session_json.len() > MAX_SESSION_JSON_BYTES {
         tracing::warn!(
