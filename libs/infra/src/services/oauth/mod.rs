@@ -377,7 +377,7 @@ impl OAuthServiceImpl {
             .map_err(|e| OAuthError::ProviderNotConfigured(format!("Invalid redirect URI: {e}")))
     }
 
-    fn validate_secure_url(&self, url_str: &str, context: &str) -> Result<(), OAuthError> {
+    fn validate_secure_url(url_str: &str, context: &str) -> Result<(), OAuthError> {
         let u = url::Url::parse(url_str).map_err(|e| {
             OAuthError::ProviderNotConfigured(format!("Invalid {context} URL format: {e}"))
         })?;
@@ -444,8 +444,8 @@ impl OAuthService for OAuthServiceImpl {
         let (client_id, _client_secret, auth_url_str, token_url_str) =
             self.get_provider_config(provider)?;
 
-        self.validate_secure_url(auth_url_str, "authorization")?;
-        self.validate_secure_url(token_url_str, "token")?;
+        Self::validate_secure_url(auth_url_str, "authorization")?;
+        Self::validate_secure_url(token_url_str, "token")?;
 
         let auth_url = AuthUrl::new(auth_url_str.to_string()).map_err(|e| {
             OAuthError::ProviderNotConfigured(format!("Invalid authorization URL: {e}"))
@@ -492,8 +492,8 @@ impl OAuthService for OAuthServiceImpl {
         let (client_id, client_secret, auth_url_str, token_url_str) =
             self.get_provider_config(session.provider)?;
 
-        self.validate_secure_url(auth_url_str, "authorization")?;
-        self.validate_secure_url(token_url_str, "token")?;
+        Self::validate_secure_url(auth_url_str, "authorization")?;
+        Self::validate_secure_url(token_url_str, "token")?;
 
         let auth_url = AuthUrl::new(auth_url_str.to_string())
             .map_err(|e| OAuthError::CodeExchangeFailed(e.to_string()))?;
