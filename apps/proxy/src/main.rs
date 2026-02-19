@@ -24,7 +24,6 @@ pub struct AppState {
 }
 
 #[tokio::main]
-#[allow(clippy::too_many_lines)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
 
@@ -52,82 +51,90 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         http_client,
     };
 
-    // Build CORS policy from config (supports exact origins and `*.` suffix entries)
+    let cors = build_cors_layer(&state);
+    let app = build_app(state.clone(), cors);
+
+    let addr: SocketAddr = state.config.server_bind_address.parse()?;
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+
+    info!("Server listening on {}", addr);
+
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
+fn build_cors_layer(state: &AppState) -> CorsLayer {
     let allowed = state.config.allowed_origins.clone();
-    let cors = CorsLayer::new()
+    CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(
             move |origin: &axum::http::HeaderValue, _req: &axum::http::request::Parts| {
-                let Ok(origin_str) = origin.to_str() else {
-                    return false;
-                };
-                // Origin validation: Scheme and Host must match. Port is included if non-default.
-                let Ok(origin_url) = url::Url::parse(origin_str) else {
-                    return false;
-                };
-
-                // Security: Reject origins with path, query, or fragment components to prevent bypasses.
-                if origin_url.path() != "/"
-                    || origin_url.query().is_some()
-                    || origin_url.fragment().is_some()
-                {
-                    return false;
-                }
-
-                let scheme = origin_url.scheme();
-                let host = origin_url
-                    .host_str()
-                    .unwrap_or_default()
-                    .to_ascii_lowercase();
-                let port = origin_url.port_or_known_default();
-
-                // Policy: Only allow HTTP and HTTPS origins.
-                if scheme != "http" && scheme != "https" {
-                    return false;
-                }
-
-                allowed.iter().any(|rule| {
-                    let rule = rule.trim();
-
-                    if let Ok(rule_url) = url::Url::parse(rule) {
-                        // Validation: Exact origin rules must not contain path/query/fragment.
-                        if rule_url.path() != "/"
-                            || rule_url.query().is_some()
-                            || rule_url.fragment().is_some()
-                        {
-                            return false;
-                        }
-
-                        return scheme.eq_ignore_ascii_case(rule_url.scheme())
-                            && host.eq_ignore_ascii_case(rule_url.host_str().unwrap_or_default())
-                            && port == rule_url.port_or_known_default();
-                    }
-
-                    if let Some(suffix) = rule.strip_prefix("https://*.") {
-                        // Wildcard Policy: https://*.example.com (HTTPS, default port 443 only)
-                        let suffix = suffix.trim().trim_start_matches('.').to_ascii_lowercase();
-                        return scheme == "https"
-                            && port == Some(443)
-                            && host != suffix
-                            && host.ends_with(&format!(".{suffix}"));
-                    }
-
-                    if let Some(suffix) = rule.strip_prefix("http://*.") {
-                        // Wildcard Policy: http://*.example.com (HTTP, default port 80 only)
-                        let suffix = suffix.trim().trim_start_matches('.').to_ascii_lowercase();
-                        return scheme == "http"
-                            && port == Some(80)
-                            && host != suffix
-                            && host.ends_with(&format!(".{suffix}"));
-                    }
-
-                    false
-                })
+                validate_origin(origin, &allowed)
             },
         ))
         .allow_methods([axum::http::Method::POST])
-        .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::ACCEPT]);
+        .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::ACCEPT])
+}
 
-    let app = Router::new()
+fn validate_origin(origin: &axum::http::HeaderValue, allowed: &[String]) -> bool {
+    let Ok(origin_str) = origin.to_str() else {
+        return false;
+    };
+    let Ok(origin_url) = url::Url::parse(origin_str) else {
+        return false;
+    };
+
+    if origin_url.path() != "/" || origin_url.query().is_some() || origin_url.fragment().is_some() {
+        return false;
+    }
+
+    let scheme = origin_url.scheme();
+    let host = origin_url
+        .host_str()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let port = origin_url.port_or_known_default();
+
+    if scheme != "http" && scheme != "https" {
+        return false;
+    }
+
+    allowed.iter().any(|rule| {
+        let rule = rule.trim();
+
+        if let Ok(rule_url) = url::Url::parse(rule) {
+            if rule_url.path() != "/" || rule_url.query().is_some() || rule_url.fragment().is_some()
+            {
+                return false;
+            }
+
+            return scheme.eq_ignore_ascii_case(rule_url.scheme())
+                && host.eq_ignore_ascii_case(rule_url.host_str().unwrap_or_default())
+                && port == rule_url.port_or_known_default();
+        }
+
+        if let Some(suffix) = rule.strip_prefix("https://*.") {
+            let suffix = suffix.trim().trim_start_matches('.').to_ascii_lowercase();
+            return scheme == "https"
+                && port == Some(443)
+                && host != suffix
+                && host.ends_with(&format!(".{suffix}"));
+        }
+
+        if let Some(suffix) = rule.strip_prefix("http://*.") {
+            let suffix = suffix.trim().trim_start_matches('.').to_ascii_lowercase();
+            return scheme == "http"
+                && port == Some(80)
+                && host != suffix
+                && host.ends_with(&format!(".{suffix}"));
+        }
+
+        false
+    })
+}
+
+fn build_app(state: AppState, cors: CorsLayer) -> Router {
+    Router::new()
         .route("/health", axum::routing::get(health_check))
         .nest("/oauth", routes::router())
         .layer(
@@ -156,16 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     std::time::Duration::from_secs(state.config.rate_limit_window_secs),
                 )),
         )
-        .with_state(state.clone());
-
-    let addr: SocketAddr = state.config.server_bind_address.parse()?;
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-
-    info!("Server listening on {}", addr);
-
-    axum::serve(listener, app).await?;
-
-    Ok(())
+        .with_state(state)
 }
 
 async fn health_check() -> impl IntoResponse {
