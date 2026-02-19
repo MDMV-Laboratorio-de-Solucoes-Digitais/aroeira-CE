@@ -556,14 +556,28 @@ pub fn run() {
                 }
 
                 // Avoid logging full URL (may contain OAuth code/state)
-                let redacted = match parsed.query() {
-                    Some(_) => format!(
-                        "{}://{}{}?<redacted>",
+                let redacted = if parsed.query().is_some() {
+                    if parsed.cannot_be_a_base() || parsed.host_str().is_none() {
+                        // Hostless custom-scheme (e.g., aroeira:auth/callback)
+                        format!("{}:{}?<redacted>", parsed.scheme(), parsed.path())
+                    } else {
+                        // Canonical authority form (e.g., aroeira://auth/callback)
+                        format!(
+                            "{}://{}{}?<redacted>",
+                            parsed.scheme(),
+                            parsed.host_str().unwrap_or(""),
+                            parsed.path()
+                        )
+                    }
+                } else if parsed.cannot_be_a_base() || parsed.host_str().is_none() {
+                    format!("{}:{}", parsed.scheme(), parsed.path())
+                } else {
+                    format!(
+                        "{}://{}{}",
                         parsed.scheme(),
                         parsed.host_str().unwrap_or(""),
                         parsed.path()
-                    ),
-                    None => url.clone(),
+                    )
                 };
                 tracing::info!(
                     "Received deep link in single-instance handler: {}",
