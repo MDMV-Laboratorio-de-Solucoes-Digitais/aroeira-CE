@@ -453,7 +453,9 @@ export function processOAuthCallback(
       // Validate redirect_uri to prevent unauthorized redirect destinations
       const redirectUriParam = parsed.searchParams.get("redirect_uri");
       const devServerPort =
-        Number(window.location.port) ||
+        Number(
+          typeof window !== "undefined" ? window.location.port : undefined,
+        ) ||
         Number((import.meta as any).env?.VITE_DEV_PORT) ||
         1420;
 
