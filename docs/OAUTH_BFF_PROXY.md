@@ -6,9 +6,19 @@ GitHub OAuth requires a **client secret** for the token exchange, which violates
 
 > "Do not embed/commit CLIENT_SECRET into the desktop binary; use PKCE (and use BFF if a provider requires a secret)."
 
-### The Problem
+## ⚠️ CRITICAL: Production Requirement
 
-GitHub's OAuth2 implementation requires a `client_secret` for the authorization code exchange, even when using PKCE. This creates a security dilemma for desktop applications:
+**GitHub OAuth in production REQUIRES the BFF proxy.** The desktop binary must never contain or use `GITHUB_CLIENT_SECRET` in production builds.
+
+| Environment     | Configuration                        | Status                       |
+| --------------- | ------------------------------------ | ---------------------------- |
+| **Development** | `GITHUB_CLIENT_SECRET` + default URL | ✅ Allowed (not distributed) |
+| **Production**  | `GITHUB_TOKEN_URL` → BFF proxy       | ✅ **REQUIRED**              |
+| **Production**  | `GITHUB_CLIENT_SECRET` embedded      | ❌ **FORBIDDEN**             |
+
+### Why This Matters
+
+GitHub's OAuth implementation does NOT support PKCE-only token exchange. Unlike Google (which allows PKCE-only flows), GitHub requires a `client_secret` for the authorization code exchange. This creates a security dilemma for desktop applications:
 
 1. **Embedding the secret** in the binary exposes it to extraction
 2. **Not using GitHub OAuth** limits provider options
