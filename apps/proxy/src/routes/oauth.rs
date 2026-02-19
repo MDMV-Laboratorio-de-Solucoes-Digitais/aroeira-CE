@@ -144,9 +144,12 @@ fn validate_redirect_uri(
 
     // Fail closed on unsafe/misconfigured expected redirect URI (server config)
     let expected_has_userinfo = !expected.username().is_empty() || expected.password().is_some();
-    let expected_has_query_or_fragment = expected.query().is_some() || expected.fragment().is_some();
+    let expected_has_query_or_fragment =
+        expected.query().is_some() || expected.fragment().is_some();
     if expected_has_userinfo || expected_has_query_or_fragment {
-        tracing::error!("Server misconfiguration: expected redirect URI contains forbidden components");
+        tracing::error!(
+            "Server misconfiguration: expected redirect URI contains forbidden components"
+        );
         return Err(AppError::GitHubError("Server misconfiguration".to_string()));
     }
     let expected_scheme = expected.scheme();
