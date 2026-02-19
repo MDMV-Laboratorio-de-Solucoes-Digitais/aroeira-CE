@@ -75,7 +75,8 @@ export function isDangerousHref(href: string): boolean {
           .replace(/[\s\uFEFF\u200B-\u200F\u2060\u2066-\u2069]+/g, "") + ":";
 
   // Reject percent-encoding inside the scheme token itself (e.g. "java%73cript:").
-  if (schemeCandidate.includes("%")) return true;
+  // Only check this for URLs that have a scheme (colon present), not for relative URLs.
+  if (colonIndex !== -1 && schemeCandidate.includes("%")) return true;
 
   const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):/i.exec(schemeCandidate);
   if (!schemeMatch) return false;
