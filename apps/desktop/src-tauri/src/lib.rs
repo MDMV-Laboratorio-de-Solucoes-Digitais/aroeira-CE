@@ -482,13 +482,11 @@ async fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
     // TODO: Implement stale session cleanup when keyring crate supports listing entries.
     let cleanup_store = oauth_state.session_store.clone();
     tauri::async_runtime::spawn(async move {
-        match tauri::async_runtime::spawn_blocking(move || cleanup_store.cleanup_stale_sessions())
-            .await
+        if let Err(e) =
+            tauri::async_runtime::spawn_blocking(move || cleanup_store.cleanup_stale_sessions())
+                .await
         {
-            Ok(()) => {}
-            Err(e) => {
-                tracing::warn!("OAuth stale-session cleanup task failed: {}", e);
-            }
+            tracing::warn!("OAuth stale-session cleanup task panicked/cancelled: {}", e);
         }
     });
 
