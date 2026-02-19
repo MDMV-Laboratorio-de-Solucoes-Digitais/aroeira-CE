@@ -256,10 +256,10 @@ async fn store_session_in_keyring(
     session_json: String,
     request_id: &str,
 ) -> Result<(), String> {
-    let write_handle =
+    let mut write_handle =
         tokio::task::spawn_blocking(move || pkce_storage.save_session(&state_hash, &session_json));
 
-    match tokio::time::timeout(std::time::Duration::from_secs(5), write_handle).await {
+    match tokio::time::timeout(std::time::Duration::from_secs(5), &mut write_handle).await {
         Ok(Ok(Ok(()))) => Ok(()),
         Ok(Ok(Err(e))) => {
             tracing::error!(
@@ -284,6 +284,7 @@ async fn store_session_in_keyring(
             Err("Authentication failed. Please try again.".to_string())
         }
         Err(_) => {
+            write_handle.abort();
             tracing::error!(
                 target: "security",
                 request_id = %request_id,
@@ -518,11 +519,11 @@ async fn retrieve_cold_session(
 
     let pkce_storage = oauth_state.pkce_storage.clone();
     let state_hash_clone = state_hash.to_string();
-    let read_handle =
+    let mut read_handle =
         tokio::task::spawn_blocking(move || pkce_storage.get_session(&state_hash_clone));
 
     let session_json =
-        match tokio::time::timeout(std::time::Duration::from_secs(5), read_handle).await {
+        match tokio::time::timeout(std::time::Duration::from_secs(5), &mut read_handle).await {
             Ok(Ok(Ok(Some(json)))) => json,
             Ok(Ok(Ok(None))) => {
                 tracing::warn!(
@@ -557,6 +558,7 @@ async fn retrieve_cold_session(
                 return Err("Authentication failed. Please try again.".to_string());
             }
             Err(_) => {
+                read_handle.abort();
                 tracing::error!(
                     target: "security",
                     request_id = %request_id,
@@ -654,10 +656,10 @@ async fn cleanup_invalid_persisted_session(
 ) {
     let pkce_storage = oauth_state.pkce_storage.clone();
     let state_hash_clone = state_hash.to_string();
-    let delete_handle =
+    let mut delete_handle =
         tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash_clone));
 
-    match tokio::time::timeout(std::time::Duration::from_secs(5), delete_handle).await {
+    match tokio::time::timeout(std::time::Duration::from_secs(5), &mut delete_handle).await {
         Ok(Ok(Ok(()))) => {}
         Ok(Ok(Err(e))) => tracing::warn!(
             target: "security",
@@ -669,11 +671,14 @@ async fn cleanup_invalid_persisted_session(
             request_id = %request_id,
             "Failed to delete invalid persisted OAuth session from keyring due to task failure: {e}"
         ),
-        Err(_) => tracing::warn!(
-            target: "security",
-            request_id = %request_id,
-            "Timed out deleting invalid persisted OAuth session from keyring"
-        ),
+        Err(_) => {
+            delete_handle.abort();
+            tracing::warn!(
+                target: "security",
+                request_id = %request_id,
+                "Timed out deleting invalid persisted OAuth session from keyring"
+            );
+        }
     }
 }
 
