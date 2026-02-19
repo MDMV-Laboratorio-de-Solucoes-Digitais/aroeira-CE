@@ -35,12 +35,14 @@ pub fn validate_callback_url_base(url: &Url) -> Result<(), String> {
     }
 
     let is_aroeira_protocol = url.scheme().eq_ignore_ascii_case(OAUTH_CALLBACK_SCHEME);
-    let host = url.host_str().map(|h| h.trim_end_matches('.'));
+    let host = url
+        .host_str()
+        .map(|h| h.trim_end_matches('.').to_ascii_lowercase());
     let has_userinfo = !url.username().is_empty() || url.password().is_some();
 
     let is_localhost_dev = cfg!(debug_assertions)
         && url.scheme() == "http"
-        && host == Some("localhost")
+        && host.as_deref() == Some("localhost")
         && url.port() == Some(get_dev_port())
         && url.path() == "/auth/callback"
         && !has_userinfo;
@@ -67,7 +69,7 @@ pub fn validate_callback_url_base(url: &Url) -> Result<(), String> {
             return Err(GENERIC_ERROR.to_string());
         }
         let is_canonical =
-            url.host_str() == Some(OAUTH_CALLBACK_HOST) && url.path() == OAUTH_CALLBACK_PATH;
+            host.as_deref() == Some(OAUTH_CALLBACK_HOST) && url.path() == OAUTH_CALLBACK_PATH;
         let is_hostless =
             url.host_str().is_none() && url.path().trim_start_matches('/') == HOSTLESS_PATH;
 
