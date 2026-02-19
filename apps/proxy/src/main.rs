@@ -84,15 +84,22 @@ fn validate_origin(origin: &axum::http::HeaderValue, allowed: &[String]) -> bool
         return false;
     };
 
+    // Reject authority tricks and non-origin forms early
+    let has_userinfo = !origin_url.username().is_empty() || origin_url.password().is_some();
+    if has_userinfo {
+        return false;
+    }
+
+    let Some(host_str) = origin_url.host_str() else {
+        return false;
+    };
+
     if origin_url.path() != "/" || origin_url.query().is_some() || origin_url.fragment().is_some() {
         return false;
     }
 
     let scheme = origin_url.scheme();
-    let host = origin_url
-        .host_str()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
+    let host = host_str.to_ascii_lowercase();
     let port = origin_url.port_or_known_default();
 
     if scheme != "http" && scheme != "https" {
@@ -103,6 +110,13 @@ fn validate_origin(origin: &axum::http::HeaderValue, allowed: &[String]) -> bool
         let rule = rule.trim();
 
         if let Ok(rule_url) = url::Url::parse(rule) {
+            // Reject rule URLs with userinfo (security hardening)
+            let rule_has_userinfo =
+                !rule_url.username().is_empty() || rule_url.password().is_some();
+            if rule_has_userinfo {
+                return false;
+            }
+
             if rule_url.path() != "/" || rule_url.query().is_some() || rule_url.fragment().is_some()
             {
                 return false;
