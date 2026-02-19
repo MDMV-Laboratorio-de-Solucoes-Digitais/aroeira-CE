@@ -393,9 +393,16 @@ impl OAuthServiceImpl {
             let is_local = u
                 .host_str()
                 .is_some_and(|h| h == "localhost" || h == "127.0.0.1");
-            if !is_local || !cfg!(debug_assertions) {
+
+            // In debug builds, require explicit opt-in via environment variable
+            // to allow non-HTTPS URLs for local development.
+            let allow_insecure_local = cfg!(debug_assertions)
+                && std::env::var("AROEIRA_ALLOW_INSECURE_OAUTH_URLS")
+                    .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+
+            if !is_local || !allow_insecure_local {
                 return Err(OAuthError::ProviderNotConfigured(format!(
-                    "{context} URL must be HTTPS in production"
+                    "{context} URL must be HTTPS (or set AROEIRA_ALLOW_INSECURE_OAUTH_URLS=1 for local dev)"
                 )));
             }
         }
