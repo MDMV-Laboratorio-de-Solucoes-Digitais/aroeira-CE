@@ -8,7 +8,16 @@ use axum::{
     response::IntoResponse,
 };
 use secrecy::ExposeSecret;
+use std::sync::LazyLock;
 use validator::Validate;
+
+const STANDARD_GITHUB_URL: &str = "https://github.com/login/oauth/access_token";
+
+static STANDARD_GITHUB_PARSED: LazyLock<url::Url> =
+    LazyLock::new(|| match url::Url::parse(STANDARD_GITHUB_URL) {
+        Ok(url) => url,
+        Err(e) => panic!("BUG: STANDARD_GITHUB_URL constant is invalid: {e}"),
+    });
 
 #[axum::debug_handler]
 pub async fn github_token_exchange(
@@ -177,13 +186,10 @@ fn resolve_github_token_url(
     allowed_hosts: &[String],
 ) -> Result<url::Url, AppError> {
     // Defense-in-depth: If the configured URL matches the standard GitHub endpoint exactly,
-    // return a fresh Url object constructed from a string literal.
+    // return a cloned Url from the pre-parsed static.
     // This helps static analysis tools (like CodeQL) verify that the default path is safe/constant.
-    const STANDARD_GITHUB_URL: &str = "https://github.com/login/oauth/access_token";
     if configured_url == STANDARD_GITHUB_URL {
-        // Safe to unwrap because we know this string literal is a valid URL.
-        #[allow(clippy::expect_used)]
-        return Ok(url::Url::parse(STANDARD_GITHUB_URL).expect("Standard URL is valid"));
+        return Ok(STANDARD_GITHUB_PARSED.clone());
     }
 
     // Otherwise, parse and validate the custom URL against the allowlist.
