@@ -112,7 +112,7 @@ export async function openOAuthAuthUrl(
     );
   }
 
-  const host = parsed.hostname.toLowerCase();
+  const host = (parsed.hostname || "").toLowerCase();
   const path = parsed.pathname;
 
   if (provider === "google") {
@@ -394,16 +394,19 @@ export function processOAuthCallback(
       }
 
       // Expire stale OAuth pending state (align with backend PKCE session TTL: 10 minutes)
-      let startedAt = NaN;
+      let startedAt: number | null = null;
       try {
         const startedAtStr = localStorage.getItem("oauth_pending_started_at");
-        startedAt = startedAtStr ? Number(startedAtStr) : NaN;
+        const n = startedAtStr ? Number(startedAtStr) : NaN;
+        startedAt = Number.isFinite(n) ? n : null;
       } catch {
         // Ignore
       }
       const maxAgeMs = 10 * 60 * 1000;
 
-      if (!Number.isFinite(startedAt) || Date.now() - startedAt > maxAgeMs) {
+      // Only enforce TTL when we actually have a valid timestamp.
+      // If storage was cleared (cold start), allow backend to validate PKCE/state.
+      if (startedAt !== null && Date.now() - startedAt > maxAgeMs) {
         try {
           localStorage.removeItem("oauth_pending_provider");
           localStorage.removeItem("oauth_pending_state");
