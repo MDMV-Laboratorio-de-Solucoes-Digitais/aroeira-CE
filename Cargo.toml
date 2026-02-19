@@ -22,7 +22,7 @@ unused_imports = "warn"
 unused_variables = "warn"
 
 [workspace.lints.clippy]
-pedantic = "warn"
+pedantic = "forbid"
 nursery = "warn"
 unwrap_used = "warn"
 expect_used = "warn"
