@@ -717,8 +717,17 @@ fn validate_oauth_user(
 ) -> Result<(), String> {
     let normalized_email = user.email.trim().to_ascii_lowercase();
 
+    // Defensive limits: prevent pathological inputs from providers or intermediaries.
+    const MAX_EMAIL_LEN: usize = 254; // RFC 5321 maximum email length
+    let email_ok = !normalized_email.is_empty()
+        && normalized_email.len() <= MAX_EMAIL_LEN
+        && normalized_email.contains('@')
+        && !normalized_email
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control());
+
     // Fail closed: must have a plausible, non-empty email before any lookup/logging.
-    if normalized_email.is_empty() || !normalized_email.contains('@') {
+    if !email_ok {
         tracing::warn!(
             target: "audit",
             request_id = %request_id,
