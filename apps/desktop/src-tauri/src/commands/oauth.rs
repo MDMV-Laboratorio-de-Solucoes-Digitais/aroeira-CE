@@ -521,51 +521,52 @@ async fn retrieve_cold_session(
     let read_handle =
         tokio::task::spawn_blocking(move || pkce_storage.get_session(&state_hash_clone));
 
-    let session_json = match tokio::time::timeout(std::time::Duration::from_secs(5), read_handle).await {
-        Ok(Ok(Ok(Some(json)))) => json,
-        Ok(Ok(Ok(None))) => {
-            tracing::warn!(
-                target: "audit",
-                request_id = %request_id,
-                outcome = "failure",
-                reason = "session_not_found",
-                "OAuth authentication failed: invalid or expired session"
-            );
-            return Err("Authentication failed. Please try again.".to_string());
-        }
-        Ok(Ok(Err(e))) => {
-            tracing::error!(
-                target: "security",
-                request_id = %request_id,
-                outcome = "failure",
-                reason = "session_read_failed",
-                error = %e,
-                "Failed to read persisted OAuth session from keyring"
-            );
-            return Err("Authentication failed. Please try again.".to_string());
-        }
-        Ok(Err(e)) => {
-            tracing::error!(
-                target: "security",
-                request_id = %request_id,
-                outcome = "failure",
-                reason = "session_read_task_failed",
-                error = %e,
-                "Failed to read persisted OAuth session: task join error"
-            );
-            return Err("Authentication failed. Please try again.".to_string());
-        }
-        Err(_) => {
-            tracing::error!(
-                target: "security",
-                request_id = %request_id,
-                outcome = "failure",
-                reason = "session_read_timed_out",
-                "Timed out reading persisted OAuth session from keyring"
-            );
-            return Err("Authentication failed. Please try again.".to_string());
-        }
-    };
+    let session_json =
+        match tokio::time::timeout(std::time::Duration::from_secs(5), read_handle).await {
+            Ok(Ok(Ok(Some(json)))) => json,
+            Ok(Ok(Ok(None))) => {
+                tracing::warn!(
+                    target: "audit",
+                    request_id = %request_id,
+                    outcome = "failure",
+                    reason = "session_not_found",
+                    "OAuth authentication failed: invalid or expired session"
+                );
+                return Err("Authentication failed. Please try again.".to_string());
+            }
+            Ok(Ok(Err(e))) => {
+                tracing::error!(
+                    target: "security",
+                    request_id = %request_id,
+                    outcome = "failure",
+                    reason = "session_read_failed",
+                    error = %e,
+                    "Failed to read persisted OAuth session from keyring"
+                );
+                return Err("Authentication failed. Please try again.".to_string());
+            }
+            Ok(Err(e)) => {
+                tracing::error!(
+                    target: "security",
+                    request_id = %request_id,
+                    outcome = "failure",
+                    reason = "session_read_task_failed",
+                    error = %e,
+                    "Failed to read persisted OAuth session: task join error"
+                );
+                return Err("Authentication failed. Please try again.".to_string());
+            }
+            Err(_) => {
+                tracing::error!(
+                    target: "security",
+                    request_id = %request_id,
+                    outcome = "failure",
+                    reason = "session_read_timed_out",
+                    "Timed out reading persisted OAuth session from keyring"
+                );
+                return Err("Authentication failed. Please try again.".to_string());
+            }
+        };
 
     if session_json.len() > MAX_SESSION_JSON_BYTES {
         tracing::warn!(
@@ -850,8 +851,19 @@ async fn create_oauth_user(
 }
 
 async fn generate_and_hash_oauth_password() -> Result<String, String> {
-    let mut bytes = [0u8; 32]; // 256 bits of entropy
-    getrandom::getrandom(&mut bytes).map_err(|e| {
+    // Wrap getrandom in spawn_blocking to avoid potential blocking on the async runtime.
+    // getrandom can block if the OS entropy pool is not initialized (e.g., on some Linux
+    // systems or VMs during early boot). This ensures the async runtime remains responsive.
+    let bytes = tauri::async_runtime::spawn_blocking(|| {
+        let mut bytes = [0u8; 32]; // 256 bits of entropy
+        getrandom::getrandom(&mut bytes).map(|_| bytes)
+    })
+    .await
+    .map_err(|e| {
+        tracing::error!("Task join error during random byte generation: {e}");
+        "Authentication failed".to_string()
+    })?
+    .map_err(|e| {
         tracing::error!("Failed to generate random bytes for OAuth password: {e}");
         "Authentication failed".to_string()
     })?;
