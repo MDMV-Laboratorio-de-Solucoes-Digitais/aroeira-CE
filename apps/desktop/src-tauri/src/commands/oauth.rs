@@ -120,23 +120,6 @@ pub async fn start_oauth_flow(
 ) -> Result<StartOAuthResponse, String> {
     let request_id = generate_request_id();
 
-    let device_id = get_device_id().map_err(|e| {
-        tracing::error!(
-            target: "security",
-            request_id = %request_id,
-            outcome = "failure",
-            reason = "device_id_unavailable",
-            error = %e,
-            "OAuth flow aborted: device ID unavailable"
-        );
-        "Authentication failed. Please try again.".to_string()
-    })?;
-
-    // Hash device_id for privacy in logs
-    let mut hasher = Sha256::new();
-    hasher.update(device_id.as_bytes());
-    let device_id_hash = infra::utils::encode_hex(hasher.finalize());
-
     // Generate authorization URL
     let (auth_url, session) = oauth_state
         .oauth_service
@@ -148,7 +131,6 @@ pub async fn start_oauth_flow(
                 request_id = %request_id,
                 outcome = "failure",
                 reason = "url_generation_failed",
-                device_id = %device_id_hash,
                 error = %e,
                 "OAuth URL generation failed"
             );
@@ -160,7 +142,6 @@ pub async fn start_oauth_flow(
         request_id = %request_id,
         action = "oauth_start",
         provider = %provider,
-        device_id = %device_id_hash,
         outcome = "started",
         "Starting OAuth flow"
     );
@@ -300,7 +281,6 @@ async fn exchange_code_for_user(
     session: &domain::modules::auth::oauth::OAuthPkceSession,
     code: String,
     request_id: &str,
-    device_id_hash: &str,
 ) -> Result<OAuthUser, String> {
     match oauth_state.oauth_service.exchange_code(session, code).await {
         Ok(user) => Ok(user),
@@ -310,7 +290,6 @@ async fn exchange_code_for_user(
                 request_id = %request_id,
                 outcome = "failure",
                 reason = "code_exchange_failed",
-                device_id = %device_id_hash,
                 "OAuth authentication failed: code exchange error"
             );
             // Only log debug OAuth details when explicitly enabled
@@ -417,12 +396,7 @@ pub async fn handle_oauth_callback(
         "Authentication failed. Please try again.".to_string()
     })?;
 
-    let mut hasher = Sha256::new();
-    hasher.update(device_id.as_bytes());
-    let device_id_hash = infra::utils::encode_hex(hasher.finalize());
-
-    let (code, state_param) =
-        validate_and_parse_callback(&callback_url, &request_id, &device_id_hash)?;
+    let (code, state_param) = validate_and_parse_callback(&callback_url, &request_id)?;
 
     let session = retrieve_session(&state_param, &oauth_state, &request_id)
         .await
@@ -438,30 +412,26 @@ pub async fn handle_oauth_callback(
                 request_id = %request_id,
                 outcome = "failure",
                 reason = "session_retrieval_failed",
-                device_id = %device_id_hash,
                 "OAuth session retrieval failed"
             );
         })?;
 
     let state_hash = state_hash(&state_param);
 
-    let user =
-        match exchange_code_for_user(&oauth_state, &session, code, &request_id, &device_id_hash)
-            .await
-        {
-            Ok(user) => user,
-            Err(e) => {
-                // Avoid leaving stale PKCE sessions persisted on terminal failure paths.
-                cleanup_invalid_persisted_session(&oauth_state, &state_hash, &request_id).await;
+    let user = match exchange_code_for_user(&oauth_state, &session, code, &request_id).await {
+        Ok(user) => user,
+        Err(e) => {
+            // Avoid leaving stale PKCE sessions persisted on terminal failure paths.
+            cleanup_invalid_persisted_session(&oauth_state, &state_hash, &request_id).await;
 
-                // Also ensure any warm session is removed to prevent inconsistent retries.
-                let _ = oauth_state
-                    .session_store
-                    .take_valid(&state_param, &request_id);
+            // Also ensure any warm session is removed to prevent inconsistent retries.
+            let _ = oauth_state
+                .session_store
+                .take_valid(&state_param, &request_id);
 
-                return Err(e);
-            }
-        };
+            return Err(e);
+        }
+    };
 
     let finalize_result = finalize_oauth_login(
         &user,

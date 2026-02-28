@@ -254,7 +254,6 @@ fn extract_and_validate_params(url: &Url) -> Result<(String, String), String> {
 pub fn validate_and_parse_callback(
     callback_url: &str,
     request_id: &str,
-    device_id_hash: &str,
 ) -> Result<(String, String), String> {
     const MAX_CALLBACK_LEN: usize = 8192;
 
@@ -265,7 +264,6 @@ pub fn validate_and_parse_callback(
             request_id = %request_id,
             outcome = "failure",
             reason = "callback_too_long",
-            device_id = %device_id_hash,
             "OAuth callback URL exceeded max length"
         );
         return Err("Invalid authentication request".to_string());
@@ -284,7 +282,6 @@ pub fn validate_and_parse_callback(
             request_id = %request_id,
             outcome = "failure",
             reason = "invalid_callback",
-            device_id = %device_id_hash,
             "OAuth authentication failed: invalid callback URL"
         );
     })?;
