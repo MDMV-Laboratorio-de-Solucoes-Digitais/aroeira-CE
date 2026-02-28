@@ -1,13 +1,12 @@
 use sea_orm_migration::prelude::*;
 
-#[derive(DeriveMigrationName)]
-pub struct Migration;
+#[derive(Clone, Copy, Debug, DeriveMigrationName)]
+pub(crate) struct Migration;
 
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Users Table
-        manager
+        match manager
             .create_table(
                 Table::create()
                     .table(Users::Table)
@@ -30,10 +29,13 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Users::VerificationTokenExpiresAt).date_time())
                     .to_owned(),
             )
-            .await?;
+            .await
+        {
+            Ok(()) => {}
+            Err(error) => return Err(error),
+        }
 
-        // Notes Table
-        manager
+        return manager
             .create_table(
                 Table::create()
                     .table(Notes::Table)
@@ -52,16 +54,21 @@ impl MigrationTrait for Migration {
                     )
                     .to_owned(),
             )
-            .await
+            .await;
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
+        match manager
             .drop_table(Table::drop().table(Notes::Table).to_owned())
-            .await?;
-        manager
-            .drop_table(Table::drop().table(Users::Table).to_owned())
             .await
+        {
+            Ok(()) => {}
+            Err(error) => return Err(error),
+        }
+
+        return manager
+            .drop_table(Table::drop().table(Users::Table).to_owned())
+            .await;
     }
 }
 

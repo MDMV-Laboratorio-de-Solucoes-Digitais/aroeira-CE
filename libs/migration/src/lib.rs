@@ -1,16 +1,21 @@
+// Required: sea-orm-migration trait uses elided lifetimes
+#![allow(elided_lifetimes_in_paths)]
+
 pub use sea_orm_migration::prelude::*;
+pub use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
-mod m20220101_000001_create_table;
-mod m20250210_000002_rename_owner_to_user;
+mod migration_20220101_create_table;
+mod migration_20250210_rename_owner_to_user;
 
+#[derive(Clone, Copy, Debug)]
 pub struct Migrator;
 
-#[async_trait::async_trait]
 impl MigratorTrait for Migrator {
+    #[inline]
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         vec![
-            Box::new(m20220101_000001_create_table::Migration),
-            Box::new(m20250210_000002_rename_owner_to_user::Migration),
+            Box::new(migration_20220101_create_table::Migration),
+            Box::new(migration_20250210_rename_owner_to_user::Migration),
         ]
     }
 }
