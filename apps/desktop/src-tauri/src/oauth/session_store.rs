@@ -42,7 +42,17 @@ impl OAuthSessionStore {
     #[must_use]
     pub fn take_valid(&self, state: &str, request_id: &str) -> Option<OAuthPkceSession> {
         let (expired_hashes, removed_state_hash_if_invalid, session_to_return) = {
-            let mut sessions = self.sessions.lock().expect("session store mutex poisoned");
+            let mut sessions = match self.sessions.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    tracing::warn!(
+                        target: "security",
+                        reason = "session_store_mutex_poisoned",
+                        "OAuth session store mutex was poisoned; recovering"
+                    );
+                    poisoned.into_inner()
+                }
+            };
 
             // Collect expired hashes so we can also delete persisted sessions from keyring.
             let expired_hashes: Vec<String> = sessions
@@ -99,7 +109,17 @@ impl OAuthSessionStore {
         const MAX_SESSIONS: usize = 512;
 
         let (expired_hashes, evicted_hash, pkce_storage) = {
-            let mut sessions = self.sessions.lock().expect("session store mutex poisoned");
+            let mut sessions = match self.sessions.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    tracing::warn!(
+                        target: "security",
+                        reason = "session_store_mutex_poisoned",
+                        "OAuth session store mutex was poisoned; recovering"
+                    );
+                    poisoned.into_inner()
+                }
+            };
 
             let expired_hashes = Self::collect_and_remove_expired(&mut sessions);
             let evicted_hash = Self::evict_if_full(&mut sessions, MAX_SESSIONS);
