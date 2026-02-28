@@ -89,6 +89,12 @@ pub struct KeyringPkceStorage;
 
 impl PkceSessionStorage for KeyringPkceStorage {
     fn save_session(&self, state_hash: &str, session_json: &str) -> Result<(), String> {
+        const MAX_SESSION_JSON_LEN: usize = 16 * 1024;
+
+        if session_json.len() > MAX_SESSION_JSON_LEN {
+            return Err("Session too large".to_string());
+        }
+
         #[cfg(not(test))]
         {
             let entry =
