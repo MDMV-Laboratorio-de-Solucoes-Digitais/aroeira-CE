@@ -11,7 +11,8 @@
 //! - Tokens stored in OS secure storage (not in this module)
 
 use crate::commands::auth::{
-    generate_request_id, get_device_id, handle_successful_login, hash_email_for_logging,
+    LoginContext, generate_request_id, get_device_id, handle_successful_login,
+    hash_email_for_logging,
 };
 use crate::oauth::session_store::OAuthSessionStore;
 use crate::oauth_utils::validate_and_parse_callback;
@@ -324,20 +325,8 @@ async fn finalize_oauth_login(
     )
     .map_err(|_| "Internal security error".to_string())?;
 
-    handle_successful_login(
-        user_id,
-        &email_hash,
-        device_id,
-        state.secure_storage.as_ref(),
-        state.jwt_secret.expose_secret(),
-        state.jwt_expiration_hours,
-        &state.jwt_issuer,
-        &state.jwt_audience,
-        &state.global_login_attempts,
-        &state.device_login_attempts,
-        &state.login_attempts,
-    )
-    .await?;
+    let login_ctx = LoginContext::from_state(state);
+    handle_successful_login(user_id, &email_hash, device_id, &login_ctx).await?;
     log_oauth_success(user_id, session, user, request_id);
 
     // Clean up persisted session now that login is successful

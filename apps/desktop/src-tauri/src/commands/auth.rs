@@ -394,6 +394,35 @@ struct RateLimitCheckContext<'a> {
     window_duration: Duration,
 }
 
+pub(crate) struct LoginContext<'a> {
+    pub(crate) secure_storage: &'a crate::services::secure_storage::SecureStorageEnum,
+    pub(crate) jwt_secret: &'a str,
+    pub(crate) jwt_expiration_hours: u64,
+    pub(crate) jwt_issuer: &'a str,
+    pub(crate) jwt_audience: &'a str,
+    pub(crate) global_login_attempts: &'a std::sync::Arc<tokio::sync::Mutex<RateLimitEntry>>,
+    pub(crate) device_login_attempts:
+        &'a std::sync::Arc<tokio::sync::Mutex<HashMap<String, RateLimitEntry>>>,
+    pub(crate) login_attempts:
+        &'a std::sync::Arc<tokio::sync::Mutex<HashMap<String, RateLimitEntry>>>,
+}
+
+impl<'a> LoginContext<'a> {
+    #[must_use]
+    pub(crate) fn from_state(state: &'a crate::state::AppState) -> Self {
+        Self {
+            secure_storage: state.secure_storage.as_ref(),
+            jwt_secret: state.jwt_secret.expose_secret(),
+            jwt_expiration_hours: state.jwt_expiration_hours,
+            jwt_issuer: &state.jwt_issuer,
+            jwt_audience: &state.jwt_audience,
+            global_login_attempts: &state.global_login_attempts,
+            device_login_attempts: &state.device_login_attempts,
+            login_attempts: &state.login_attempts,
+        }
+    }
+}
+
 fn check_all_rate_limits(ctx: &RateLimitCheckContext<'_>) -> Result<(), ErrorResponse> {
     check_global_rate_limit(ctx.global_entry, ctx.config, ctx.now, ctx.window_duration)?;
     check_device_rate_limit(
@@ -523,35 +552,25 @@ fn validate_login_inputs(email: &str, password: &SecretBox<str>) -> Result<Strin
 /// Handles successful login by creating JWT, storing it securely, and clearing rate limit attempts.
 ///
 /// Returns `Ok(())` on success, or `Err(error_message)` on failure.
-pub(crate) async fn handle_successful_login<S>(
+pub(crate) async fn handle_successful_login(
     user_id: Uuid,
     email_hash: &str,
     device_id: &str,
-    secure_storage: &S,
-    jwt_secret: &str,
-    jwt_expiration_hours: u64,
-    jwt_issuer: &str,
-    jwt_audience: &str,
-    global_login_attempts: &std::sync::Arc<tokio::sync::Mutex<RateLimitEntry>>,
-    device_login_attempts: &std::sync::Arc<tokio::sync::Mutex<HashMap<String, RateLimitEntry>>>,
-    login_attempts: &std::sync::Arc<tokio::sync::Mutex<HashMap<String, RateLimitEntry>>>,
-) -> Result<(), String>
-where
-    S: crate::services::secure_storage::SecureStorage,
-{
+    context: &LoginContext<'_>,
+) -> Result<(), String> {
     let token = create_jwt(
         user_id,
-        jwt_secret,
-        jwt_expiration_hours,
-        jwt_issuer,
-        jwt_audience,
+        context.jwt_secret,
+        context.jwt_expiration_hours,
+        context.jwt_issuer,
+        context.jwt_audience,
     )
     .map_err(|_| {
         error!(user_id = %user_id, action = "login", outcome = "failure", reason = "jwt_creation_error");
         ErrorResponse::from_code(ErrorCode::InternalError).to_string()
     })?;
 
-    if let Err(e) = secure_storage.save(AUTH_TOKEN_KEY, &token).await {
+    if let Err(e) = context.secure_storage.save(AUTH_TOKEN_KEY, &token).await {
         error!(user_id = %user_id, action = "login", outcome = "failure", reason = "secure_storage_error", error = %e);
         return Err(ErrorResponse::new(
             ErrorCode::SecureStorageError,
@@ -561,18 +580,18 @@ where
     }
 
     {
-        let mut global_entry = global_login_attempts.lock().await;
+        let mut global_entry = context.global_login_attempts.lock().await;
         global_entry.attempts.clear();
         global_entry.consecutive_failures = 0;
     }
 
     {
-        let mut attempts = device_login_attempts.lock().await;
+        let mut attempts = context.device_login_attempts.lock().await;
         attempts.remove(device_id);
     }
 
     {
-        let mut attempts = login_attempts.lock().await;
+        let mut attempts = context.login_attempts.lock().await;
         attempts.remove(email_hash);
     }
 
@@ -1104,20 +1123,8 @@ pub async fn login(
         SECURITY_METRICS.increment_successful_auth_attempts();
 
         tracing::info!(user_id = %uid, action = "login", outcome = "success");
-        handle_successful_login(
-            uid,
-            &email_hash,
-            &device_id,
-            state.secure_storage.as_ref(),
-            state.jwt_secret.expose_secret(),
-            state.jwt_expiration_hours,
-            &state.jwt_issuer,
-            &state.jwt_audience,
-            &state.global_login_attempts,
-            &state.device_login_attempts,
-            &state.login_attempts,
-        )
-        .await?;
+        let login_ctx = LoginContext::from_state(&state);
+        handle_successful_login(uid, &email_hash, &device_id, &login_ctx).await?;
         return Ok(());
     }
 
