@@ -381,8 +381,12 @@ impl OAuthServiceImpl {
             OAuthError::ProviderNotConfigured(format!("Invalid {context} URL format: {e}"))
         })?;
 
-        // Extra hardening: disallow credentials and fragments in provider endpoints.
-        if !u.username().is_empty() || u.password().is_some() || u.fragment().is_some() {
+        // Extra hardening: disallow credentials, fragments, and queries in provider endpoints.
+        if !u.username().is_empty()
+            || u.password().is_some()
+            || u.fragment().is_some()
+            || u.query().is_some()
+        {
             return Err(OAuthError::ProviderNotConfigured(format!(
                 "Invalid {context} URL: contains disallowed components"
             )));
