@@ -6,7 +6,7 @@ use axum::{
 use serde_json::json;
 use thiserror::Error;
 
-#[derive(Clone, Debug, Error)]
+#[derive(Debug, Error)]
 pub enum AppError {
     #[error("Environment variable error: {0}")]
     EnvError(#[from] std::env::VarError),
