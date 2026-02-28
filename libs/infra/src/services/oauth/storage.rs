@@ -63,6 +63,12 @@ pub struct KeyringTokenStorage;
 
 impl TokenStorage for KeyringTokenStorage {
     fn store(&self, service: &str, user_key: &str, secret: &str) -> Result<(), String> {
+        const MAX_SECRET_LEN: usize = 16 * 1024;
+
+        if secret.len() > MAX_SECRET_LEN {
+            return Err("Secret too large".to_string());
+        }
+
         #[cfg(not(test))]
         {
             let entry = Entry::new(service, user_key).map_err(|e| e.to_string())?;
