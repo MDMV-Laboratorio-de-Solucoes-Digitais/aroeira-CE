@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -31,7 +30,7 @@ pub enum NoteError {
 }
 
 // Port (Interface)
-#[async_trait]
+#[allow(async_fn_in_trait)]
 pub trait NoteRepository: Send + Sync {
     async fn find_all_by_user(&self, user_id: Uuid) -> Result<Vec<Note>, NoteError>;
     async fn find_by_id(&self, id: Uuid) -> Result<Option<Note>, NoteError>;

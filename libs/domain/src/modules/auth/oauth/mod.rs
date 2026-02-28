@@ -10,7 +10,6 @@
 //! - State parameter provides CSRF protection
 //! - Sessions expire after 10 minutes to limit attack window
 
-use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -224,7 +223,7 @@ pub struct OAuthUser {
 /// - Uses PKCE flow (no client secret required)
 /// - Session management is caller's responsibility
 /// - Returns normalized `OAuthUser` regardless of provider
-#[async_trait]
+#[allow(async_fn_in_trait)]
 pub trait OAuthService: Send + Sync {
     /// Generates authorization URL and PKCE session.
     ///

@@ -1,5 +1,6 @@
 use crate::database::entities::users;
 use crate::database::utils::is_unique_constraint_violation;
+use crate::utils::encode_hex;
 use chrono::Utc;
 use domain::modules::auth::{AuthError, User, UserRepository};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, prelude::*};
@@ -32,7 +33,6 @@ impl UserRepositoryImpl {
     }
 }
 
-#[async_trait::async_trait]
 impl UserRepository for UserRepositoryImpl {
     async fn find_by_email(&self, email: &str) -> Result<Option<User>, AuthError> {
         let model = users::Entity::find()
@@ -77,7 +77,7 @@ impl UserRepository for UserRepositoryImpl {
 
         let mut hasher = Sha256::new();
         hasher.update(token.as_bytes());
-        let token_hash = hex::encode(hasher.finalize());
+        let token_hash = encode_hex(hasher.finalize());
 
         let model = users::Entity::find()
             .filter(users::Column::VerificationToken.eq(token_hash))

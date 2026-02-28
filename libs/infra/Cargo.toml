@@ -4,6 +4,7 @@ version = "0.1.0-alpha"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
+license = "MIT"
 
 [lib]
 path = "src/lib.rs"
@@ -23,12 +24,10 @@ bcrypt = { workspace = true }
 jsonwebtoken = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }
-hex = { workspace = true }
 secrecy = { workspace = true }
 oauth2 = { workspace = true, features = ["reqwest"] }
 reqwest = { workspace = true }
 url = { workspace = true }
-once_cell = { workspace = true }
 
 # Async Runtime
 tokio = { workspace = true }
@@ -47,7 +46,6 @@ serde_json = { workspace = true }
 # Utilities
 chrono = { workspace = true }
 uuid = { workspace = true }
-async-trait = { workspace = true }
 walkdir = { workspace = true }
 percent-encoding = { workspace = true }
 which = { workspace = true }

@@ -18,7 +18,6 @@ impl Default for MockEmailService {
     }
 }
 
-#[async_trait::async_trait]
 impl EmailService for MockEmailService {
     async fn send_verification_email(&self, _email: &str, _token: &str) -> Result<(), AuthError> {
         // SECURITY: Never log tokens, even partially, as this could aid attackers
@@ -54,7 +53,6 @@ impl Default for SmtpEmailService {
     }
 }
 
-#[async_trait::async_trait]
 impl EmailService for SmtpEmailService {
     async fn send_verification_email(&self, _email: &str, _token: &str) -> Result<(), AuthError> {
         // Placeholder for real SMTP implementation

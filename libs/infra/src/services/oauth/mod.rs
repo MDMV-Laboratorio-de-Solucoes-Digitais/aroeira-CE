@@ -9,13 +9,15 @@ mod tests;
 
 pub use client::{OAuthHttpClientError, async_http_client, read_response_body_with_limit};
 pub use models::{GitHubEmail, GitHubUserInfo, GoogleUserInfo};
-pub use storage::{KeyringPkceStorage, KeyringTokenStorage, PkceSessionStorage, TokenStorage};
+pub use storage::{
+    KeyringPkceStorage, KeyringTokenStorage, MockPkceStorage, MockTokenStorage, PkceSessionStorage,
+    PkceSessionStorageEnum, TokenStorage, TokenStorageEnum,
+};
 
-use async_trait::async_trait;
+use crate::utils::encode_hex;
 use domain::modules::auth::oauth::{
     AuthProvider, OAuthError, OAuthPkceSession, OAuthService, OAuthUser,
 };
-use hex;
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge, PkceCodeVerifier,
     RedirectUrl, Scope, TokenResponse, TokenUrl,
@@ -79,7 +81,7 @@ impl OAuthConfig {
 
 pub struct OAuthServiceImpl {
     pub config: OAuthConfig,
-    token_storage: std::sync::Arc<dyn TokenStorage>,
+    token_storage: TokenStorageEnum,
 }
 
 impl OAuthServiceImpl {
@@ -96,16 +98,13 @@ impl OAuthServiceImpl {
     pub fn new(config: OAuthConfig) -> Self {
         Self {
             config,
-            token_storage: std::sync::Arc::new(KeyringTokenStorage),
+            token_storage: TokenStorageEnum::new_keyring(),
         }
     }
 
     #[cfg(test)]
     #[must_use]
-    pub fn new_with_storage(
-        config: OAuthConfig,
-        storage: std::sync::Arc<dyn TokenStorage>,
-    ) -> Self {
+    pub fn new_with_storage(config: OAuthConfig, storage: TokenStorageEnum) -> Self {
         Self {
             config,
             token_storage: storage,
@@ -448,7 +447,6 @@ impl OAuthServiceImpl {
     }
 }
 
-#[async_trait]
 impl OAuthService for OAuthServiceImpl {
     async fn generate_authorization_url(
         &self,
@@ -477,7 +475,7 @@ impl OAuthService for OAuthServiceImpl {
 
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
-        let state = hex::encode(Sha256::digest(Uuid::new_v4().as_bytes()));
+        let state = encode_hex(Sha256::digest(Uuid::new_v4().as_bytes()));
         let mut auth_request = client.authorize_url(|| CsrfToken::new(state.clone()));
         for scope in Self::get_scopes(provider) {
             auth_request = auth_request.add_scope(scope);
@@ -627,7 +625,7 @@ const MAX_TOKEN_PAYLOAD_BYTES: usize = 16 * 1024;
 const MAX_TOKEN_LENGTH: usize = 8 * 1024;
 
 async fn store_tokens(
-    storage: &std::sync::Arc<dyn TokenStorage>,
+    storage: &TokenStorageEnum,
     user: &OAuthUser,
     token_result: &oauth2::StandardTokenResponse<
         oauth2::EmptyExtraTokenFields,
@@ -643,7 +641,7 @@ async fn store_tokens(
     let mut hasher = Sha256::new();
 
     hasher.update(user_key.as_bytes());
-    let user_key_hash = hex::encode(hasher.finalize());
+    let user_key_hash = encode_hex(hasher.finalize());
 
     let access_token = token_result.access_token().secret().clone();
     if access_token.trim().is_empty() || access_token.len() > MAX_TOKEN_LENGTH {
@@ -664,7 +662,6 @@ async fn store_tokens(
         token_payload["refresh_token"] = serde_json::Value::String(rt);
     }
 
-    let storage = storage.clone();
     let token_payload_str = token_payload.to_string();
     if token_payload_str.len() > MAX_TOKEN_PAYLOAD_BYTES {
         return Err(OAuthError::TokenRequestFailed(
@@ -673,10 +670,11 @@ async fn store_tokens(
     }
 
     let user_key_hash_for_store = user_key_hash.clone();
+    let storage_clone = storage.clone();
 
     let store_result = tokio::task::spawn_blocking(move || {
         let service_name = TOKEN_KEYRING_SERVICE.to_string();
-        storage.store(&service_name, &user_key_hash_for_store, &token_payload_str)
+        storage_clone.store(&service_name, &user_key_hash_for_store, &token_payload_str)
     })
     .await
     .map_err(|e| format!("Task join error: {e}"))

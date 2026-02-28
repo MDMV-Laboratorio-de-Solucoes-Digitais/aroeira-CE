@@ -31,7 +31,6 @@ impl NoteRepositoryImpl {
     }
 }
 
-#[async_trait::async_trait]
 impl NoteRepository for NoteRepositoryImpl {
     async fn find_all_by_user(&self, user_id: Uuid) -> Result<Vec<Note>, NoteError> {
         let models = notes::Entity::find()

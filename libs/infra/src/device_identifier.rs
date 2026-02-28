@@ -7,8 +7,9 @@
 //! 4. Includes cryptographic signature to prevent tampering
 //! 5. Never falls back to ephemeral IDs
 
+use crate::security::SecureFileCreator;
+use crate::utils::encode_hex;
 use dirs;
-use hex;
 use hmac::{Hmac, Mac};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -18,9 +19,6 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 use uuid::Uuid;
 
-use crate::security::SecureFileCreator;
-
-/// Key storage structure for HMAC key rotation
 #[derive(Serialize, Deserialize, Clone)]
 pub struct KeyStore {
     current_key: String, // Store as string for serialization
@@ -61,7 +59,7 @@ impl KeyStore {
         hasher.update(nonce.as_bytes());
         let digest = hasher.finalize();
 
-        Ok(hex::encode(digest))
+        Ok(encode_hex(digest))
     }
 
     /// Check if rotation is needed based on interval
@@ -195,7 +193,7 @@ impl DeviceIdentifier {
         let mut mac = Hmac::<Sha256>::new_from_slice(key.expose_secret().as_bytes())?;
         mac.update(enhanced_id.as_bytes());
         let result = mac.finalize();
-        let signature = hex::encode(result.into_bytes());
+        let signature = encode_hex(result.into_bytes());
 
         Ok(Self {
             id: enhanced_id,
@@ -237,7 +235,7 @@ impl DeviceIdentifier {
         let legacy_key = Self::get_legacy_signature_key()?;
         let mut mac = Hmac::<Sha256>::new_from_slice(legacy_key.expose_secret().as_bytes())?;
         mac.update(self.id.as_bytes());
-        let expected_signature = hex::encode(mac.finalize().into_bytes());
+        let expected_signature = encode_hex(mac.finalize().into_bytes());
 
         Ok((self.signature == expected_signature, None))
     }
@@ -250,7 +248,7 @@ impl DeviceIdentifier {
     pub fn validate_with_key(id: &str, signature: &str, key: &str) -> Result<bool, anyhow::Error> {
         let mut mac = Hmac::<Sha256>::new_from_slice(key.as_bytes())?;
         mac.update(id.as_bytes());
-        let expected_signature = hex::encode(mac.finalize().into_bytes());
+        let expected_signature = encode_hex(mac.finalize().into_bytes());
 
         Ok(signature == expected_signature)
     }
@@ -260,7 +258,7 @@ impl DeviceIdentifier {
         let mut mac = Hmac::<Sha256>::new_from_slice(key.as_bytes())?;
         mac.update(id.as_bytes());
         let result = mac.finalize();
-        Ok(hex::encode(result.into_bytes()))
+        Ok(encode_hex(result.into_bytes()))
     }
 
     /// Get legacy signature key from platform-specific entropy (kept for fallback compatibility)
@@ -429,7 +427,7 @@ impl DeviceIdentifier {
         let mut hasher = Sha256::new();
         hasher.update(enhanced.as_bytes());
         let result = hasher.finalize();
-        Ok(format!("dev_{}", hex::encode(result)))
+        Ok(format!("dev_{}", encode_hex(result)))
     }
 
     /// Get device config directory

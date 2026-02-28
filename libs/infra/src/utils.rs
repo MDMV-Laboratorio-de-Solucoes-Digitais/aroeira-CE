@@ -5,6 +5,19 @@ const DEFAULT_COST: u32 = 12;
 const MIN_COST: u32 = 10;
 const MAX_COST: u32 = 16;
 
+/// Encodes bytes as a lowercase hexadecimal string.
+#[must_use]
+pub fn encode_hex<B: AsRef<[u8]>>(bytes: B) -> String {
+    const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
+    let bytes = bytes.as_ref();
+    let mut result = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        result.push(HEX_CHARS[(byte >> 4) as usize] as char);
+        result.push(HEX_CHARS[(byte & 0x0f) as usize] as char);
+    }
+    result
+}
+
 // Get bcrypt cost from environment or use default
 fn get_bcrypt_cost() -> u32 {
     let cost = std::env::var("BCRYPT_COST")
@@ -127,5 +140,17 @@ mod tests {
             let _g = EnvGuard::unset("BCRYPT_COST");
             assert_eq!(get_bcrypt_cost(), DEFAULT_COST);
         }
+    }
+
+    #[test]
+    fn test_encode_hex() {
+        assert_eq!(super::encode_hex(&[]), "");
+        assert_eq!(super::encode_hex(&[0x00]), "00");
+        assert_eq!(super::encode_hex(&[0xff]), "ff");
+        assert_eq!(
+            super::encode_hex(&[0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]),
+            "0123456789abcdef"
+        );
+        assert_eq!(super::encode_hex(&[0xde, 0xad, 0xbe, 0xef]), "deadbeef");
     }
 }

@@ -58,6 +58,7 @@ pub trait PkceSessionStorage: Send + Sync {
 }
 
 /// Default implementation using OS keyring.
+#[derive(Clone)]
 pub struct KeyringTokenStorage;
 
 impl TokenStorage for KeyringTokenStorage {
@@ -77,6 +78,7 @@ impl TokenStorage for KeyringTokenStorage {
 }
 
 /// Default implementation of `PkceSessionStorage` using OS keyring.
+#[derive(Clone)]
 pub struct KeyringPkceStorage;
 
 impl PkceSessionStorage for KeyringPkceStorage {
@@ -130,5 +132,163 @@ impl PkceSessionStorage for KeyringPkceStorage {
             let _ = state_hash;
             Ok(())
         }
+    }
+}
+
+// ===========================================
+// Enum Dispatch Wrappers
+// ===========================================
+
+/// Enum wrapper for `TokenStorage` implementations.
+#[derive(Clone)]
+pub enum TokenStorageEnum {
+    /// Production keyring storage.
+    Keyring(KeyringTokenStorage),
+    /// Mock storage for testing.
+    Mock(std::sync::Arc<MockTokenStorage>),
+}
+
+impl TokenStorageEnum {
+    /// Creates a new keyring-based token storage.
+    #[must_use]
+    pub fn new_keyring() -> Self {
+        Self::Keyring(KeyringTokenStorage)
+    }
+
+    /// Creates a new mock token storage for testing.
+    #[must_use]
+    pub fn new_mock() -> Self {
+        Self::Mock(std::sync::Arc::new(MockTokenStorage::new()))
+    }
+}
+
+impl TokenStorage for TokenStorageEnum {
+    fn store(&self, service: &str, user_key: &str, secret: &str) -> Result<(), String> {
+        match self {
+            Self::Keyring(storage) => storage.store(service, user_key, secret),
+            Self::Mock(mock) => mock.store(service, user_key, secret),
+        }
+    }
+}
+
+/// Enum wrapper for `PkceSessionStorage` implementations.
+#[derive(Clone)]
+pub enum PkceSessionStorageEnum {
+    /// Production keyring storage.
+    Keyring(KeyringPkceStorage),
+    /// Mock storage for testing.
+    Mock(std::sync::Arc<MockPkceStorage>),
+}
+
+impl PkceSessionStorageEnum {
+    /// Creates a new keyring-based PKCE storage.
+    #[must_use]
+    pub fn new_keyring() -> Self {
+        Self::Keyring(KeyringPkceStorage)
+    }
+
+    /// Creates a new mock PKCE storage for testing.
+    #[must_use]
+    pub fn new_mock() -> Self {
+        Self::Mock(std::sync::Arc::new(MockPkceStorage::new()))
+    }
+}
+
+impl PkceSessionStorage for PkceSessionStorageEnum {
+    fn save_session(&self, state_hash: &str, session_json: &str) -> Result<(), String> {
+        match self {
+            Self::Keyring(storage) => storage.save_session(state_hash, session_json),
+            Self::Mock(mock) => mock.save_session(state_hash, session_json),
+        }
+    }
+
+    fn get_session(&self, state_hash: &str) -> Result<Option<String>, String> {
+        match self {
+            Self::Keyring(storage) => storage.get_session(state_hash),
+            Self::Mock(mock) => mock.get_session(state_hash),
+        }
+    }
+
+    fn delete_session(&self, state_hash: &str) -> Result<(), String> {
+        match self {
+            Self::Keyring(storage) => storage.delete_session(state_hash),
+            Self::Mock(mock) => mock.delete_session(state_hash),
+        }
+    }
+}
+
+// ===========================================
+// Mock Implementations
+// ===========================================
+
+/// Mock token storage for testing.
+pub struct MockTokenStorage {
+    storage: std::sync::RwLock<std::collections::HashMap<String, String>>,
+}
+
+impl MockTokenStorage {
+    /// Creates a new empty mock storage.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            storage: std::sync::RwLock::new(std::collections::HashMap::new()),
+        }
+    }
+}
+
+impl Default for MockTokenStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TokenStorage for MockTokenStorage {
+    fn store(&self, service: &str, user_key: &str, secret: &str) -> Result<(), String> {
+        let key = format!("{service}:{user_key}");
+        self.storage
+            .write()
+            .unwrap()
+            .insert(key, secret.to_string());
+        Ok(())
+    }
+}
+
+/// Mock PKCE storage for testing.
+pub struct MockPkceStorage {
+    sessions: std::sync::RwLock<std::collections::HashMap<String, String>>,
+}
+
+impl MockPkceStorage {
+    /// Creates a new empty mock storage.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            sessions: std::sync::RwLock::new(std::collections::HashMap::new()),
+        }
+    }
+}
+
+impl Default for MockPkceStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PkceSessionStorage for MockPkceStorage {
+    fn save_session(&self, state_hash: &str, session_json: &str) -> Result<(), String> {
+        self.sessions
+            .write()
+            .unwrap()
+            .insert(state_hash.to_string(), session_json.to_string());
+        Ok(())
+    }
+
+    fn get_session(&self, state_hash: &str) -> Result<Option<String>, String> {
+        Ok(self.sessions.read().unwrap().get(state_hash).cloned())
+    }
+
+    fn delete_session(&self, state_hash: &str) -> Result<(), String> {
+        self.sessions.write().unwrap().remove(state_hash);
+        Ok(())
     }
 }
