@@ -178,9 +178,19 @@ impl OAuthPkceSession {
     ///
     /// Sessions expire after 10 minutes to limit the attack window
     /// if a state token is somehow leaked.
+    ///
+    /// Also rejects sessions with future timestamps to prevent
+    /// artificial lifetime extension attacks.
     #[must_use]
     pub fn is_expired(&self) -> bool {
-        let age = Utc::now().signed_duration_since(self.created_at);
+        let now = Utc::now();
+
+        // Defensive: future timestamps should never extend session lifetime.
+        if self.created_at > now {
+            return true;
+        }
+
+        let age = now.signed_duration_since(self.created_at);
         age > Duration::minutes(Self::SESSION_TTL_MINUTES)
     }
 }
