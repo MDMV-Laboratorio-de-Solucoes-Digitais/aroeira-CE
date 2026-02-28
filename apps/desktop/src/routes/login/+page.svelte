@@ -251,8 +251,10 @@
       oauthTimeout = null;
     }
 
+    // Only clear loading state, NOT localStorage - allow OAuth callback
+    // to complete after component remount (e.g., during hot reload or navigation)
     if (oauthLoading !== null) {
-      resetOAuthState();
+      oauthLoading = null;
     }
   });
 
