@@ -65,6 +65,7 @@ winreg = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+temp-env = { version = "0.3", features = ["async_closure"] }
 tracing-subscriber = { workspace = true }
 sea-orm = { workspace = true, features = ["mock"] }
 wiremock = "0.6"
