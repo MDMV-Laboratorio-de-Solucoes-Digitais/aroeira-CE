@@ -401,7 +401,7 @@ pub async fn handle_oauth_callback(
     tracing::info!(
         target: "oauth_debug",
         request_id = %request_id,
-        callback_path = "/auth/callback",
+        callback_path = "/callback",
         "OAuth callback received"
     );
 

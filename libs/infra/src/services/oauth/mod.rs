@@ -362,7 +362,7 @@ impl OAuthServiceImpl {
             && ru_url.scheme() == "http"
             && ru_url.host_str() == Some("localhost")
             && ru_url.port() == Some(dev_port)
-            && ru_url.path() == "/auth/callback"
+            && ru_url.path() == OAUTH_CALLBACK_PATH
             && ru_url.query().is_none()
             && ru_url.fragment().is_none();
 
