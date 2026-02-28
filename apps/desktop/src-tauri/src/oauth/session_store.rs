@@ -1,9 +1,8 @@
 use domain::modules::auth::oauth::OAuthPkceSession;
-use infra::services::oauth::{KeyringPkceStorage, PkceSessionStorage};
-use parking_lot::Mutex;
+use infra::services::oauth::{PkceSessionStorage, PkceSessionStorageEnum};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Thread-safe storage for OAuth PKCE sessions.
 ///
@@ -12,7 +11,7 @@ use std::sync::Arc;
 /// 2. Receiving the callback with authorization code
 ///
 /// Sessions are automatically cleaned up when expired.
-/// Uses `parking_lot::Mutex` for better async performance.
+/// Uses `std::sync::Mutex` for thread-safe access.
 ///
 /// # Security Note
 ///
@@ -21,13 +20,13 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct OAuthSessionStore {
     sessions: Arc<Mutex<HashMap<String, OAuthPkceSession>>>,
-    pkce_storage: Arc<dyn PkceSessionStorage>,
+    pkce_storage: PkceSessionStorageEnum,
 }
 
 impl OAuthSessionStore {
     /// Creates a new empty session store with keyring storage.
     #[must_use]
-    pub fn new(pkce_storage: Arc<dyn PkceSessionStorage>) -> Self {
+    pub fn new(pkce_storage: PkceSessionStorageEnum) -> Self {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             pkce_storage,
@@ -43,13 +42,13 @@ impl OAuthSessionStore {
     #[must_use]
     pub fn take_valid(&self, state: &str, request_id: &str) -> Option<OAuthPkceSession> {
         let (expired_hashes, removed_state_hash_if_invalid, session_to_return) = {
-            let mut sessions = self.sessions.lock();
+            let mut sessions = self.sessions.lock().expect("session store mutex poisoned");
 
             // Collect expired hashes so we can also delete persisted sessions from keyring.
             let expired_hashes: Vec<String> = sessions
                 .iter()
                 .filter(|&(_k, s)| s.is_expired())
-                .map(|(k, _s)| hex::encode(Sha256::digest(k.as_bytes())))
+                .map(|(k, _s)| infra::utils::encode_hex(Sha256::digest(k.as_bytes())))
                 .collect();
 
             sessions.retain(|_, s| !s.is_expired());
@@ -73,7 +72,7 @@ impl OAuthSessionStore {
 
                 sessions.remove(state);
                 let removed_state_hash_if_invalid =
-                    Some(hex::encode(Sha256::digest(state.as_bytes())));
+                    Some(infra::utils::encode_hex(Sha256::digest(state.as_bytes())));
 
                 (expired_hashes, removed_state_hash_if_invalid, None)
             } else {
@@ -100,7 +99,7 @@ impl OAuthSessionStore {
         const MAX_SESSIONS: usize = 512;
 
         let (expired_hashes, evicted_hash, pkce_storage) = {
-            let mut sessions = self.sessions.lock();
+            let mut sessions = self.sessions.lock().expect("session store mutex poisoned");
 
             let expired_hashes = Self::collect_and_remove_expired(&mut sessions);
             let evicted_hash = Self::evict_if_full(&mut sessions, MAX_SESSIONS);
@@ -118,7 +117,7 @@ impl OAuthSessionStore {
         let expired_hashes: Vec<String> = sessions
             .iter()
             .filter(|&(_k, s)| s.is_expired())
-            .map(|(k, _)| hex::encode(Sha256::digest(k.as_bytes())))
+            .map(|(k, _)| infra::utils::encode_hex(Sha256::digest(k.as_bytes())))
             .collect();
 
         // Clean up expired sessions
@@ -142,7 +141,7 @@ impl OAuthSessionStore {
             .map(|(k, _)| k.clone());
 
         oldest_key.map(|key| {
-            let state_hash = hex::encode(Sha256::digest(key.as_bytes()));
+            let state_hash = infra::utils::encode_hex(Sha256::digest(key.as_bytes()));
             tracing::warn!(
                 target: "security",
                 reason = "session_store_full",
@@ -157,7 +156,7 @@ impl OAuthSessionStore {
     fn perform_keyring_cleanup(
         expired_hashes: Vec<String>,
         evicted_hash: Option<String>,
-        pkce_storage: &Arc<dyn PkceSessionStorage>,
+        pkce_storage: &PkceSessionStorageEnum,
     ) {
         if expired_hashes.is_empty() && evicted_hash.is_none() {
             return;
@@ -235,8 +234,7 @@ impl OAuthSessionStore {
 
 impl Default for OAuthSessionStore {
     fn default() -> Self {
-        let pkce_storage: Arc<dyn PkceSessionStorage> = Arc::new(KeyringPkceStorage);
-        Self::new(pkce_storage)
+        Self::new(PkceSessionStorageEnum::new_keyring())
     }
 }
 
@@ -244,23 +242,12 @@ impl Default for OAuthSessionStore {
 mod tests {
     use super::*;
     use domain::modules::auth::oauth::{AuthProvider, OAuthPkceSession};
-
-    /// Mock PKCE storage for testing that does nothing (no-op).
-    struct MockPkceStorage;
-    impl PkceSessionStorage for MockPkceStorage {
-        fn save_session(&self, _state_hash: &str, _session: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn get_session(&self, _state_hash: &str) -> Result<Option<String>, String> {
-            Ok(None)
-        }
-        fn delete_session(&self, _state_hash: &str) -> Result<(), String> {
-            Ok(())
-        }
-    }
+    use infra::services::oauth::MockPkceStorage;
 
     fn create_mock_store() -> OAuthSessionStore {
-        OAuthSessionStore::new(Arc::new(MockPkceStorage))
+        OAuthSessionStore::new(PkceSessionStorageEnum::Mock(std::sync::Arc::new(
+            MockPkceStorage::new(),
+        )))
     }
 
     #[test]

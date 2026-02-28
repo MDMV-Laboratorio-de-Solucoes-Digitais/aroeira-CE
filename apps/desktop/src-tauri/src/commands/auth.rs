@@ -1,6 +1,7 @@
 use crate::error_codes::{ErrorCode, ErrorResponse};
-use crate::services::secure_storage::AUTH_TOKEN_KEY;
+use crate::services::secure_storage::{AUTH_TOKEN_KEY, SecureStorage};
 use crate::state::{AppState, RateLimitEntry};
+use domain::modules::auth::{EmailService, UserRepository};
 use hmac::{Hmac, Mac};
 use infra::device_identifier::get_or_create_device_id as get_secure_device_id;
 use infra::services::auth::create_jwt;
@@ -217,7 +218,7 @@ fn generate_verification_token() -> String {
 
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
-    hex::encode(bytes)
+    infra::utils::encode_hex(bytes)
 }
 
 /// Helper function to generate a HMAC-SHA256 hash of an email using a secret key
@@ -240,7 +241,7 @@ pub(crate) fn hash_email_for_logging(email: &str, key: &[u8]) -> Result<String, 
 
     mac.update(email.as_bytes());
     let result = mac.finalize();
-    Ok(hex::encode(result.into_bytes()))
+    Ok(infra::utils::encode_hex(result.into_bytes()))
 }
 
 /// Helper function to generate a HMAC-SHA256 hash of a device ID using a secret key
@@ -263,7 +264,7 @@ fn hash_device_id_for_logging(device_id: &str, key: &[u8]) -> Result<String, Str
 
     mac.update(device_id.as_bytes());
     let result = mac.finalize();
-    Ok(hex::encode(result.into_bytes()))
+    Ok(infra::utils::encode_hex(result.into_bytes()))
 }
 
 /// Configuration for rate limiting
@@ -522,26 +523,35 @@ fn validate_login_inputs(email: &str, password: &SecretBox<str>) -> Result<Strin
 /// Handles successful login by creating JWT, storing it securely, and clearing rate limit attempts.
 ///
 /// Returns `Ok(())` on success, or `Err(error_message)` on failure.
-pub(crate) async fn handle_successful_login(
+pub(crate) async fn handle_successful_login<S>(
     user_id: Uuid,
     email_hash: &str,
     device_id: &str,
-    state: &AppState,
-) -> Result<(), String> {
+    secure_storage: &S,
+    jwt_secret: &str,
+    jwt_expiration_hours: u64,
+    jwt_issuer: &str,
+    jwt_audience: &str,
+    global_login_attempts: &std::sync::Arc<tokio::sync::Mutex<RateLimitEntry>>,
+    device_login_attempts: &std::sync::Arc<tokio::sync::Mutex<HashMap<String, RateLimitEntry>>>,
+    login_attempts: &std::sync::Arc<tokio::sync::Mutex<HashMap<String, RateLimitEntry>>>,
+) -> Result<(), String>
+where
+    S: crate::services::secure_storage::SecureStorage,
+{
     let token = create_jwt(
         user_id,
-        state.jwt_secret.expose_secret(),
-        state.jwt_expiration_hours,
-        &state.jwt_issuer,
-        &state.jwt_audience,
+        jwt_secret,
+        jwt_expiration_hours,
+        jwt_issuer,
+        jwt_audience,
     )
     .map_err(|_| {
         error!(user_id = %user_id, action = "login", outcome = "failure", reason = "jwt_creation_error");
         ErrorResponse::from_code(ErrorCode::InternalError).to_string()
     })?;
 
-    // Store token securely using file-based secure storage
-    if let Err(e) = state.secure_storage.save(AUTH_TOKEN_KEY, &token).await {
+    if let Err(e) = secure_storage.save(AUTH_TOKEN_KEY, &token).await {
         error!(user_id = %user_id, action = "login", outcome = "failure", reason = "secure_storage_error", error = %e);
         return Err(ErrorResponse::new(
             ErrorCode::SecureStorageError,
@@ -550,28 +560,19 @@ pub(crate) async fn handle_successful_login(
         .into());
     }
 
-    // Clear all rate limit buckets on successful authentication to prevent asymmetric reset
-    // This addresses RL-002: Asymmetric Rate Limit Reset vulnerability
-    //
-    // Locks are acquired in consistent order: global -> device -> email
-    // This prevents deadlocks with check_and_record_rate_limit which uses the same order
-
-    // Clear global rate limit attempts (symmetric reset)
     {
-        let mut global_entry = state.global_login_attempts.lock().await;
+        let mut global_entry = global_login_attempts.lock().await;
         global_entry.attempts.clear();
-        global_entry.consecutive_failures = 0; // Reset failure counter on success
+        global_entry.consecutive_failures = 0;
     }
 
-    // Clear device-specific rate limit attempts
     {
-        let mut attempts = state.device_login_attempts.lock().await;
+        let mut attempts = device_login_attempts.lock().await;
         attempts.remove(device_id);
     }
 
-    // Clear email-specific rate limit attempts
     {
-        let mut attempts = state.login_attempts.lock().await;
+        let mut attempts = login_attempts.lock().await;
         attempts.remove(email_hash);
     }
 
@@ -647,7 +648,7 @@ async fn create_and_save_user(
         let token = generate_verification_token();
         let mut hasher = Sha256::new();
         hasher.update(token.as_bytes());
-        let hash = hex::encode(hasher.finalize());
+        let hash = infra::utils::encode_hex(hasher.finalize());
         let expiry = chrono::Utc::now() + chrono::Duration::hours(24);
         (Some(token), Some(hash), Some(expiry))
     } else {
@@ -1103,7 +1104,20 @@ pub async fn login(
         SECURITY_METRICS.increment_successful_auth_attempts();
 
         tracing::info!(user_id = %uid, action = "login", outcome = "success");
-        handle_successful_login(uid, &email_hash, &device_id, &state).await?;
+        handle_successful_login(
+            uid,
+            &email_hash,
+            &device_id,
+            state.secure_storage.as_ref(),
+            state.jwt_secret.expose_secret(),
+            state.jwt_expiration_hours,
+            &state.jwt_issuer,
+            &state.jwt_audience,
+            &state.global_login_attempts,
+            &state.device_login_attempts,
+            &state.login_attempts,
+        )
+        .await?;
         return Ok(());
     }
 
@@ -1245,7 +1259,7 @@ pub async fn resend_verification_email(
         {
             let mut hasher = Sha256::new();
             hasher.update(token.as_bytes());
-            let hash = hex::encode(hasher.finalize());
+            let hash = infra::utils::encode_hex(hasher.finalize());
 
             // Use atomic partial update to prevent race conditions
             state

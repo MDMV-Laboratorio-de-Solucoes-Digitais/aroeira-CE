@@ -1,17 +1,112 @@
-use async_trait::async_trait;
 use infra::security::{FileCreationConfig, PathValidator, SecureFileCreator};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tauri::{AppHandle, Manager, Runtime};
+use tokio::sync::RwLock;
 use tracing::{error, warn};
 
 pub const AUTH_TOKEN_KEY: &str = "auth_token";
 const MAX_TOKEN_LENGTH: usize = 4096;
 
-#[async_trait]
 pub trait SecureStorage: Send + Sync {
     async fn save(&self, key: &str, value: &str) -> Result<(), String>;
     async fn get(&self, key: &str) -> Result<Option<String>, String>;
     async fn delete(&self, key: &str) -> Result<(), String>;
+}
+
+/// Enum wrapper for `SecureStorage` implementations.
+///
+/// Provides static dispatch over `TauriSecureStorage` (production) and
+/// `MockSecureStorage` (testing).
+pub enum SecureStorageEnum {
+    /// Production implementation using Tauri's secure storage.
+    Tauri(TauriSecureStorage<tauri::Wry>),
+    /// Mock implementation for testing.
+    Mock(MockSecureStorage),
+}
+
+impl SecureStorage for SecureStorageEnum {
+    async fn save(&self, key: &str, value: &str) -> Result<(), String> {
+        match self {
+            Self::Tauri(s) => s.save(key, value).await,
+            Self::Mock(s) => s.save(key, value).await,
+        }
+    }
+
+    async fn get(&self, key: &str) -> Result<Option<String>, String> {
+        match self {
+            Self::Tauri(s) => s.get(key).await,
+            Self::Mock(s) => s.get(key).await,
+        }
+    }
+
+    async fn delete(&self, key: &str) -> Result<(), String> {
+        match self {
+            Self::Tauri(s) => s.delete(key).await,
+            Self::Mock(s) => s.delete(key).await,
+        }
+    }
+}
+
+/// Mock implementation of `SecureStorage` for testing.
+pub struct MockSecureStorage {
+    storage: Arc<RwLock<HashMap<String, String>>>,
+    should_fail: bool,
+}
+
+impl MockSecureStorage {
+    /// Creates a new mock storage that succeeds on all operations.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            storage: Arc::new(RwLock::new(HashMap::new())),
+            should_fail: false,
+        }
+    }
+
+    /// Creates a mock storage that fails on all operations.
+    #[must_use]
+    pub fn new_failing() -> Self {
+        Self {
+            storage: Arc::new(RwLock::new(HashMap::new())),
+            should_fail: true,
+        }
+    }
+}
+
+impl Default for MockSecureStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SecureStorage for MockSecureStorage {
+    async fn save(&self, key: &str, value: &str) -> Result<(), String> {
+        if self.should_fail {
+            return Err("Mock storage failure".to_string());
+        }
+        let mut store = self.storage.write().await;
+        store.insert(key.to_string(), value.to_string());
+        Ok(())
+    }
+
+    async fn get(&self, key: &str) -> Result<Option<String>, String> {
+        if self.should_fail {
+            return Err("Mock storage failure".to_string());
+        }
+        let store = self.storage.read().await;
+        Ok(store.get(key).cloned())
+    }
+
+    async fn delete(&self, key: &str) -> Result<(), String> {
+        if self.should_fail {
+            return Err("Mock storage failure".to_string());
+        }
+        let mut store = self.storage.write().await;
+        store.remove(key);
+        Ok(())
+    }
 }
 
 pub struct TauriSecureStorage<R: Runtime> {
@@ -85,7 +180,6 @@ impl<R: Runtime> TauriSecureStorage<R> {
     }
 }
 
-#[async_trait]
 impl<R: Runtime> SecureStorage for TauriSecureStorage<R> {
     async fn save(&self, key: &str, value: &str) -> Result<(), String> {
         let value = value.trim().to_string();

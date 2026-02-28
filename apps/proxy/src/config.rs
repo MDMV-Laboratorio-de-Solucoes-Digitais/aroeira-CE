@@ -1,6 +1,7 @@
 use secrecy::SecretString;
 use std::env;
 
+#[derive(Clone, Debug)]
 pub struct Config {
     pub server_bind_address: String,
     pub github_client_id: String,
@@ -16,22 +17,22 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
         let server_bind_address =
-            env::var("SERVER_BIND_ADDRESS").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
+            env::var("SERVER_BIND_ADDRESS").unwrap_or_else(|_err| "0.0.0.0:3000".to_owned());
 
         let github_client_id = env::var("GITHUB_CLIENT_ID")
-            .map_err(|_| "GITHUB_CLIENT_ID environment variable is not set.")?;
+            .map_err(|_err| "GITHUB_CLIENT_ID environment variable is not set.")?;
 
         let github_client_secret = env::var("GITHUB_CLIENT_SECRET")
-            .map_err(|_| "GITHUB_CLIENT_SECRET environment variable is not set.")?;
+            .map_err(|_err| "GITHUB_CLIENT_SECRET environment variable is not set.")?;
 
         let github_token_url = env::var("GITHUB_TOKEN_URL")
-            .unwrap_or_else(|_| "https://github.com/login/oauth/access_token".to_string());
+            .unwrap_or_else(|_err| "https://github.com/login/oauth/access_token".to_owned());
 
         let github_allowed_hosts = env::var("GITHUB_ALLOWED_HOSTS")
-            .map_err(|_| "GITHUB_ALLOWED_HOSTS environment variable is not set.")?
+            .map_err(|_err| "GITHUB_ALLOWED_HOSTS environment variable is not set.")?
             .split(',')
-            .map(|h| h.trim().trim_end_matches('.').to_ascii_lowercase())
-            .filter(|h| !h.is_empty())
+            .map(|host| host.trim().trim_end_matches('.').to_ascii_lowercase())
+            .filter(|host| !host.is_empty())
             .collect::<Vec<_>>();
 
         if github_allowed_hosts.is_empty() {
@@ -39,21 +40,21 @@ impl Config {
         }
 
         let github_redirect_uri = env::var("GITHUB_REDIRECT_URI")
-            .map_err(|_| "GITHUB_REDIRECT_URI environment variable is not set.")?;
+            .map_err(|_err| "GITHUB_REDIRECT_URI environment variable is not set.")?;
 
         let allowed_origins = env::var("ALLOWED_ORIGINS")
-            .unwrap_or_else(|_| "http://localhost:1420,https://*.aroeira.app".to_string())
+            .unwrap_or_else(|_err| "http://localhost:1420,https://*.aroeira.app".to_owned())
             .split(',')
-            .map(|s| s.trim().to_string())
+            .map(|origin| origin.trim().to_owned())
             .collect();
 
         let rate_limit_requests = env::var("RATE_LIMIT_REQUESTS")
-            .unwrap_or_else(|_| "5".to_string())
+            .unwrap_or_else(|_err| "5".to_owned())
             .parse()
             .unwrap_or(5);
 
         let rate_limit_window_secs = env::var("RATE_LIMIT_WINDOW_SECS")
-            .unwrap_or_else(|_| "60".to_string())
+            .unwrap_or_else(|_err| "60".to_owned())
             .parse()
             .unwrap_or(60);
 

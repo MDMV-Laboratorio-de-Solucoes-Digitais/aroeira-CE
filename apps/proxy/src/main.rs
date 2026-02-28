@@ -2,7 +2,7 @@ use axum::{
     error_handling::HandleErrorLayer, extract::DefaultBodyLimit, http::StatusCode,
     response::IntoResponse, Router,
 };
-use std::net::SocketAddr;
+use core::net::SocketAddr;
 use std::sync::Arc;
 use tower::buffer::error::ServiceError;
 use tower::{buffer::BufferLayer, limit::RateLimitLayer, BoxError, ServiceBuilder};
@@ -10,14 +10,14 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
-mod config;
-mod error;
-mod models;
-mod routes;
+pub(crate) mod config;
+pub(crate) mod error;
+pub(crate) mod models;
+pub(crate) mod routes;
 
 use config::Config;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AppState {
     pub config: Arc<Config>,
     pub http_client: reqwest::Client,
@@ -30,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "aroeira_oauth_proxy=info,tower_http=info".into()),
+                .unwrap_or_else(|_err| "aroeira_oauth_proxy=info,tower_http=info".into()),
         )
         .init();
 
@@ -84,7 +84,6 @@ fn validate_origin(origin: &axum::http::HeaderValue, allowed: &[String]) -> bool
         return false;
     };
 
-    // Reject authority tricks and non-origin forms early
     let has_userinfo = !origin_url.username().is_empty() || origin_url.password().is_some();
     if has_userinfo {
         return false;
@@ -110,7 +109,6 @@ fn validate_origin(origin: &axum::http::HeaderValue, allowed: &[String]) -> bool
         let rule = rule.trim();
 
         if let Ok(rule_url) = url::Url::parse(rule) {
-            // Reject rule URLs with userinfo (security hardening)
             let rule_has_userinfo =
                 !rule_url.username().is_empty() || rule_url.password().is_some();
             if rule_has_userinfo {
@@ -161,14 +159,14 @@ fn build_app(state: AppState, cors: CorsLayer) -> Router {
                         if service_err.to_string().contains("full") {
                             return (
                                 StatusCode::TOO_MANY_REQUESTS,
-                                "Too many requests".to_string(),
+                                "Too many requests".to_owned(),
                             );
                         }
                     }
                     tracing::error!("Unhandled middleware error: {}", err);
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        "Internal server error".to_string(),
+                        "Internal server error".to_owned(),
                     )
                 }))
                 .layer(BufferLayer::new(1024))

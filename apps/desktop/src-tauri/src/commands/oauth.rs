@@ -16,10 +16,11 @@ use crate::commands::auth::{
 use crate::oauth::session_store::OAuthSessionStore;
 use crate::oauth_utils::validate_and_parse_callback;
 use crate::state::AppState;
-use domain::modules::auth::AuthError;
 use domain::modules::auth::oauth::{AuthProvider, OAuthPkceSession, OAuthService, OAuthUser};
-use hex;
-use infra::services::oauth::{OAuthConfig, OAuthServiceImpl, PkceSessionStorage};
+use domain::modules::auth::{AuthError, UserRepository};
+use infra::services::oauth::{
+    OAuthConfig, OAuthServiceImpl, PkceSessionStorage, PkceSessionStorageEnum,
+};
 use infra::utils::hash_password;
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
@@ -38,15 +39,14 @@ pub struct OAuthState {
     /// OAuth service implementation
     pub oauth_service: Arc<OAuthServiceImpl>,
     /// PKCE session storage using OS keyring
-    pkce_storage: Arc<dyn PkceSessionStorage>,
+    pkce_storage: PkceSessionStorageEnum,
 }
 
 impl OAuthState {
     /// Creates new OAuth state with given configuration.
     #[must_use]
     pub fn new(config: OAuthConfig) -> Self {
-        let pkce_storage: Arc<dyn PkceSessionStorage> =
-            Arc::new(infra::services::oauth::KeyringPkceStorage);
+        let pkce_storage = PkceSessionStorageEnum::new_keyring();
         Self {
             session_store: OAuthSessionStore::new(pkce_storage.clone()),
             oauth_service: Arc::new(OAuthServiceImpl::new(config)),
@@ -57,10 +57,7 @@ impl OAuthState {
     /// Creates new OAuth state with custom PKCE storage (for testing).
     #[cfg(test)]
     #[must_use]
-    pub fn new_with_storage(
-        config: OAuthConfig,
-        pkce_storage: Arc<dyn PkceSessionStorage>,
-    ) -> Self {
+    pub fn new_with_storage(config: OAuthConfig, pkce_storage: PkceSessionStorageEnum) -> Self {
         Self {
             session_store: OAuthSessionStore::new(pkce_storage.clone()),
             oauth_service: Arc::new(OAuthServiceImpl::new(config)),
@@ -138,7 +135,7 @@ pub async fn start_oauth_flow(
     // Hash device_id for privacy in logs
     let mut hasher = Sha256::new();
     hasher.update(device_id.as_bytes());
-    let device_id_hash = hex::encode(hasher.finalize());
+    let device_id_hash = infra::utils::encode_hex(hasher.finalize());
 
     // Generate authorization URL
     let (auth_url, session) = oauth_state
@@ -190,7 +187,7 @@ pub async fn start_oauth_flow(
 }
 
 fn state_hash(state: &str) -> String {
-    hex::encode(Sha256::digest(state.as_bytes()))
+    infra::utils::encode_hex(Sha256::digest(state.as_bytes()))
 }
 
 async fn persist_oauth_session(
@@ -251,7 +248,7 @@ async fn persist_oauth_session(
 }
 
 async fn store_session_in_keyring(
-    pkce_storage: Arc<dyn PkceSessionStorage>,
+    pkce_storage: PkceSessionStorageEnum,
     state_hash: String,
     session_json: String,
     request_id: &str,
@@ -348,7 +345,20 @@ async fn finalize_oauth_login(
     )
     .map_err(|_| "Internal security error".to_string())?;
 
-    handle_successful_login(user_id, &email_hash, device_id, state).await?;
+    handle_successful_login(
+        user_id,
+        &email_hash,
+        device_id,
+        state.secure_storage.as_ref(),
+        state.jwt_secret.expose_secret(),
+        state.jwt_expiration_hours,
+        &state.jwt_issuer,
+        &state.jwt_audience,
+        &state.global_login_attempts,
+        &state.device_login_attempts,
+        &state.login_attempts,
+    )
+    .await?;
     log_oauth_success(user_id, session, user, request_id);
 
     // Clean up persisted session now that login is successful
@@ -409,7 +419,7 @@ pub async fn handle_oauth_callback(
 
     let mut hasher = Sha256::new();
     hasher.update(device_id.as_bytes());
-    let device_id_hash = hex::encode(hasher.finalize());
+    let device_id_hash = infra::utils::encode_hex(hasher.finalize());
 
     let (code, state_param) =
         validate_and_parse_callback(&callback_url, &request_id, &device_id_hash)?;
@@ -882,7 +892,7 @@ async fn generate_and_hash_oauth_password() -> Result<String, String> {
         "Authentication failed".to_string()
     })?;
 
-    let oauth_random_password = hex::encode(bytes);
+    let oauth_random_password = infra::utils::encode_hex(bytes);
 
     // Use infra's hash_password which handles security config correctly
     // spawn_blocking is required because bcrypt is CPU-intensive and would block the async runtime
@@ -908,7 +918,7 @@ fn log_oauth_success(
     // Note: email and provider_user_id are hashed/redacted for privacy in logs
     let mut hasher = Sha256::new();
     hasher.update(user.provider_user_id.as_bytes());
-    let hashed_user_id = hex::encode(hasher.finalize());
+    let hashed_user_id = infra::utils::encode_hex(hasher.finalize());
 
     tracing::info!(
         target: "audit",

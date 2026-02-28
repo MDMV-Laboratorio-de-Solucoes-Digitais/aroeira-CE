@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
-#[derive(Debug, Deserialize, Validate)]
+#[derive(Clone, Debug, Deserialize, Serialize, Validate)]
 pub struct GitHubTokenRequest {
     #[validate(length(min = 1, max = 2048, message = "Invalid authorization code"))]
     pub code: String,
@@ -16,7 +16,7 @@ pub struct GitHubTokenRequest {
     pub code_verifier: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct GitHubTokenResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub access_token: Option<String>,

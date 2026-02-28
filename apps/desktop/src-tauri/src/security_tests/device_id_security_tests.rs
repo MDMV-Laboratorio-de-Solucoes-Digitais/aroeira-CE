@@ -164,7 +164,7 @@ fn test_old_keys_continue_to_validate_during_grace_period() {
     // Manually sign with original key to ensure it's tied to that key
     let mut mac = Hmac::<Sha256>::new_from_slice(original_key.as_bytes()).unwrap();
     mac.update(device_id.id().as_bytes());
-    let original_signature = hex::encode(mac.finalize().into_bytes());
+    let original_signature = infra::utils::encode_hex(mac.finalize().into_bytes());
     device_id.set_signature_for_tests(original_signature);
 
     // Verify it validates with original key

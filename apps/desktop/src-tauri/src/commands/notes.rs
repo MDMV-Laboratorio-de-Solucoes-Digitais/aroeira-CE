@@ -5,7 +5,7 @@ use crate::{
     validation::ValidatedNoteInput,
 };
 use chrono::Utc;
-use domain::modules::notes::{Note, NoteError};
+use domain::modules::notes::{Note, NoteError, NoteRepository};
 use tauri::State;
 use tracing::{error, info};
 use uuid::Uuid;

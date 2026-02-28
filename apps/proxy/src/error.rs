@@ -6,7 +6,7 @@ use axum::{
 use serde_json::json;
 use thiserror::Error;
 
-#[derive(Error, Debug)]
+#[derive(Clone, Debug, Error)]
 pub enum AppError {
     #[error("Environment variable error: {0}")]
     EnvError(#[from] std::env::VarError),
@@ -22,11 +22,11 @@ impl IntoResponse for AppError {
             Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             Self::GitHubError(_) => (
                 StatusCode::BAD_GATEWAY,
-                "OAuth provider error. Please try again.".to_string(),
+                "OAuth provider error. Please try again.".to_owned(),
             ),
             Self::EnvError(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal server error".to_string(),
+                "Internal server error".to_owned(),
             ),
         };
 

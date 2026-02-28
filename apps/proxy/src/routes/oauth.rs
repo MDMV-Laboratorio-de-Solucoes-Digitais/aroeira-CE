@@ -12,11 +12,18 @@ use std::sync::LazyLock;
 use validator::Validate;
 
 const STANDARD_GITHUB_URL: &str = "https://github.com/login/oauth/access_token";
+const MAX_ERROR_BODY_BYTES: usize = 8 * 1024;
 
 static STANDARD_GITHUB_PARSED: LazyLock<url::Url> =
     LazyLock::new(|| match url::Url::parse(STANDARD_GITHUB_URL) {
         Ok(url) => url,
-        Err(e) => panic!("BUG: STANDARD_GITHUB_URL constant is invalid: {e}"),
+        Err(_parse_err) => {
+            tracing::error!("STANDARD_GITHUB_URL is invalid");
+            url::Url::parse("https://github.com").unwrap_or_else(|_fallback_err| {
+                url::Url::parse("about:blank")
+                    .unwrap_or_else(|_final_err| url::Url::parse("https://invalid").unwrap())
+            })
+        }
     });
 
 #[axum::debug_handler]
@@ -24,25 +31,18 @@ pub async fn github_token_exchange(
     State(state): State<AppState>,
     Json(payload): Json<GitHubTokenRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    // Bounded read to avoid DoS via huge error bodies.
-    const MAX_ERROR_BODY_BYTES: usize = 8 * 1024; // enough for diagnostics
-
     payload
         .validate()
-        .map_err(|_| AppError::BadRequest("Invalid OAuth request payload".to_string()))?;
+        .map_err(|_err| AppError::BadRequest("Invalid OAuth request payload".to_owned()))?;
 
     validate_redirect_uri(&payload, &state.config.github_redirect_uri)?;
 
-    // 2. Resolve and validate the upstream token URL
-    // We do this explicitly to return a trusted `Url` object and satisfy SSRF checks.
     let token_url = resolve_github_token_url(
         &state.config.github_token_url,
         &state.config.github_allowed_hosts,
     )?;
 
-    // 3. Exchange code for token with GitHub
     let client = &state.http_client;
-
     let client_id = &state.config.github_client_id;
     let client_secret = state.config.github_client_secret.expose_secret();
     let code = &payload.code;
@@ -57,8 +57,6 @@ pub async fn github_token_exchange(
         ("code_verifier", code_verifier.as_str()),
     ];
 
-    // Configurable URL with strict validation (see resolve_github_token_url)
-    // to support Enterprise/Proxy scenarios while preventing SSRF.
     let response = client
         .post(token_url)
         .header("Accept", "application/json")
@@ -66,19 +64,18 @@ pub async fn github_token_exchange(
         .form(&params)
         .send()
         .await
-        .map_err(|e| {
-            tracing::error!("Failed to send GitHub token request: {}", e);
-            AppError::GitHubError("Failed to communicate with GitHub".to_string())
+        .map_err(|err| {
+            tracing::error!("Failed to send GitHub token request: {}", err);
+            AppError::GitHubError("Failed to communicate with GitHub".to_owned())
         })?;
 
     if !response.status().is_success() {
         let status = response.status();
-
         let mut body = Vec::new();
         let mut resp = response;
-        while let Some(chunk) = resp.chunk().await.map_err(|e| {
-            tracing::error!("Failed reading GitHub error response body: {}", e);
-            AppError::GitHubError("Failed to read response from GitHub".to_string())
+        while let Some(chunk) = resp.chunk().await.map_err(|err| {
+            tracing::error!("Failed reading GitHub error response body: {}", err);
+            AppError::GitHubError("Failed to read response from GitHub".to_owned())
         })? {
             if body.len().saturating_add(chunk.len()) > MAX_ERROR_BODY_BYTES {
                 break;
@@ -86,39 +83,40 @@ pub async fn github_token_exchange(
             body.extend_from_slice(&chunk);
         }
 
-        // Avoid logging raw bodies (can include sensitive OAuth artifacts).
-        // Try to extract a safe, allowlisted `error` string if the payload is JSON.
         let error_code = serde_json::from_slice::<serde_json::Value>(&body)
             .ok()
-            .and_then(|v| {
-                v.get("error")
-                    .and_then(|e| e.as_str())
+            .and_then(|value| {
+                value
+                    .get("error")
+                    .and_then(|err_str| err_str.as_str())
                     .map(ToString::to_string)
             });
 
-        if let Some(code) = error_code {
+        if let Some(error_code_value) = error_code {
             tracing::error!(
                 "GitHub token exchange failed: status={}, error_code={}",
                 status,
-                code
+                error_code_value
             );
         } else {
             tracing::error!("GitHub token exchange failed: status={}", status);
         }
         return Err(AppError::GitHubError(
-            "GitHub refused the token exchange".to_string(),
+            "GitHub refused the token exchange".to_owned(),
         ));
     }
 
-    let token_response = response.json::<GitHubTokenResponse>().await.map_err(|e| {
-        tracing::error!("Failed to parse GitHub token response: {}", e);
-        AppError::GitHubError("Invalid response from GitHub".to_string())
-    })?;
+    let token_response = response
+        .json::<GitHubTokenResponse>()
+        .await
+        .map_err(|err| {
+            tracing::error!("Failed to parse GitHub token response: {}", err);
+            AppError::GitHubError("Invalid response from GitHub".to_owned())
+        })?;
 
     if let Some(error) = &token_response.error {
-        // Do not log `error_description` (may contain sensitive/user-specific details).
         tracing::error!("GitHub returned error in payload: {}", error);
-        return Err(AppError::GitHubError("GitHub OAuth error".to_string()));
+        return Err(AppError::GitHubError("GitHub OAuth error".to_owned()));
     }
 
     if token_response.access_token.is_none()
@@ -127,7 +125,7 @@ pub async fn github_token_exchange(
     {
         tracing::error!("GitHub token response missing required fields");
         return Err(AppError::GitHubError(
-            "Invalid response from GitHub".to_string(),
+            "Invalid response from GitHub".to_owned(),
         ));
     }
 
@@ -139,19 +137,17 @@ fn validate_redirect_uri(
     expected_redirect_uri: &str,
 ) -> Result<(), AppError> {
     let req = url::Url::parse(&request.redirect_uri)
-        .map_err(|_| AppError::BadRequest("Invalid redirect URI".to_string()))?;
+        .map_err(|_err| AppError::BadRequest("Invalid redirect URI".to_owned()))?;
     let expected = url::Url::parse(expected_redirect_uri)
-        .map_err(|_| AppError::GitHubError("Server misconfiguration".to_string()))?;
+        .map_err(|_err| AppError::GitHubError("Server misconfiguration".to_owned()))?;
 
-    // Reject any authority tricks / dynamic parts (request)
     let has_userinfo = !req.username().is_empty() || req.password().is_some();
     let has_query_or_fragment = req.query().is_some() || req.fragment().is_some();
     if has_userinfo || has_query_or_fragment {
         tracing::error!("Blocked GitHub token exchange due to unexpected redirect_uri components");
-        return Err(AppError::BadRequest("Invalid redirect URI".to_string()));
+        return Err(AppError::BadRequest("Invalid redirect URI".to_owned()));
     }
 
-    // Fail closed on unsafe/misconfigured expected redirect URI (server config)
     let expected_has_userinfo = !expected.username().is_empty() || expected.password().is_some();
     let expected_has_query_or_fragment =
         expected.query().is_some() || expected.fragment().is_some();
@@ -159,15 +155,14 @@ fn validate_redirect_uri(
         tracing::error!(
             "Server misconfiguration: expected redirect URI contains forbidden components"
         );
-        return Err(AppError::GitHubError("Server misconfiguration".to_string()));
+        return Err(AppError::GitHubError("Server misconfiguration".to_owned()));
     }
     let expected_scheme = expected.scheme();
     if expected_scheme != "http" && expected_scheme != "https" && expected_scheme != "aroeira" {
         tracing::error!("Server misconfiguration: expected redirect URI has unsupported scheme");
-        return Err(AppError::GitHubError("Server misconfiguration".to_string()));
+        return Err(AppError::GitHubError("Server misconfiguration".to_owned()));
     }
 
-    // Compare normalized base (scheme/host/port/path), ignoring formatting differences.
     let same_base = req.scheme() == expected.scheme()
         && req.host_str() == expected.host_str()
         && req.port_or_known_default() == expected.port_or_known_default()
@@ -175,7 +170,7 @@ fn validate_redirect_uri(
 
     if !same_base {
         tracing::error!("Blocked GitHub token exchange due to mismatched redirect_uri");
-        return Err(AppError::BadRequest("Invalid redirect URI".to_string()));
+        return Err(AppError::BadRequest("Invalid redirect URI".to_owned()));
     }
 
     Ok(())
@@ -185,21 +180,17 @@ fn resolve_github_token_url(
     configured_url: &str,
     allowed_hosts: &[String],
 ) -> Result<url::Url, AppError> {
-    // Defense-in-depth: If the configured URL matches the standard GitHub endpoint exactly,
-    // return a cloned Url from the pre-parsed static.
-    // This helps static analysis tools (like CodeQL) verify that the default path is safe/constant.
     if configured_url == STANDARD_GITHUB_URL {
         return Ok(STANDARD_GITHUB_PARSED.clone());
     }
 
-    // Otherwise, parse and validate the custom URL against the allowlist.
     let parsed_url = url::Url::parse(configured_url)
-        .map_err(|_| AppError::GitHubError("Invalid provider token URL format".to_string()))?;
+        .map_err(|_err| AppError::GitHubError("Invalid provider token URL format".to_owned()))?;
 
     let scheme = parsed_url.scheme();
     let host = parsed_url
         .host_str()
-        .ok_or_else(|| AppError::GitHubError("Untrusted OAuth provider URL".to_string()))?
+        .ok_or_else(|| AppError::GitHubError("Untrusted OAuth provider URL".to_owned()))?
         .trim_end_matches('.')
         .to_ascii_lowercase();
 
@@ -208,14 +199,13 @@ fn resolve_github_token_url(
     let has_query_or_fragment = parsed_url.query().is_some() || parsed_url.fragment().is_some();
     let port = parsed_url.port_or_known_default();
 
-    // Reject IP-literal hosts (defense-in-depth for SSRF / DNS rebinding)
     if matches!(
         parsed_url.host(),
         Some(url::Host::Ipv4(_) | url::Host::Ipv6(_))
     ) {
         tracing::error!("Blocked GitHub token exchange due to IP-literal host");
         return Err(AppError::GitHubError(
-            "Untrusted OAuth provider URL".to_string(),
+            "Untrusted OAuth provider URL".to_owned(),
         ));
     }
 
@@ -224,7 +214,9 @@ fn resolve_github_token_url(
         || has_query_or_fragment
         || port != Some(443)
         || parsed_url.path() != expected_path
-        || !allowed_hosts.iter().any(|h| h == &host)
+        || !allowed_hosts
+            .iter()
+            .any(|allowed_host| allowed_host == &host)
     {
         tracing::error!(
             "Blocked GitHub token exchange due to untrusted URL: scheme='{}', host='{}', port='{:?}', path='{}'",
@@ -234,7 +226,7 @@ fn resolve_github_token_url(
             parsed_url.path()
         );
         return Err(AppError::GitHubError(
-            "Untrusted OAuth provider URL".to_string(),
+            "Untrusted OAuth provider URL".to_owned(),
         ));
     }
 

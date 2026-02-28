@@ -113,7 +113,7 @@ async fn test_rate_limiting_works_with_new_device_ids() {
     // Hash email for rate limiting
     let mut mac = HmacSha256::new_from_slice(rate_limit_key.expose_secret().as_bytes()).unwrap();
     mac.update(email.as_bytes());
-    let email_hash = hex::encode(mac.finalize().into_bytes());
+    let email_hash = infra::utils::encode_hex(mac.finalize().into_bytes());
 
     // Test rate limiting with the device ID
 
@@ -260,7 +260,7 @@ async fn test_successful_authentication_clears_all_rate_limits() {
     // Hash the email for rate limiting
     let mut mac = HmacSha256::new_from_slice(rate_limit_key.expose_secret().as_bytes()).unwrap();
     mac.update(email.as_bytes());
-    let email_hash = hex::encode(mac.finalize().into_bytes());
+    let email_hash = infra::utils::encode_hex(mac.finalize().into_bytes());
 
     // Fill up rate limit counters
     for _ in 0..5 {

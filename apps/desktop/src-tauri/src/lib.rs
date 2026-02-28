@@ -1,10 +1,9 @@
+use crate::services::secure_storage::{SecureStorageEnum, TauriSecureStorage};
 use crate::state::AppState;
-use domain::modules::auth::UserRepository;
-use domain::modules::notes::NoteRepository;
 use infra::constants::OAUTH_CALLBACK_SCHEME;
 use infra::database::establish_connection;
-use infra::database::repositories::{note_repo::NoteRepositoryImpl, user_repo::UserRepositoryImpl};
 use infra::security::{PathValidator, SecureFileCreator};
+use infra::{EmailServiceEnum, NoteRepositoryEnum, UserRepositoryEnum};
 use secrecy::SecretBox;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -443,21 +442,19 @@ async fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
     // Wrap connection in Arc for sharing
     let db = Arc::new(db);
 
-    let user_repo: Arc<dyn UserRepository + Send + Sync> =
-        Arc::new(UserRepositoryImpl::new(db.clone()));
-    let note_repo: Arc<dyn NoteRepository + Send + Sync> = Arc::new(NoteRepositoryImpl::new(db));
-    let email_service: Arc<dyn domain::modules::auth::EmailService + Send + Sync> =
-        if cfg!(debug_assertions) {
-            info!("Using MockEmailService for development (verification disabled in mock mode)");
-            Arc::new(infra::MockEmailService::new())
-        } else {
-            info!("Using SmtpEmailService for production");
-            Arc::new(infra::SmtpEmailService::new())
-        };
+    let user_repo = Arc::new(UserRepositoryEnum::new_production(db.clone()));
+    let note_repo = Arc::new(NoteRepositoryEnum::new_production(db));
+    let email_service = Arc::new(if cfg!(debug_assertions) {
+        info!("Using MockEmailService for development (verification disabled in mock mode)");
+        EmailServiceEnum::new_mock()
+    } else {
+        info!("Using SmtpEmailService for production");
+        EmailServiceEnum::new_smtp()
+    });
 
-    let secure_storage = Arc::new(crate::services::secure_storage::TauriSecureStorage::new(
+    let secure_storage = Arc::new(SecureStorageEnum::Tauri(TauriSecureStorage::new(
         app.handle().clone(),
-    ));
+    )));
 
     // Set up OAuth state first to consume config fields without cloning.
     // Use the deep-link scheme in both dev and release; opening the flow in the system browser
