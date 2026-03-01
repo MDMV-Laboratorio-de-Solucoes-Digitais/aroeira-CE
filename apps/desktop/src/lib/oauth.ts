@@ -451,10 +451,9 @@ export function processOAuthCallback(
 
       // Normalize callback to the canonical scheme for backend consistency.
       // Always send `aroeira://auth/callback?...` to the backend, even in DEV localhost mode.
-      const callbackForBackend = `${CALLBACK_SCHEME}://${CALLBACK_HOST}${CALLBACK_PATH}${callbackUrl.search}`;
+      const searchParams = new URLSearchParams(callbackUrl.search);
+      const redirectUriParam = searchParams.get("redirect_uri");
 
-      // Validate redirect_uri to prevent unauthorized redirect destinations
-      const redirectUriParam = parsed.searchParams.get("redirect_uri");
       const devServerPort =
         Number(
           typeof window !== "undefined" ? window.location.port : undefined,
@@ -469,13 +468,31 @@ export function processOAuthCallback(
           : []),
       ]);
 
-      if (redirectUriParam && !allowedRedirectSet.has(redirectUriParam)) {
+      if (
+        redirectUriParam !== null &&
+        !allowedRedirectSet.has(redirectUriParam)
+      ) {
         console.warn("Blocked unexpected redirect_uri parameter", {
           length: redirectUriParam.length,
         });
-        // We log it but don't throw here to avoid breaking valid flows if the param is missing
-        // strict validation happens at start of flow
+
+        try {
+          localStorage.removeItem("oauth_pending_provider");
+          localStorage.removeItem("oauth_pending_state");
+          localStorage.removeItem("oauth_pending_started_at");
+        } catch {
+          // Ignore
+        }
+
+        callbacks.resetState(
+          "Authentication callback was invalid. Please try again.",
+        );
+        return;
       }
+
+      searchParams.delete("redirect_uri");
+      const queryString = searchParams.toString();
+      const callbackForBackend = `${CALLBACK_SCHEME}://${CALLBACK_HOST}${CALLBACK_PATH}${queryString ? `?${queryString}` : ""}`;
 
       try {
         const user = await handleOAuthCallback(callbackForBackend);
