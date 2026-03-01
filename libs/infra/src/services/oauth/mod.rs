@@ -14,7 +14,7 @@ pub use storage::{
     PkceSessionStorageEnum, TokenStorage, TokenStorageEnum,
 };
 
-use crate::utils::encode_hex;
+use crate::utils::hash_string_sha256_hex;
 use domain::modules::auth::oauth::{
     AuthProvider, OAuthError, OAuthPkceSession, OAuthService, OAuthUser,
 };
@@ -23,13 +23,20 @@ use oauth2::{
     RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
 use secrecy::ExposeSecret;
-use sha2::{Digest, Sha256};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
 // Constants for keyring service names to prevent typo-based fragmentation
 pub const PKCE_SESSION_KEYRING_SERVICE: &str = "aroeira-oauth-pkce";
 pub const TOKEN_KEYRING_SERVICE: &str = "aroeira-oauth";
+
+/// Maximum allowed length for OAuth provider user IDs.
+///
+/// This prevents excessively long IDs from providers or malicious inputs.
+/// Typical values:
+/// - Google: "sub" is UUID-like (~21-40 chars)
+/// - GitHub: numeric ID (up to ~20 digits for very old accounts)
+const MAX_PROVIDER_USER_ID_LEN: usize = 256;
 
 const OAUTH_CALLBACK_HOST: &str = "auth";
 const OAUTH_CALLBACK_PATH: &str = "/callback";
@@ -479,7 +486,7 @@ impl OAuthService for OAuthServiceImpl {
 
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
-        let state = encode_hex(Sha256::digest(Uuid::new_v4().as_bytes()));
+        let state = hash_string_sha256_hex(&Uuid::new_v4().to_string());
         let mut auth_request = client.authorize_url(|| CsrfToken::new(state.clone()));
         for scope in Self::get_scopes(provider) {
             auth_request = auth_request.add_scope(scope);
@@ -636,16 +643,19 @@ async fn store_tokens(
         oauth2::basic::BasicTokenType,
     >,
 ) -> Result<(), OAuthError> {
+    if user.provider_user_id.len() > MAX_PROVIDER_USER_ID_LEN {
+        return Err(OAuthError::InvalidProviderUserId(format!(
+            "Provider user ID exceeds maximum length of {MAX_PROVIDER_USER_ID_LEN} characters"
+        )));
+    }
+
     let provider_key = match user.provider {
         AuthProvider::Google => "google",
         AuthProvider::GitHub => "github",
     };
     let user_key = format!("{provider_key}:{}", user.provider_user_id);
 
-    let mut hasher = Sha256::new();
-
-    hasher.update(user_key.as_bytes());
-    let user_key_hash = encode_hex(hasher.finalize());
+    let user_key_hash = hash_string_sha256_hex(&user_key);
 
     let access_token = token_result.access_token().secret().clone();
     if access_token.trim().is_empty() || access_token.len() > MAX_TOKEN_LENGTH {

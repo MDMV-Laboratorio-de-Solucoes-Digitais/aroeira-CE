@@ -1,5 +1,4 @@
 use infra::constants::{OAUTH_CALLBACK_HOST, OAUTH_CALLBACK_PATH, OAUTH_CALLBACK_SCHEME};
-use sha2::{Digest, Sha256};
 use url::Url;
 
 /// The path for "hostless" custom scheme URLs (e.g., aroeira:auth/callback)
@@ -236,7 +235,7 @@ fn extract_and_validate_params(url: &Url) -> Result<(String, String), String> {
     }
 
     // Hash state for logging purposes (to avoid logging sensitive value)
-    let state_hash_for_log = infra::utils::encode_hex(Sha256::digest(state.as_bytes()));
+    let state_hash_for_log = infra::utils::hash_string_sha256_hex(&state);
     tracing::info!(
         target: "oauth_debug",
         state_hash = %state_hash_for_log,
@@ -286,7 +285,7 @@ pub fn validate_and_parse_callback(
         );
     })?;
 
-    let state_hash_for_log = infra::utils::encode_hex(Sha256::digest(state_param.as_bytes()));
+    let state_hash_for_log = infra::utils::hash_string_sha256_hex(&state_param);
     tracing::info!(
         target: "oauth_debug",
         request_id = %request_id,

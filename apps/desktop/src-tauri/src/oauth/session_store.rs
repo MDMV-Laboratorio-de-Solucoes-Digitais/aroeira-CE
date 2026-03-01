@@ -1,6 +1,5 @@
 use domain::modules::auth::oauth::OAuthPkceSession;
 use infra::services::oauth::{PkceSessionStorage, PkceSessionStorageEnum};
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -58,7 +57,7 @@ impl OAuthSessionStore {
             let expired_hashes: Vec<String> = sessions
                 .iter()
                 .filter(|&(_k, s)| s.is_expired())
-                .map(|(k, _s)| infra::utils::encode_hex(Sha256::digest(k.as_bytes())))
+                .map(|(k, _s)| infra::utils::hash_string_sha256_hex(k))
                 .collect();
 
             sessions.retain(|_, s| !s.is_expired());
@@ -82,7 +81,7 @@ impl OAuthSessionStore {
 
                 sessions.remove(state);
                 let removed_state_hash_if_invalid =
-                    Some(infra::utils::encode_hex(Sha256::digest(state.as_bytes())));
+                    Some(infra::utils::hash_string_sha256_hex(state));
 
                 (expired_hashes, removed_state_hash_if_invalid, None)
             } else {
@@ -137,7 +136,7 @@ impl OAuthSessionStore {
         let expired_hashes: Vec<String> = sessions
             .iter()
             .filter(|&(_k, s)| s.is_expired())
-            .map(|(k, _)| infra::utils::encode_hex(Sha256::digest(k.as_bytes())))
+            .map(|(k, _)| infra::utils::hash_string_sha256_hex(k))
             .collect();
 
         // Clean up expired sessions
@@ -161,7 +160,7 @@ impl OAuthSessionStore {
             .map(|(k, _)| k.clone());
 
         oldest_key.map(|key| {
-            let state_hash = infra::utils::encode_hex(Sha256::digest(key.as_bytes()));
+            let state_hash = infra::utils::hash_string_sha256_hex(&key);
             tracing::warn!(
                 target: "security",
                 reason = "session_store_full",

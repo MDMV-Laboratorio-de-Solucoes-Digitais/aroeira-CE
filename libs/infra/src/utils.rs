@@ -1,5 +1,6 @@
 use anyhow::Result;
 use bcrypt::{hash, verify};
+use sha2::{Digest, Sha256};
 
 const DEFAULT_COST: u32 = 12;
 const MIN_COST: u32 = 10;
@@ -16,6 +17,14 @@ pub fn encode_hex<B: AsRef<[u8]>>(bytes: B) -> String {
         result.push(HEX_CHARS[(byte & 0x0f) as usize] as char);
     }
     result
+}
+
+#[must_use]
+pub fn hash_string_sha256_hex(input: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    let result = hasher.finalize();
+    encode_hex(result)
 }
 
 // Get bcrypt cost from environment or use default
@@ -144,13 +153,38 @@ mod tests {
 
     #[test]
     fn test_encode_hex() {
-        assert_eq!(super::encode_hex(&[]), "");
-        assert_eq!(super::encode_hex(&[0x00]), "00");
-        assert_eq!(super::encode_hex(&[0xff]), "ff");
+        assert_eq!(super::encode_hex([]), "");
+        assert_eq!(super::encode_hex([0x00]), "00");
+        assert_eq!(super::encode_hex([0xff]), "ff");
         assert_eq!(
-            super::encode_hex(&[0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]),
+            super::encode_hex([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]),
             "0123456789abcdef"
         );
-        assert_eq!(super::encode_hex(&[0xde, 0xad, 0xbe, 0xef]), "deadbeef");
+        assert_eq!(super::encode_hex([0xde, 0xad, 0xbe, 0xef]), "deadbeef");
+    }
+
+    #[test]
+    fn test_hash_string_sha256_hex() {
+        assert_eq!(
+            hash_string_sha256_hex("hello"),
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+
+        assert_eq!(
+            hash_string_sha256_hex("test"),
+            hash_string_sha256_hex("test")
+        );
+
+        assert_ne!(
+            hash_string_sha256_hex("test1"),
+            hash_string_sha256_hex("test2")
+        );
+
+        assert_eq!(
+            hash_string_sha256_hex(""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+
+        assert_eq!(hash_string_sha256_hex("anything").len(), 64);
     }
 }

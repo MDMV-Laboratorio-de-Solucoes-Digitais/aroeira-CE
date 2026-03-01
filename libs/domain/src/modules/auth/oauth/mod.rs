@@ -74,6 +74,10 @@ pub enum OAuthError {
     /// User info request to provider failed
     #[error("User info request failed: {0}")]
     UserInfoFailed(String),
+
+    /// Provider user ID validation failed (invalid length or format)
+    #[error("Provider user ID validation failed: {0}")]
+    InvalidProviderUserId(String),
 }
 
 // ===========================================

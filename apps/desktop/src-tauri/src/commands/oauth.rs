@@ -168,10 +168,6 @@ pub async fn start_oauth_flow(
     })
 }
 
-fn state_hash(state: &str) -> String {
-    infra::utils::encode_hex(Sha256::digest(state.as_bytes()))
-}
-
 async fn persist_oauth_session(
     oauth_state: &OAuthState,
     session: &OAuthPkceSession,
@@ -179,7 +175,7 @@ async fn persist_oauth_session(
 ) -> Result<(), String> {
     const MAX_SESSION_JSON_BYTES: usize = 16 * 1024;
 
-    let state_hash = state_hash(&session.state);
+    let state_hash = infra::utils::hash_string_sha256_hex(&session.state);
 
     let session_json = serde_json::to_string(session).map_err(|e| {
         tracing::error!(
@@ -330,7 +326,7 @@ async fn finalize_oauth_login(
     log_oauth_success(user_id, session, user, request_id);
 
     // Clean up persisted session now that login is successful
-    let state_hash = state_hash(&session.state);
+    let state_hash = infra::utils::hash_string_sha256_hex(&session.state);
     let pkce_storage = oauth_state.pkce_storage.clone();
     let request_id_clone = request_id.to_string();
 
@@ -405,7 +401,7 @@ pub async fn handle_oauth_callback(
             );
         })?;
 
-    let state_hash = state_hash(&state_param);
+    let state_hash = infra::utils::hash_string_sha256_hex(&state_param);
 
     let user = match exchange_code_for_user(&oauth_state, &session, code, &request_id).await {
         Ok(user) => user,
@@ -656,7 +652,7 @@ async fn retrieve_session(
     oauth_state: &OAuthState,
     request_id: &str,
 ) -> Result<OAuthPkceSession, String> {
-    let state_hash = state_hash(state_param);
+    let state_hash = infra::utils::hash_string_sha256_hex(state_param);
 
     // Try warm start first, then cold start
     if let Some(session) = retrieve_warm_session(state_param, oauth_state, request_id) {
