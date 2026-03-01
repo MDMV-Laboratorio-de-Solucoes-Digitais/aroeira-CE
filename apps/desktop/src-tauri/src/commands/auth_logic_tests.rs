@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+#[allow(dead_code)]
 struct MockUserRepository;
+#[allow(dead_code)]
 impl MockUserRepository {
     fn new() -> Self {
         Self
@@ -45,7 +47,9 @@ impl UserRepository for MockUserRepository {
     }
 }
 
+#[allow(dead_code)]
 struct MockNoteRepository;
+#[allow(dead_code)]
 impl MockNoteRepository {
     fn new() -> Self {
         Self
@@ -89,7 +93,9 @@ impl NoteRepository for MockNoteRepository {
     }
 }
 
+#[allow(dead_code)]
 struct MockEmailService;
+#[allow(dead_code)]
 impl MockEmailService {
     fn new() -> Self {
         Self

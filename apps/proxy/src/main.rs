@@ -1,3 +1,18 @@
+#![allow(unreachable_pub)]
+#![allow(clippy::missing_docs_in_private_items)]
+#![allow(clippy::implicit_return)]
+#![allow(clippy::std_instead_of_core)]
+#![allow(clippy::std_instead_of_alloc)]
+#![allow(clippy::shadow_reuse)]
+#![allow(clippy::shadow_same)]
+#![allow(clippy::shadow_unrelated)]
+#![allow(clippy::multiple_crate_versions)]
+#![allow(clippy::question_mark_used)]
+#![allow(clippy::type_complexity)]
+#![allow(clippy::redundant_pub_crate)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::pattern_type_mismatch)]
+
 use axum::{
     error_handling::HandleErrorLayer, extract::DefaultBodyLimit, http::StatusCode,
     response::IntoResponse, Router,

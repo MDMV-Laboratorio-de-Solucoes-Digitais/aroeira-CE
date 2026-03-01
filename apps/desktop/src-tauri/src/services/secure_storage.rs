@@ -1,3 +1,5 @@
+#![allow(async_fn_in_trait)]
+
 use infra::security::{FileCreationConfig, PathValidator, SecureFileCreator};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -9,6 +11,7 @@ use tracing::{error, warn};
 pub const AUTH_TOKEN_KEY: &str = "auth_token";
 const MAX_TOKEN_LENGTH: usize = 4096;
 
+#[allow(async_fn_in_trait)]
 pub trait SecureStorage: Send + Sync {
     async fn save(&self, key: &str, value: &str) -> Result<(), String>;
     async fn get(&self, key: &str) -> Result<Option<String>, String>;

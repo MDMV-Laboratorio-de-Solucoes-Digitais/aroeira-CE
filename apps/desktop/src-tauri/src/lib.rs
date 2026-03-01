@@ -1,3 +1,7 @@
+#![allow(clippy::items_after_statements)]
+#![allow(clippy::ignored_unit_patterns)]
+#![allow(clippy::too_many_lines)]
+
 use crate::services::secure_storage::{SecureStorageEnum, TauriSecureStorage};
 use crate::state::AppState;
 use infra::constants::OAUTH_CALLBACK_SCHEME;

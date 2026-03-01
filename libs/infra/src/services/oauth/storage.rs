@@ -1,4 +1,6 @@
+#[cfg(not(test))]
 use super::PKCE_SESSION_KEYRING_SERVICE;
+#[cfg(not(test))]
 use keyring::Entry;
 
 /// Trait for securely storing OAuth tokens.

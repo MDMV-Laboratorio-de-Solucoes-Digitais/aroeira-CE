@@ -1,5 +1,11 @@
 // Required: sea-orm-migration trait uses elided lifetimes
 #![allow(elided_lifetimes_in_paths)]
+// Migration crate is largely generated code; allow pedantic lints
+#![allow(clippy::pub_use)]
+#![allow(clippy::missing_docs_in_private_items)]
+#![allow(clippy::implicit_return)]
+#![allow(clippy::redundant_pub_crate)]
+#![allow(clippy::multiple_crate_versions)]
 
 pub use sea_orm_migration::prelude::*;
 pub use sea_orm_migration::{MigrationTrait, MigratorTrait};
