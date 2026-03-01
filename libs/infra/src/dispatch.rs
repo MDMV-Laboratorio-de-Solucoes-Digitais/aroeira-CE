@@ -29,7 +29,7 @@ use uuid::Uuid;
 /// Provides static dispatch over `UserRepositoryImpl` (production) and
 /// `MockUserRepository` (testing).
 pub enum UserRepositoryEnum {
-    /// Production implementation using SeaORM.
+    /// Production implementation using `SeaORM`.
     Production(UserRepositoryImpl),
     /// Mock implementation for testing.
     Mock(MockUserRepository),
@@ -130,6 +130,10 @@ impl MockUserRepository {
     }
 
     /// Inserts a user into the mock storage.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `RwLock` is poisoned.
     pub fn insert_user(&self, user: User) {
         self.users.write().unwrap().insert(user.email.clone(), user);
     }
@@ -153,12 +157,12 @@ impl UserRepository for MockUserRepository {
         Ok(user.clone())
     }
 
-    async fn find_by_verification_token(&self, _token: &str) -> Result<Option<User>, AuthError> {
+    async fn find_by_verification_token(&self, token: &str) -> Result<Option<User>, AuthError> {
         // For simplicity, search through all users for the token
         let users = self.users.read().unwrap();
         Ok(users
             .values()
-            .find(|u| u.verification_token.as_deref() == Some(_token))
+            .find(|u| u.verification_token.as_deref() == Some(token))
             .cloned())
     }
 
@@ -201,7 +205,7 @@ impl UserRepository for MockUserRepository {
 /// Provides static dispatch over `NoteRepositoryImpl` (production) and
 /// `MockNoteRepository` (testing).
 pub enum NoteRepositoryEnum {
-    /// Production implementation using SeaORM.
+    /// Production implementation using `SeaORM`.
     Production(NoteRepositoryImpl),
     /// Mock implementation for testing.
     Mock(MockNoteRepository),
@@ -288,6 +292,10 @@ impl MockNoteRepository {
     }
 
     /// Adds a note to the mock storage.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `RwLock` is poisoned.
     pub fn add_note(&self, note: Note) {
         self.notes.write().unwrap().insert(note.id, note);
     }
@@ -330,8 +338,9 @@ impl NoteRepository for MockNoteRepository {
     }
 
     async fn update(&self, note: &Note) -> Result<Note, NoteError> {
-        let mut notes = self.notes.write().unwrap();
         use std::collections::hash_map::Entry;
+
+        let mut notes = self.notes.write().unwrap();
         match notes.entry(note.id) {
             Entry::Occupied(mut e) => {
                 e.insert(note.clone());
