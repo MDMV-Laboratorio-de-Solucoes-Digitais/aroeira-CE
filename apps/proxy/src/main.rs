@@ -8,19 +8,17 @@
 #![allow(clippy::shadow_unrelated)]
 #![allow(clippy::multiple_crate_versions)]
 #![allow(clippy::question_mark_used)]
+#![allow(clippy::expect_used)]
 #![allow(clippy::type_complexity)]
 #![allow(clippy::redundant_pub_crate)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::pattern_type_mismatch)]
 
-use axum::{
-    error_handling::HandleErrorLayer, extract::DefaultBodyLimit, http::StatusCode,
-    response::IntoResponse, Router,
-};
+use axum::{extract::DefaultBodyLimit, http::StatusCode, response::IntoResponse, Router};
 use core::net::SocketAddr;
 use std::sync::Arc;
-use tower::buffer::error::ServiceError;
-use tower::{buffer::BufferLayer, limit::RateLimitLayer, BoxError, ServiceBuilder};
+use tower::ServiceBuilder;
+use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::info;
@@ -54,6 +52,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!(
         "Starting Aroeira OAuth Proxy on {}",
         config.server_bind_address
+    );
+
+    info!(
+        "Rate limit: {} requests per {} seconds per IP",
+        config.rate_limit_requests, config.rate_limit_window_secs
     );
 
     let http_client = reqwest::Client::builder()
@@ -161,6 +164,16 @@ fn validate_origin(origin: &axum::http::HeaderValue, allowed: &[String]) -> bool
 }
 
 fn build_app(state: AppState, cors: CorsLayer) -> Router {
+    let requests_per_second =
+        u64::from(state.config.rate_limit_requests) / state.config.rate_limit_window_secs;
+    let burst_size = state.config.rate_limit_requests;
+
+    let governor_config = GovernorConfigBuilder::default()
+        .per_second(requests_per_second)
+        .burst_size(burst_size)
+        .finish()
+        .expect("governor config requires burst_size > 0");
+
     Router::new()
         .route("/health", axum::routing::get(health_check))
         .nest("/oauth", routes::router())
@@ -169,26 +182,7 @@ fn build_app(state: AppState, cors: CorsLayer) -> Router {
                 .layer(TraceLayer::new_for_http())
                 .layer(cors)
                 .layer(DefaultBodyLimit::max(16 * 1024))
-                .layer(HandleErrorLayer::new(|err: BoxError| async move {
-                    if let Some(service_err) = err.downcast_ref::<ServiceError>() {
-                        if service_err.to_string().contains("full") {
-                            return (
-                                StatusCode::TOO_MANY_REQUESTS,
-                                "Too many requests".to_owned(),
-                            );
-                        }
-                    }
-                    tracing::error!("Unhandled middleware error: {}", err);
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Internal server error".to_owned(),
-                    )
-                }))
-                .layer(BufferLayer::new(1024))
-                .layer(RateLimitLayer::new(
-                    state.config.rate_limit_requests.into(),
-                    std::time::Duration::from_secs(state.config.rate_limit_window_secs),
-                )),
+                .layer(GovernorLayer::new(Arc::new(governor_config))),
         )
         .with_state(state)
 }
