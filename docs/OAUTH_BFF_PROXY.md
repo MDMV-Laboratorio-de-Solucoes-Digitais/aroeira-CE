@@ -1,6 +1,12 @@
 # OAuth BFF Proxy Pattern
 
-## Security Compliance Issue
+## Implementation Overview
+
+This document describes the OAuth Backend-for-Frontend (BFF) proxy pattern used for GitHub OAuth, which requires a client secret for token exchange.
+
+**Current OAuth2 Dependency**: `oauth2 = "5.0"` (latest stable)
+
+## Security Compliance
 
 GitHub OAuth requires a **client secret** for the token exchange, which violates the security constraint:
 
@@ -24,23 +30,106 @@ GitHub's OAuth implementation does NOT support PKCE-only token exchange. Unlike 
 2. **Not using GitHub OAuth** limits provider options
 3. **Using a BFF proxy** adds infrastructure complexity but maintains security
 
-### Current Implementation
+## Environment Variables
 
-GitHub token exchange **must be performed via the BFF proxy** so the desktop binary never embeds or uses `client_secret`.
+### Desktop App Configuration
 
-- Desktop app uses `GITHUB_BFF_PROXY_URL` to call the proxy for code→token exchange
-- If `GITHUB_BFF_PROXY_URL` is not configured, **GitHub OAuth is disabled**
+```bash
+# Required for GitHub OAuth
+GITHUB_CLIENT_ID=your_github_client_id
 
-**The desktop app must not read/use `GITHUB_CLIENT_SECRET` in production or development.**
+# Production: Proxy URL for token exchange
+GITHUB_TOKEN_URL=https://auth.yourapp.com/oauth/github/token
 
-### The BFF Proxy Solution
+# Alternative: Derive from base proxy URL
+AUTH_PROXY_URL=https://auth.yourapp.com
 
-A proper solution uses a **Backend for Frontend (BFF) proxy** pattern:
+# Development only (FORBIDDEN in production)
+GITHUB_CLIENT_SECRET=your_github_client_secret
+```
+
+### Proxy Service Configuration
+
+```bash
+# Proxy server configuration
+SERVER_BIND_ADDRESS=0.0.0.0:3000
+GITHUB_CLIENT_ID=your_github_client_id
+GITHUB_CLIENT_SECRET=your_github_client_secret
+GITHUB_REDIRECT_URI=aroeira://auth/callback
+GITHUB_ALLOWED_HOSTS=github.com,api.github.com
+
+# Rate limiting (per-IP)
+RATE_LIMIT_REQUESTS=5
+RATE_LIMIT_WINDOW_SECS=60
+
+# CORS allowed origins
+ALLOWED_ORIGINS=http://localhost:1420,https://*.aroeira.app
+```
+
+## GitHub Scopes
+
+GitHub does not support OIDC (`OpenID` Connect), so we request scopes that provide equivalent functionality:
+
+| Scope        | Purpose                                    | OIDC Equivalent |
+| ------------ | ------------------------------------------ | --------------- |
+| `read:user`  | Read access to user profile (name, avatar) | `profile`       |
+| `user:email` | Read access to user email addresses        | `email`         |
+
+These scopes are minimal and necessary for user identification. See [GitHub OAuth Scopes Documentation](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps).
+
+## Protocol Details
+
+### Token Exchange Request Format
+
+When using proxy mode (non-default `GITHUB_TOKEN_URL`), the desktop app sends a **JSON** request:
+
+```json
+POST /oauth/github/token
+Content-Type: application/json
+X-Client-Id: your_github_client_id
+
+{
+  "code": "authorization_code",
+  "state": "session_state",
+  "redirect_uri": "aroeira://auth/callback",
+  "code_verifier": "pkce_verifier_43_to_128_chars"
+}
+```
+
+### Direct Mode (Development Only)
+
+When using default GitHub URL with `GITHUB_CLIENT_SECRET`, standard OAuth2 form-encoded requests are used.
+
+## Security Features
+
+### Per-IP Rate Limiting
+
+The proxy implements **per-IP rate limiting** using `tower_governor`:
+
+- Prevents DoS attacks from single malicious IPs
+- Each IP has independent quota
+- Configurable via `RATE_LIMIT_REQUESTS` and `RATE_LIMIT_WINDOW_SECS`
+
+### Redirect URI Validation
+
+The proxy validates:
+
+- Scheme is allowlisted (`aroeira`, `com.aroeira.app`)
+- No userinfo, query, or fragment components
+- Matches configured `GITHUB_REDIRECT_URI`
+
+### State Parameter
+
+- SHA256-hashed for session storage
+- 64-character lowercase hex format
+- Validated on callback to prevent CSRF
+
+## Architecture
 
 ```
 ┌─────────────┐         ┌─────────────┐         ┌─────────────┐
 │   Desktop   │ ──────► │ BFF Proxy   │ ──────► │   GitHub    │
-│    App      │  code   │  (server)   │  +secret│    OAuth    │
+│    App      │  JSON   │  (server)   │  +secret│    OAuth    │
 └─────────────┘         └─────────────┘         └─────────────┘
        ▲                       │
        │                       ▼
@@ -50,128 +139,23 @@ A proper solution uses a **Backend for Frontend (BFF) proxy** pattern:
                         └─────────────┘
 ```
 
-#### Implementation Steps
+## Proxy Implementation
 
-1. **Create a lightweight proxy service** (e.g., in `apps/proxy/`):
+The proxy is located at `apps/proxy/` and provides:
 
-```rust
-// apps/proxy/src/main.rs
-use axum::{
-    extract::Json,
-    routing::post,
-    Router,
-};
-use serde::{Deserialize, Serialize};
+- `POST /oauth/github/token` - Token exchange endpoint
+- `GET /health` - Health check endpoint
 
-#[derive(Deserialize)]
-struct TokenExchangeRequest {
-    code: String,
-    state: String,
-    redirect_uri: String,
-    // PKCE verifier
-    code_verifier: String,
-}
+Key security features:
 
-#[derive(Serialize)]
-struct TokenExchangeResponse {
-    access_token: String,
-    refresh_token: Option<String>,
-    // ... other fields
-}
-
-async fn exchange_github_token(
-    Json(req): Json<TokenExchangeRequest>,
-) -> Result<Json<TokenExchangeResponse>, StatusCode> {
-    // Validate state, CSRF, etc.
-    // Use embedded client_secret here (safe on server)
-    // Exchange with GitHub
-    // Return tokens
-}
-```
-
-2. **Update desktop app to use proxy**:
-
-```rust
-// In libs/infra/src/services/oauth/mod.rs
-
-async fn exchange_code_github(
-    &self,
-    code: String,
-    session: &OAuthPkceSession,
-) -> Result<OAuthUser, OAuthError> {
-    // Instead of direct GitHub exchange, call BFF proxy
-    let proxy_url = self.config.github_bff_proxy_url
-        .as_ref()
-        .ok_or_else(|| OAuthError::ProviderNotConfigured(
-            "GitHub BFF proxy URL not configured".to_string()
-        ))?;
-
-    let response = self.http_client
-        .post(proxy_url)
-        .json(&json!({
-            "code": code,
-            "state": session.state,
-            "redirect_uri": self.config.redirect_uri,
-            "code_verifier": session.pkce_verifier.secret(),
-        }))
-        .send()
-        .await
-        .map_err(|e| OAuthError::TokenRequestFailed(e.to_string()))?;
-
-    // Parse response...
-}
-```
-
-3. **Configuration changes**:
-
-```rust
-// In OAuthConfig
-pub struct OAuthConfig {
-    // ... existing fields
-    /// BFF proxy URL for GitHub OAuth (required to avoid embedding client secret)
-    pub github_bff_proxy_url: Option<String>,
-}
-```
-
-4. **Environment variables**:
-
-```bash
-# .env
-# Instead of GITHUB_CLIENT_SECRET, use proxy URL
-GITHUB_BFF_PROXY_URL=https://auth.yourapp.com/github/exchange
-```
-
-### Security Considerations for the Proxy
-
-The BFF proxy itself must be secured:
-
-1. **Rate limiting** - Prevent abuse of the token exchange endpoint
-2. **State validation** - Verify the state parameter matches the session
-3. **CORS configuration** - Only allow requests from your desktop app
-4. **Audit logging** - Log all token exchanges for security review
-5. **Short-lived sessions** - Implement expiration for pending exchanges
-
-### Alternative: Remove GitHub OAuth
-
-If the BFF proxy adds too much complexity, consider:
-
-- **Remove GitHub OAuth** and use only Google (PKCE-only)
-- **Document the limitation** in your app's authentication docs
-- **Guide users** to create accounts via email/password or Google
-
-### Migration Path
-
-To migrate from embedded secret to BFF proxy:
-
-1. Set up the BFF proxy service
-2. Deploy it to a secure environment
-3. Update desktop app to use `GITHUB_BFF_PROXY_URL` instead of `GITHUB_CLIENT_SECRET`
-4. Rotate the client secret in GitHub settings
-5. Remove `GITHUB_CLIENT_SECRET` from build environment
-6. Update documentation
+- Per-IP rate limiting
+- CORS validation
+- Request body size limits (16KB max)
+- Input validation via `validator` crate
 
 ## References
 
 - [OAuth2 for Native Apps (RFC 8252)](https://tools.ietf.org/html/rfc8252)
 - [GitHub OAuth Documentation](https://docs.github.com/en/developers/apps/building-oauth-apps/authorizing-oauth-apps)
+- [GitHub OAuth Scopes](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps)
 - [Backend for Frontend Pattern](https://samnewman.io/patterns/architectural/bff/)
