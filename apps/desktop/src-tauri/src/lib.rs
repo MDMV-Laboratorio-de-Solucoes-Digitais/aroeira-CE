@@ -113,7 +113,16 @@ impl AppConfig {
         let auth_proxy_url = get_optional_env("AUTH_PROXY_URL")
             .or_else(|| get_optional_env("AROEIRA_AUTH_PROXY_URL"));
 
-        let mut github_token_url = None;
+        // Support both GITHUB_TOKEN_URL (direct) and AUTH_PROXY_URL (derived)
+        let mut github_token_url = get_optional_env("GITHUB_TOKEN_URL");
+
+        // If GITHUB_TOKEN_URL not set but AUTH_PROXY_URL is, derive the token URL
+        if github_token_url.is_none()
+            && let Some(ref proxy_url) = auth_proxy_url
+        {
+            let base = proxy_url.trim_end_matches('/');
+            github_token_url = Some(format!("{base}/oauth/github/token"));
+        }
 
         if google_client_id.is_none() && github_client_id.is_none() {
             info!(
@@ -125,23 +134,20 @@ impl AppConfig {
         if github_client_id.is_some() {
             if github_client_secret.is_some() {
                 info!("GitHub OAuth configured with client secret (Direct Mode).");
-            } else if let Some(ref proxy_url) = auth_proxy_url {
-                let proxy_host = url::Url::parse(proxy_url)
-                    .ok()
+            } else if github_token_url.is_some() {
+                let token_host = github_token_url
+                    .as_ref()
+                    .and_then(|u| url::Url::parse(u).ok())
                     .and_then(|u| u.host_str().map(ToString::to_string))
                     .unwrap_or_else(|| "unknown host".to_string());
-                info!("GitHub OAuth configured with Proxy Mode via {proxy_host}.");
-                // Configure token URL to point to the proxy
-                // Proxy expects: POST /oauth/github/token
-                let base = proxy_url.trim_end_matches('/');
-                github_token_url = Some(format!("{base}/oauth/github/token"));
+                info!("GitHub OAuth configured with Proxy Mode via {token_host}.");
             } else {
                 #[cfg(not(debug_assertions))]
                 tracing::info!(
-                    "In release builds, GITHUB_CLIENT_SECRET is ignored for security. Use AUTH_PROXY_URL for GitHub OAuth."
+                    "In release builds, GITHUB_CLIENT_SECRET is ignored for security. Use AUTH_PROXY_URL or GITHUB_TOKEN_URL for GitHub OAuth."
                 );
                 warn!(
-                    "GitHub OAuth client ID is set, but no client secret or proxy URL is configured. GitHub OAuth will be disabled."
+                    "GitHub OAuth client ID is set, but no client secret, proxy URL, or token URL is configured. GitHub OAuth will be disabled."
                 );
             }
         }

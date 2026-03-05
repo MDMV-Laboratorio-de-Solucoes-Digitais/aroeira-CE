@@ -1,4 +1,6 @@
-use infra::constants::{OAUTH_CALLBACK_HOST, OAUTH_CALLBACK_PATH, OAUTH_CALLBACK_SCHEME};
+use infra::constants::{
+    OAUTH_CALLBACK_HOST, OAUTH_CALLBACK_PATH, OAUTH_CALLBACK_SCHEME, OAUTH_CALLBACK_SCHEME_ALT,
+};
 use url::Url;
 
 /// The path for "hostless" custom scheme URLs (e.g., aroeira:auth/callback)
@@ -33,7 +35,9 @@ pub fn validate_callback_url_base(url: &Url) -> Result<(), String> {
         return Err(GENERIC_ERROR.to_string());
     }
 
-    let is_aroeira_protocol = url.scheme().eq_ignore_ascii_case(OAUTH_CALLBACK_SCHEME);
+    let scheme = url.scheme();
+    let is_aroeira_protocol = scheme.eq_ignore_ascii_case(OAUTH_CALLBACK_SCHEME)
+        || scheme.eq_ignore_ascii_case(OAUTH_CALLBACK_SCHEME_ALT);
     let host = url
         .host_str()
         .map(|h| h.trim_end_matches('.').to_ascii_lowercase());
