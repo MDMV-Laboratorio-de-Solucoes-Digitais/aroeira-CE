@@ -89,9 +89,33 @@ impl TokenStorage for KeyringTokenStorage {
 #[derive(Clone)]
 pub struct KeyringPkceStorage;
 
+/// Validates that a `state_hash` is a valid 64-character lowercase hex string (SHA256 output).
+///
+/// # Errors
+///
+/// Returns an error if the `state_hash` is not a valid 64-char hex string.
+fn validate_state_hash(state_hash: &str) -> Result<(), String> {
+    const EXPECTED_LEN: usize = 64;
+    if state_hash.len() != EXPECTED_LEN {
+        return Err(format!(
+            "Invalid state_hash length: expected {EXPECTED_LEN}, got {}",
+            state_hash.len()
+        ));
+    }
+    if !state_hash
+        .chars()
+        .all(|c| c.is_ascii_hexdigit() && c.is_ascii_lowercase())
+    {
+        return Err("Invalid state_hash: must be lowercase hex".to_string());
+    }
+    Ok(())
+}
+
 impl PkceSessionStorage for KeyringPkceStorage {
     fn save_session(&self, state_hash: &str, session_json: &str) -> Result<(), String> {
         const MAX_SESSION_JSON_LEN: usize = 16 * 1024;
+
+        validate_state_hash(state_hash)?;
 
         if session_json.len() > MAX_SESSION_JSON_LEN {
             return Err("Session too large".to_string());
@@ -114,6 +138,8 @@ impl PkceSessionStorage for KeyringPkceStorage {
     }
 
     fn get_session(&self, state_hash: &str) -> Result<Option<String>, String> {
+        validate_state_hash(state_hash)?;
+
         #[cfg(not(test))]
         {
             let entry =
@@ -132,6 +158,8 @@ impl PkceSessionStorage for KeyringPkceStorage {
     }
 
     fn delete_session(&self, state_hash: &str) -> Result<(), String> {
+        validate_state_hash(state_hash)?;
+
         #[cfg(not(test))]
         {
             let entry =

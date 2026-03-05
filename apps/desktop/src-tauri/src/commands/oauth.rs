@@ -331,18 +331,28 @@ async fn finalize_oauth_login(
     let request_id_clone = request_id.to_string();
 
     tokio::spawn(async move {
-        match tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash)).await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => tracing::warn!(
+        let mut delete_handle =
+            tokio::task::spawn_blocking(move || pkce_storage.delete_session(&state_hash));
+        match tokio::time::timeout(std::time::Duration::from_secs(5), &mut delete_handle).await {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(e))) => tracing::warn!(
                 target: "security",
                 request_id = %request_id_clone,
                 "Failed to delete persisted OAuth session after success: {e}"
             ),
-            Err(e) => tracing::warn!(
+            Ok(Err(e)) => tracing::warn!(
                 target: "security",
                 request_id = %request_id_clone,
                 "Failed to delete persisted OAuth session after success (task join error): {e}"
             ),
+            Err(_) => {
+                delete_handle.abort();
+                tracing::warn!(
+                    target: "security",
+                    request_id = %request_id_clone,
+                    "Timed out deleting persisted OAuth session after success"
+                );
+            }
         }
     });
 
@@ -764,7 +774,7 @@ async fn harden_unverified_user(
     user.verification_token = None;
     user.verification_token_expires_at = None;
 
-    state.user_repo.save(user).await.map_err(|e| {
+    state.user_repo.update(user).await.map_err(|e| {
         tracing::error!(
             request_id = %request_id,
             "Failed to update user verification from OAuth: {e}"
