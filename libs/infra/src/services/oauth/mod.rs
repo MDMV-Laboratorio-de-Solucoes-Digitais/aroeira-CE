@@ -182,6 +182,34 @@ impl OAuthServiceImpl {
         }
     }
 
+    /// Returns the OAuth scopes required for each provider.
+    ///
+    /// # GitHub Scopes
+    ///
+    /// GitHub does not support OIDC (`OpenID` Connect), so we request scopes that provide
+    /// equivalent functionality to the standard OIDC `profile` and `email` scopes:
+    ///
+    /// - `read:user`: Grants read access to the user's profile data (name, avatar, etc.).
+    ///   This is the GitHub-specific equivalent of the OIDC `profile` scope.
+    ///   Required to fetch user profile information from GitHub API.
+    ///
+    /// - `user:email`: Grants read access to the user's email addresses.
+    ///   This is the GitHub-specific equivalent of the OIDC `email` scope.
+    ///   Required to fetch the user's primary verified email from GitHub API.
+    ///
+    /// These scopes are minimal and necessary for user identification and authentication.
+    /// GitHub does not provide an OIDC discovery endpoint, so these proprietary scopes
+    /// are the standard way to access user identity information.
+    ///
+    /// See: <https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps>
+    ///
+    /// # Google Scopes
+    ///
+    /// Google supports OIDC (`OpenID` Connect), so we use the standard OIDC scopes:
+    ///
+    /// - `openid`: Required for `OpenID` Connect authentication
+    /// - `email`: Access to the user's email address
+    /// - `profile`: Access to the user's profile information (name, picture, etc.)
     fn get_scopes(provider: AuthProvider) -> Vec<Scope> {
         match provider {
             AuthProvider::Google => vec![
@@ -583,6 +611,15 @@ async fn perform_token_exchange(
     oauth2::StandardTokenResponse<oauth2::EmptyExtraTokenFields, oauth2::basic::BasicTokenType>,
     OAuthError,
 > {
+    // Detect proxy mode for GitHub: non-default token URL means we're talking to a proxy
+    let is_github_proxy_mode = session.provider == AuthProvider::GitHub
+        && token_url.url().as_str() != OAuthServiceImpl::GITHUB_TOKEN_URL;
+
+    if is_github_proxy_mode {
+        return perform_proxy_token_exchange(client_id, token_url, redirect_url, session, code)
+            .await;
+    }
+
     let client = oauth2::basic::BasicClient::new(client_id)
         .set_auth_uri(auth_url)
         .set_token_uri(token_url)
@@ -630,6 +667,67 @@ async fn perform_token_exchange(
     tokio::time::timeout(std::time::Duration::from_secs(30), exchange_future)
         .await
         .map_err(|_| OAuthError::TokenRequestFailed("Token exchange timed out".to_string()))?
+}
+
+/// Performs token exchange via the OAuth proxy using JSON request format.
+///
+/// The proxy expects a JSON body with `code`, `state`, `redirect_uri`, and `code_verifier`.
+/// This is different from standard `OAuth2` which uses form-encoded requests.
+async fn perform_proxy_token_exchange(
+    client_id: ClientId,
+    token_url: TokenUrl,
+    redirect_url: RedirectUrl,
+    session: &OAuthPkceSession,
+    code: String,
+) -> Result<
+    oauth2::StandardTokenResponse<oauth2::EmptyExtraTokenFields, oauth2::basic::BasicTokenType>,
+    OAuthError,
+> {
+    let request_body = serde_json::json!({
+        "code": code,
+        "state": session.state,
+        "redirect_uri": redirect_url.to_string(),
+        "code_verifier": session.pkce_verifier,
+    });
+
+    let response = client::ASYNC_HTTP_CLIENT
+        .post(token_url.url().clone())
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .header("User-Agent", "Aroeira-Desktop")
+        .header("X-Client-Id", client_id.as_str())
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|e| OAuthError::TokenRequestFailed(format!("Proxy request failed: {e}")))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let error_body = response.text().await.unwrap_or_default();
+        return Err(OAuthError::TokenRequestFailed(format!(
+            "Proxy returned status {status}: {error_body}"
+        )));
+    }
+
+    // Parse the JSON response directly into the oauth2 StandardTokenResponse
+    let response_text = response.text().await.map_err(|e| {
+        OAuthError::TokenRequestFailed(format!("Failed to read proxy response: {e}"))
+    })?;
+
+    let token_response: oauth2::StandardTokenResponse<
+        oauth2::EmptyExtraTokenFields,
+        oauth2::basic::BasicTokenType,
+    > = serde_json::from_str(&response_text).map_err(|e| {
+        OAuthError::TokenRequestFailed(format!("Failed to parse proxy token response: {e}"))
+    })?;
+
+    if token_response.access_token().secret().trim().is_empty() {
+        return Err(OAuthError::TokenRequestFailed(
+            "No access_token in proxy response".to_string(),
+        ));
+    }
+
+    Ok(token_response)
 }
 
 const MAX_TOKEN_PAYLOAD_BYTES: usize = 16 * 1024;
@@ -686,23 +784,39 @@ async fn store_tokens(
     let user_key_hash_for_store = user_key_hash.clone();
     let storage_clone = storage.clone();
 
-    let store_result = tokio::task::spawn_blocking(move || {
+    let mut store_handle = tokio::task::spawn_blocking(move || {
         let service_name = TOKEN_KEYRING_SERVICE.to_string();
         storage_clone.store(&service_name, &user_key_hash_for_store, &token_payload_str)
-    })
-    .await
-    .map_err(|e| format!("Task join error: {e}"))
-    .and_then(|r| r);
+    });
 
-    if let Err(e) = store_result {
-        warn!(
-            "OAuth token not stored in OS keyring (failing login): {}",
-            e
-        );
-        return Err(OAuthError::TokenRequestFailed(
-            "Failed to persist session securely".to_string(),
-        ));
-    }
+    let store_result =
+        match tokio::time::timeout(std::time::Duration::from_secs(5), &mut store_handle).await {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Err(e))) => {
+                warn!(
+                    "OAuth token not stored in OS keyring (failing login): {}",
+                    e
+                );
+                Err(OAuthError::TokenRequestFailed(
+                    "Failed to persist session securely".to_string(),
+                ))
+            }
+            Ok(Err(e)) => {
+                warn!("OAuth token storage task failed (failing login): {}", e);
+                Err(OAuthError::TokenRequestFailed(
+                    "Failed to persist session securely".to_string(),
+                ))
+            }
+            Err(_) => {
+                store_handle.abort();
+                warn!("Timed out persisting OAuth token to keyring");
+                Err(OAuthError::TokenRequestFailed(
+                    "Timed out persisting session securely".to_string(),
+                ))
+            }
+        };
+
+    store_result?;
     debug!("Securely stored OAuth token for {}", user_key_hash);
     Ok(())
 }

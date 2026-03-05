@@ -542,3 +542,192 @@ async fn exchange_code_success_github() {
     })
     .await;
 }
+
+// ===========================================
+// Provider Availability Tests
+// ===========================================
+
+#[tokio::test]
+async fn github_proxy_mode_requires_no_client_secret() {
+    let service = OAuthServiceImpl::new(OAuthConfig {
+        google_client_id: None,
+        github_client_id: Some("test-github-client-id".to_string()),
+        github_client_secret: None, // No secret for PKCE-only proxy mode
+        redirect_uri: "aroeira://auth/callback".to_string(),
+        google_auth_url: None,
+        google_token_url: None,
+        google_userinfo_url: None,
+        github_auth_url: None,
+        github_token_url: Some("https://proxy.example.com/oauth/token".to_string()), // Proxy URL
+        github_user_url: None,
+        github_emails_url: None,
+    });
+
+    // Provider should be available even without secret when using proxy URL
+    assert!(
+        service.is_provider_available(AuthProvider::GitHub),
+        "GitHub should be available with proxy URL even without client secret"
+    );
+
+    // Should be able to generate authorization URL
+    let (url, session) = service
+        .generate_authorization_url(AuthProvider::GitHub)
+        .await
+        .expect("Should generate URL for GitHub with proxy mode");
+    assert!(session.is_valid());
+    assert_eq!(session.provider, AuthProvider::GitHub);
+    assert!(url.contains("client_id=test-github-client-id"));
+}
+
+#[tokio::test]
+async fn github_direct_mode_requires_client_secret() {
+    let service = OAuthServiceImpl::new(OAuthConfig {
+        google_client_id: None,
+        github_client_id: Some("test-github-client-id".to_string()),
+        github_client_secret: None, // No secret - should fail for direct mode
+        redirect_uri: "aroeira://auth/callback".to_string(),
+        google_auth_url: None,
+        google_token_url: None,
+        google_userinfo_url: None,
+        github_auth_url: None,
+        github_token_url: None, // Using default URL (direct mode)
+        github_user_url: None,
+        github_emails_url: None,
+    });
+
+    // Provider should NOT be available without secret in direct mode
+    assert!(
+        !service.is_provider_available(AuthProvider::GitHub),
+        "GitHub should NOT be available with default URL without client secret"
+    );
+
+    // Should fail to generate authorization URL
+    let result = service
+        .generate_authorization_url(AuthProvider::GitHub)
+        .await;
+    assert!(
+        result.is_err(),
+        "Should fail when secret required but not provided"
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("secret") || err.contains("configured"),
+        "Error should mention missing secret or configuration issue"
+    );
+}
+
+#[tokio::test]
+async fn github_direct_mode_with_secret_works() {
+    let service = OAuthServiceImpl::new(OAuthConfig {
+        google_client_id: None,
+        github_client_id: Some("test-github-client-id".to_string()),
+        github_client_secret: Some(secrecy::SecretString::from("test-secret".to_string())),
+        redirect_uri: "aroeira://auth/callback".to_string(),
+        google_auth_url: None,
+        google_token_url: None,
+        google_userinfo_url: None,
+        github_auth_url: None,
+        github_token_url: None, // Using default URL (direct mode)
+        github_user_url: None,
+        github_emails_url: None,
+    });
+
+    // Provider should be available with secret in direct mode
+    assert!(
+        service.is_provider_available(AuthProvider::GitHub),
+        "GitHub should be available with client secret in direct mode"
+    );
+
+    // Should be able to generate authorization URL
+    let (url, session) = service
+        .generate_authorization_url(AuthProvider::GitHub)
+        .await
+        .expect("Should generate URL for GitHub with direct mode");
+    assert!(session.is_valid());
+    assert_eq!(session.provider, AuthProvider::GitHub);
+    assert!(url.contains("client_id=test-github-client-id"));
+}
+
+#[tokio::test]
+async fn github_proxy_mode_sends_json_request() {
+    use domain::modules::auth::oauth::OAuthPkceSession;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    temp_env::async_with_vars([("AROEIRA_ALLOW_INSECURE_OAUTH_URLS", Some("1"))], async {
+        let mock_server = MockServer::start().await;
+
+        let config = OAuthConfig {
+            google_client_id: None,
+            github_client_id: Some("test-client-id".to_string()),
+            github_client_secret: None, // No secret for proxy mode
+            redirect_uri: "aroeira://auth/callback".to_string(),
+            google_auth_url: None,
+            google_token_url: None,
+            google_userinfo_url: None,
+            github_auth_url: Some(format!("{}/auth", mock_server.uri())),
+            github_token_url: Some(format!("{}/token", mock_server.uri())), // Proxy URL triggers JSON mode
+            github_user_url: Some(format!("{}/user", mock_server.uri())),
+            github_emails_url: Some(format!("{}/user/emails", mock_server.uri())),
+        };
+
+        let service = OAuthServiceImpl::new(config);
+
+        // Mock Token Endpoint - expects JSON Content-Type
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(header("content-type", "application/json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "proxy-access-token",
+                "token_type": "bearer",
+                "scope": "read:user,user:email"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        // Mock User Profile
+        Mock::given(method("GET"))
+            .and(path("/user"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 99999,
+                "login": "proxy-user",
+                "name": "Proxy User",
+                "avatar_url": "https://example.com/avatar.jpg"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        // Mock User Emails
+        Mock::given(method("GET"))
+            .and(path("/user/emails"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "email": "proxy@example.com",
+                    "primary": true,
+                    "verified": true,
+                    "visibility": "public"
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        // Create valid session
+        let session = OAuthPkceSession::new(
+            "test-proxy-state".to_string(),
+            "a".repeat(43),
+            AuthProvider::GitHub,
+        );
+
+        // Execute exchange via proxy
+        let user = service
+            .exchange_code(&session, "proxy-auth-code".to_string())
+            .await
+            .expect("Should exchange code via proxy");
+
+        assert_eq!(user.provider, AuthProvider::GitHub);
+        assert_eq!(user.provider_user_id, "99999");
+        assert_eq!(user.email, "proxy@example.com");
+        assert!(user.email_verified);
+    })
+    .await;
+}
