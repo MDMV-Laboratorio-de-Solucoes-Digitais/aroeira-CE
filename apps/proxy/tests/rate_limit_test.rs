@@ -1,3 +1,12 @@
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::implicit_return,
+    clippy::shadow_unrelated,
+    clippy::tests_outside_test_module,
+    clippy::std_instead_of_alloc
+)]
+
 use axum::http::{Request, StatusCode};
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -15,7 +24,7 @@ async fn test_per_ip_rate_limiting() {
         .expect("governor config requires burst_size > 0");
 
     let app = axum::Router::new()
-        .route("/test", axum::routing::get(|| async { "ok" }))
+        .route("/test", axum::routing::get(|| async { return "ok" }))
         .layer(GovernorLayer::new(Arc::new(governor_config)));
 
     for i in 0..5 {
@@ -68,7 +77,7 @@ async fn test_x_real_ip_header() {
         .expect("governor config requires burst_size > 0");
 
     let app = axum::Router::new()
-        .route("/test", axum::routing::get(|| async { "ok" }))
+        .route("/test", axum::routing::get(|| async { return "ok" }))
         .layer(GovernorLayer::new(Arc::new(governor_config)));
 
     for i in 0..3 {
