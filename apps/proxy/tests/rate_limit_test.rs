@@ -1,9 +1,9 @@
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
-    clippy::implicit_return,
     clippy::shadow_unrelated,
-    clippy::std_instead_of_alloc
+    clippy::std_instead_of_alloc,
+    clippy::needless_return
 )]
 
 use axum::http::{Request, StatusCode};
@@ -13,6 +13,7 @@ use tower_governor::governor::GovernorConfigBuilder;
 use tower_governor::key_extractor::SmartIpKeyExtractor;
 use tower_governor::GovernorLayer;
 
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -26,7 +27,7 @@ mod tests {
             .expect("governor config requires burst_size > 0");
 
         let app = axum::Router::new()
-            .route("/test", axum::routing::get(|| async { return "ok" }))
+            .route("/test", axum::routing::get(|| async { "ok" }))
             .layer(GovernorLayer::new(Arc::new(governor_config)));
 
         for i in 0..5 {
@@ -79,7 +80,7 @@ mod tests {
             .expect("governor config requires burst_size > 0");
 
         let app = axum::Router::new()
-            .route("/test", axum::routing::get(|| async { return "ok" }))
+            .route("/test", axum::routing::get(|| async { "ok" }))
             .layer(GovernorLayer::new(Arc::new(governor_config)));
 
         for i in 0..3 {
