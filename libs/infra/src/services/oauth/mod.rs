@@ -162,6 +162,8 @@ impl OAuthServiceImpl {
                     .as_deref()
                     .unwrap_or(Self::GITHUB_TOKEN_URL);
 
+                // Only require client secret when using default GitHub token URL directly
+                // If using a custom token URL (proxy mode), don't require the client secret
                 if token_url == Self::GITHUB_TOKEN_URL && client_secret.is_none() {
                     return Err(OAuthError::ProviderNotConfigured(
                         "GitHub client secret is required for the default token endpoint"
