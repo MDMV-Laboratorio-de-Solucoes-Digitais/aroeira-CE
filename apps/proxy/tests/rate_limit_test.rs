@@ -3,7 +3,7 @@
     clippy::unwrap_used,
     clippy::shadow_unrelated,
     clippy::std_instead_of_alloc,
-    clippy::needless_return
+    clippy::implicit_return
 )]
 
 use axum::http::{Request, StatusCode};
