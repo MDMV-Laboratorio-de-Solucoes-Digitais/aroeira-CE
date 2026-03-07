@@ -18,7 +18,9 @@ use axum::{extract::DefaultBodyLimit, http::StatusCode, response::IntoResponse, 
 use core::net::SocketAddr;
 use std::sync::Arc;
 use tower::ServiceBuilder;
-use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
+use tower_governor::{
+    governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor, GovernorLayer,
+};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::info;
@@ -77,7 +79,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Server listening on {}", addr);
 
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
@@ -171,8 +177,11 @@ fn build_app(state: AppState, cors: CorsLayer) -> Router {
     let governor_config = GovernorConfigBuilder::default()
         .per_second(requests_per_second)
         .burst_size(burst_size)
+        .key_extractor(SmartIpKeyExtractor)
         .finish()
         .expect("governor config requires burst_size > 0");
+
+    let governor_config = Arc::new(governor_config);
 
     Router::new()
         .route("/health", axum::routing::get(health_check))
@@ -182,7 +191,7 @@ fn build_app(state: AppState, cors: CorsLayer) -> Router {
                 .layer(TraceLayer::new_for_http())
                 .layer(cors)
                 .layer(DefaultBodyLimit::max(16 * 1024))
-                .layer(GovernorLayer::new(Arc::new(governor_config))),
+                .layer(GovernorLayer::new(governor_config)),
         )
         .with_state(state)
 }
