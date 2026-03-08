@@ -4,6 +4,7 @@ version = "0.1.0-alpha"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
+license = "MIT"
 
 [lib]
 path = "src/lib.rs"
@@ -23,8 +24,10 @@ bcrypt = { workspace = true }
 jsonwebtoken = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }
-hex = { workspace = true }
 secrecy = { workspace = true }
+oauth2 = { workspace = true, features = ["reqwest"] }
+reqwest = { workspace = true }
+url = { workspace = true }
 
 # Async Runtime
 tokio = { workspace = true }
@@ -43,12 +46,12 @@ serde_json = { workspace = true }
 # Utilities
 chrono = { workspace = true }
 uuid = { workspace = true }
-async-trait = { workspace = true }
 walkdir = { workspace = true }
 percent-encoding = { workspace = true }
 which = { workspace = true }
 dirs = { workspace = true }
 libc = { workspace = true }
+keyring = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [
@@ -56,11 +59,13 @@ windows-sys = { workspace = true, features = [
     "Win32_Security",
     "Win32_System_Threading",
     "Win32_Storage_FileSystem",
-    "Win32_System_Registry"
+    "Win32_System_Registry",
 ] }
 winreg = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+temp-env = { version = "0.3", features = ["async_closure"] }
 tracing-subscriber = { workspace = true }
 sea-orm = { workspace = true, features = ["mock"] }
+wiremock = "0.6"

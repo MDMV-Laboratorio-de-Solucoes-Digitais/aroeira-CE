@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod database_tests {
     use crate::*;
+    use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -170,7 +171,6 @@ mod database_tests {
     #[cfg(unix)]
     #[test]
     fn test_set_file_permissions_600() {
-        use std::fs;
         use std::os::unix::fs::PermissionsExt;
 
         let temp_dir = TempDir::new().unwrap();
@@ -206,9 +206,11 @@ mod database_tests {
 
     #[test]
     fn test_ensure_secure_sqlite_permissions_with_symlink() {
-        use std::fs;
+        // Serialize tests that rely on global environment state (TMPDIR)
+        let _guard = ENV_MUTEX.lock().expect("Failed to acquire env var lock");
 
         let temp_dir = TempDir::new().unwrap();
+
         let real_file = temp_dir.path().join("real.db");
         let symlink_file = temp_dir.path().join("symlink.db");
 
@@ -237,6 +239,9 @@ mod database_tests {
 
     #[test]
     fn test_validate_relative_path_containment() {
+        // Serialize tests that rely on global environment state (TMPDIR)
+        let _guard = ENV_MUTEX.lock().expect("Failed to acquire env var lock");
+
         let temp_dir = TempDir::new().unwrap();
         let base_dir = temp_dir.path().to_path_buf();
         let contained_file = base_dir.join("safe.db");
@@ -252,6 +257,9 @@ mod database_tests {
 
     #[test]
     fn test_validate_relative_path_containment_outside() {
+        // Serialize tests that rely on global environment state (TMPDIR)
+        let _guard = ENV_MUTEX.lock().expect("Failed to acquire env var lock");
+
         let temp_dir = TempDir::new().unwrap();
         let base_dir = temp_dir.path().to_path_buf();
         let outside_dir = TempDir::new().unwrap();
@@ -314,7 +322,8 @@ mod database_tests {
 
     #[test]
     fn test_securely_create_db_file_with_symlink() {
-        use std::fs;
+        // Serialize tests that rely on global environment state (TMPDIR)
+        let _guard = ENV_MUTEX.lock().expect("Failed to acquire env var lock");
 
         let temp_dir = TempDir::new().unwrap();
         let real_file = temp_dir.path().join("real.db");

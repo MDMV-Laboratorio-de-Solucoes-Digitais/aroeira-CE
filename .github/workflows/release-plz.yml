@@ -58,6 +58,9 @@ jobs:
             . -> target
             apps/desktop/src-tauri -> target
 
+      - name: Create dummy frontend build directory
+        run: mkdir -p apps/desktop/build
+
       - name: Run release-plz
         uses: MarcoIeni/release-plz-action@v0.5
         env:

@@ -4,6 +4,7 @@ version = "0.1.0-alpha"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
+license = "MIT"
 
 [lib]
 path = "src/lib.rs"
@@ -18,7 +19,6 @@ thiserror = { workspace = true }
 # Utilities
 uuid = { workspace = true }
 chrono = { workspace = true }
-async-trait = { workspace = true }
 
 [dev-dependencies]
 proptest.workspace = true

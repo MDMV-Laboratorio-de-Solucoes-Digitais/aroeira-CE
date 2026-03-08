@@ -5,3 +5,35 @@ incremental = true
 [profile.dev]
 # Ensure debug symbols don't slow down compilation too much
 split-debuginfo = "unpacked"
+
+# =============================================================================
+# Linker Configuration for Faster Builds (OPTIONAL)
+# =============================================================================
+# Uncomment the appropriate target section(s) below if you have mold/lld installed.
+#
+# On Linux, mold is ~10x faster than the default linker.
+# On macOS and Windows, lld is faster than the default linkers.
+#
+# Installation:
+# - Linux (Ubuntu/Debian): sudo apt install mold clang
+# - Linux (Arch): sudo pacman -S mold clang
+# - Linux (Fedora): sudo dnf install mold clang
+# - macOS: brew install llvm (lld is included)
+# - Windows: lld is included with the LLVM toolchain
+
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[target.aarch64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+# [target.x86_64-apple-darwin]
+# rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+# [target.aarch64-apple-darwin]
+# rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+# [target.x86_64-pc-windows-msvc]
+# rustflags = ["-C", "link-arg=-fuse-ld=lld"]

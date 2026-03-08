@@ -1,4 +1,5 @@
-use async_trait::async_trait;
+pub mod oauth;
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -35,7 +36,7 @@ pub enum AuthError {
 }
 
 // Port (Interface)
-#[async_trait]
+#[allow(async_fn_in_trait)]
 pub trait UserRepository: Send + Sync {
     async fn find_by_email(&self, email: &str) -> Result<Option<User>, AuthError>;
     async fn save(&self, user: &User) -> Result<User, AuthError>;
@@ -58,7 +59,7 @@ pub trait UserRepository: Send + Sync {
 
 /// Email service trait for sending verification and notification emails.
 /// Implementations can be mock (for development) or real (for production).
-#[async_trait]
+#[allow(async_fn_in_trait)]
 pub trait EmailService: Send + Sync {
     /// Send verification email to new user
     async fn send_verification_email(&self, email: &str, token: &str) -> Result<(), AuthError>;

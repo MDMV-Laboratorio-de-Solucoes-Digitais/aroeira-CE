@@ -1,6 +1,7 @@
 use crate::error_codes::{ErrorCode, ErrorResponse};
-use crate::services::secure_storage::AUTH_TOKEN_KEY;
+use crate::services::secure_storage::{AUTH_TOKEN_KEY, SecureStorage};
 use crate::state::{AppState, RateLimitEntry};
+use domain::modules::auth::{EmailService, UserRepository};
 use hmac::{Hmac, Mac};
 use infra::device_identifier::get_or_create_device_id as get_secure_device_id;
 use infra::services::auth::create_jwt;
@@ -119,7 +120,7 @@ pub(crate) fn generate_request_id() -> String {
 /// Helper function to get a unique device identifier
 /// Uses the secure device identifier module for cryptographically-secure, persistent device IDs
 /// Returns an error instead of falling back to prevent rate limit bypass
-fn get_device_id() -> Result<String, String> {
+pub(crate) fn get_device_id() -> Result<String, String> {
     get_secure_device_id().map_err(|e| {
         error!(
             error = %e,
@@ -217,11 +218,11 @@ fn generate_verification_token() -> String {
 
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
-    hex::encode(bytes)
+    infra::utils::encode_hex(bytes)
 }
 
 /// Helper function to generate a HMAC-SHA256 hash of an email using a secret key
-fn hash_email_for_logging(email: &str, key: &[u8]) -> Result<String, String> {
+pub(crate) fn hash_email_for_logging(email: &str, key: &[u8]) -> Result<String, String> {
     type HmacSha256 = Hmac<Sha256>;
 
     // Validate key length for security - HMAC-SHA256 should have a reasonable minimum length
@@ -240,7 +241,7 @@ fn hash_email_for_logging(email: &str, key: &[u8]) -> Result<String, String> {
 
     mac.update(email.as_bytes());
     let result = mac.finalize();
-    Ok(hex::encode(result.into_bytes()))
+    Ok(infra::utils::encode_hex(result.into_bytes()))
 }
 
 /// Helper function to generate a HMAC-SHA256 hash of a device ID using a secret key
@@ -263,7 +264,7 @@ fn hash_device_id_for_logging(device_id: &str, key: &[u8]) -> Result<String, Str
 
     mac.update(device_id.as_bytes());
     let result = mac.finalize();
-    Ok(hex::encode(result.into_bytes()))
+    Ok(infra::utils::encode_hex(result.into_bytes()))
 }
 
 /// Configuration for rate limiting
@@ -391,6 +392,35 @@ struct RateLimitCheckContext<'a> {
     config: &'a RateLimitConfig<'a>,
     now: Instant,
     window_duration: Duration,
+}
+
+pub(crate) struct LoginContext<'a> {
+    pub(crate) secure_storage: &'a crate::services::secure_storage::SecureStorageEnum,
+    pub(crate) jwt_secret: &'a str,
+    pub(crate) jwt_expiration_hours: u64,
+    pub(crate) jwt_issuer: &'a str,
+    pub(crate) jwt_audience: &'a str,
+    pub(crate) global_login_attempts: &'a std::sync::Arc<tokio::sync::Mutex<RateLimitEntry>>,
+    pub(crate) device_login_attempts:
+        &'a std::sync::Arc<tokio::sync::Mutex<HashMap<String, RateLimitEntry>>>,
+    pub(crate) login_attempts:
+        &'a std::sync::Arc<tokio::sync::Mutex<HashMap<String, RateLimitEntry>>>,
+}
+
+impl<'a> LoginContext<'a> {
+    #[must_use]
+    pub(crate) fn from_state(state: &'a crate::state::AppState) -> Self {
+        Self {
+            secure_storage: state.secure_storage.as_ref(),
+            jwt_secret: state.jwt_secret.expose_secret(),
+            jwt_expiration_hours: state.jwt_expiration_hours,
+            jwt_issuer: &state.jwt_issuer,
+            jwt_audience: &state.jwt_audience,
+            global_login_attempts: &state.global_login_attempts,
+            device_login_attempts: &state.device_login_attempts,
+            login_attempts: &state.login_attempts,
+        }
+    }
 }
 
 fn check_all_rate_limits(ctx: &RateLimitCheckContext<'_>) -> Result<(), ErrorResponse> {
@@ -522,26 +552,25 @@ fn validate_login_inputs(email: &str, password: &SecretBox<str>) -> Result<Strin
 /// Handles successful login by creating JWT, storing it securely, and clearing rate limit attempts.
 ///
 /// Returns `Ok(())` on success, or `Err(error_message)` on failure.
-async fn handle_successful_login(
+pub(crate) async fn handle_successful_login(
     user_id: Uuid,
     email_hash: &str,
     device_id: &str,
-    state: &AppState,
+    context: &LoginContext<'_>,
 ) -> Result<(), String> {
     let token = create_jwt(
         user_id,
-        state.jwt_secret.expose_secret(),
-        state.jwt_expiration_hours,
-        &state.jwt_issuer,
-        &state.jwt_audience,
+        context.jwt_secret,
+        context.jwt_expiration_hours,
+        context.jwt_issuer,
+        context.jwt_audience,
     )
     .map_err(|_| {
         error!(user_id = %user_id, action = "login", outcome = "failure", reason = "jwt_creation_error");
         ErrorResponse::from_code(ErrorCode::InternalError).to_string()
     })?;
 
-    // Store token securely using file-based secure storage
-    if let Err(e) = state.secure_storage.save(AUTH_TOKEN_KEY, &token).await {
+    if let Err(e) = context.secure_storage.save(AUTH_TOKEN_KEY, &token).await {
         error!(user_id = %user_id, action = "login", outcome = "failure", reason = "secure_storage_error", error = %e);
         return Err(ErrorResponse::new(
             ErrorCode::SecureStorageError,
@@ -550,28 +579,19 @@ async fn handle_successful_login(
         .into());
     }
 
-    // Clear all rate limit buckets on successful authentication to prevent asymmetric reset
-    // This addresses RL-002: Asymmetric Rate Limit Reset vulnerability
-    //
-    // Locks are acquired in consistent order: global -> device -> email
-    // This prevents deadlocks with check_and_record_rate_limit which uses the same order
-
-    // Clear global rate limit attempts (symmetric reset)
     {
-        let mut global_entry = state.global_login_attempts.lock().await;
+        let mut global_entry = context.global_login_attempts.lock().await;
         global_entry.attempts.clear();
-        global_entry.consecutive_failures = 0; // Reset failure counter on success
+        global_entry.consecutive_failures = 0;
     }
 
-    // Clear device-specific rate limit attempts
     {
-        let mut attempts = state.device_login_attempts.lock().await;
+        let mut attempts = context.device_login_attempts.lock().await;
         attempts.remove(device_id);
     }
 
-    // Clear email-specific rate limit attempts
     {
-        let mut attempts = state.login_attempts.lock().await;
+        let mut attempts = context.login_attempts.lock().await;
         attempts.remove(email_hash);
     }
 
@@ -647,7 +667,7 @@ async fn create_and_save_user(
         let token = generate_verification_token();
         let mut hasher = Sha256::new();
         hasher.update(token.as_bytes());
-        let hash = hex::encode(hasher.finalize());
+        let hash = infra::utils::encode_hex(hasher.finalize());
         let expiry = chrono::Utc::now() + chrono::Duration::hours(24);
         (Some(token), Some(hash), Some(expiry))
     } else {
@@ -1103,7 +1123,8 @@ pub async fn login(
         SECURITY_METRICS.increment_successful_auth_attempts();
 
         tracing::info!(user_id = %uid, action = "login", outcome = "success");
-        handle_successful_login(uid, &email_hash, &device_id, &state).await?;
+        let login_ctx = LoginContext::from_state(&state);
+        handle_successful_login(uid, &email_hash, &device_id, &login_ctx).await?;
         return Ok(());
     }
 
@@ -1245,7 +1266,7 @@ pub async fn resend_verification_email(
         {
             let mut hasher = Sha256::new();
             hasher.update(token.as_bytes());
-            let hash = hex::encode(hasher.finalize());
+            let hash = infra::utils::encode_hex(hasher.finalize());
 
             // Use atomic partial update to prevent race conditions
             state

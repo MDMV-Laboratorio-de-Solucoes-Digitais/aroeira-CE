@@ -10,12 +10,35 @@ fn test_no_critical_vulnerabilities_remain() {
     // by testing the fixes for each vulnerability class
 
     // 1. Device ID spoofing fix
-    // We need to lock the mutex to ensure other tests aren't messing with env vars
-    let _guard = super::device_id_security_tests::DEVICE_ID_TEST_MUTEX
-        .lock()
-        .unwrap();
-    let device_id1 = get_or_create_device_id().expect("Should generate device ID");
-    let device_id2 = get_or_create_device_id().expect("Should get same device ID");
+    // We need to lock mutex to ensure other tests aren't messing with env vars
+    // Handle poisoned mutex gracefully by using into_inner() if needed
+    let _guard = match super::device_id_security_tests::DEVICE_ID_TEST_MUTEX.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    // Use a fresh temp dir for this test to avoid conflicts
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+
+    // Test device ID persistency with mocked environment
+    let device_id1 = temp_env::with_var(
+        "XDG_DATA_HOME",
+        Some(temp_dir.path().to_string_lossy().to_string()),
+        get_or_create_device_id,
+    )
+    .unwrap_or_else(|e| {
+        panic!("Failed to get device ID 1: {e}");
+    });
+
+    let device_id2 = temp_env::with_var(
+        "XDG_DATA_HOME",
+        Some(temp_dir.path().to_string_lossy().to_string()),
+        get_or_create_device_id,
+    )
+    .unwrap_or_else(|e| {
+        panic!("Failed to get device ID 2: {e}");
+    });
+
     assert_eq!(
         device_id1, device_id2,
         "Device ID should be persistent, not spoofable"
@@ -133,7 +156,9 @@ fn test_security_controls_are_effective() {
     let _guard = super::device_id_security_tests::DEVICE_ID_TEST_MUTEX
         .lock()
         .unwrap();
-    let device_id = get_or_create_device_id().expect("Should get device ID");
+    let device_id = get_or_create_device_id().unwrap_or_else(|e| {
+        panic!("Failed to get device ID: {e}");
+    });
     assert!(
         !device_id.is_empty(),
         "Device ID should be generated securely"

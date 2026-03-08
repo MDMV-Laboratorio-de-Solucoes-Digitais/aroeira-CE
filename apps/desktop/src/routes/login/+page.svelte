@@ -1,16 +1,27 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { fly } from "svelte/transition";
+  import { goto } from "$app/navigation";
+  import { resolve } from "$app/paths";
+  import { logAuditEvent, setSessionId } from "$lib/audit";
   import { Button } from "$lib/components/ui/button";
   import * as Card from "$lib/components/ui/card";
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
-  import { invoke } from "@tauri-apps/api/core";
-  import { Lock, ShieldCheck, X, Check, Circle } from "lucide-svelte";
-  import { goto } from "$app/navigation";
-  import { resolve } from "$app/paths";
-  import { logAuditEvent, setSessionId } from "$lib/audit";
   import { handleError } from "$lib/logger";
+  import {
+    getOAuthAvailability,
+    openOAuthAuthUrl,
+    startOAuthFlow,
+    processOAuthCallback,
+    sanitizeErrorForAudit,
+    type OAuthAvailability,
+    type OAuthProvider,
+  } from "$lib/oauth";
+  import { invoke } from "@tauri-apps/api/core";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
+  import { Check, Circle, Loader2, Lock, ShieldCheck, X } from "lucide-svelte";
+  import { onDestroy, onMount } from "svelte";
+  import { fly } from "svelte/transition";
 
   // Helper function to redact email addresses for audit logging
   function redactEmail(email: string): string {
@@ -19,14 +30,37 @@
     return `***@${domain}`;
   }
 
+  /**
+   * Reset OAuth pending state consistently.
+   * Clears loading state, localStorage items, timeout, and optionally sets error message.
+   */
+  function resetOAuthState(message?: string): void {
+    oauthLoading = null;
+    try {
+      localStorage.removeItem("oauth_pending_provider");
+      localStorage.removeItem("oauth_pending_state");
+      localStorage.removeItem("oauth_pending_started_at");
+    } catch {
+      // Ignore storage errors
+    }
+    if (message) error = message;
+    if (oauthTimeout) clearTimeout(oauthTimeout);
+    oauthTimeout = null;
+  }
+
   let isLogin = $state(true);
   let loading = $state(false);
+  let oauthLoading = $state<OAuthProvider | null>(null);
+  let oauthTimeout: ReturnType<typeof setTimeout> | null = null;
+  let destroyed = false;
   let error = $state("");
   let successMessage = $state("");
   let email = $state("");
   let password = $state("");
   let confirmPassword = $state("");
   let isPasswordFocused = $state(false);
+  let unlistenDeepLink: UnlistenFn | null = null;
+  let unlistenDeepLinkEvent: UnlistenFn | null = null;
 
   type PasswordSecurityLevel =
     | "none"
@@ -40,12 +74,150 @@
   }
 
   let policy = $state<PasswordPolicy>({ level: "secure", min_length: 8 });
+  let oauthAvailability = $state<OAuthAvailability | null>(null);
+
+  /**
+   * Wrapper to process OAuth callback using the utility function with component state callbacks.
+   * Deduplication is handled inside processOAuthCallback.
+   */
+  function handleDeepLink(rawUrl: string): Promise<void> {
+    if (destroyed) return Promise.resolve();
+
+    return processOAuthCallback(
+      rawUrl,
+      {
+        setLoading: (p) => {
+          if (destroyed) return;
+          oauthLoading = p;
+        },
+        setError: (msg) => {
+          if (destroyed) return;
+          error = msg;
+        },
+        resetState: (msg) => {
+          if (destroyed) return;
+          resetOAuthState(msg);
+        },
+      },
+      () => oauthLoading,
+    );
+  }
 
   onMount(async () => {
     try {
       policy = await invoke("get_password_policy");
     } catch (err) {
-      console.error("Failed to fetch password policy", err);
+      console.error(
+        "Failed to fetch password policy",
+        sanitizeErrorForAudit(err),
+      );
+    }
+
+    // Check OAuth availability
+    try {
+      oauthAvailability = await getOAuthAvailability();
+    } catch (err) {
+      console.error(
+        "Failed to check OAuth availability",
+        sanitizeErrorForAudit(err),
+      );
+      oauthAvailability = null;
+    }
+
+    // Check if the app was opened via a deep link (cold start)
+    try {
+      const urls = await getCurrent();
+      if (urls && urls.length > 0) {
+        for (const url of urls) {
+          await handleDeepLink(url);
+        }
+      }
+    } catch (err) {
+      console.error(
+        "Failed to check initial deep links",
+        sanitizeErrorForAudit(err),
+      );
+    }
+
+    // Listen for deep links while the app is running (warm start)
+    try {
+      unlistenDeepLink = await onOpenUrl(async (urls) => {
+        // Never log raw URLs (may contain OAuth code/state)
+        if (import.meta.env.DEV) {
+          console.debug("Deep link received", {
+            count: urls.length,
+            lengths: urls.map((u) => u.length),
+          });
+        }
+        await Promise.all(urls.map((url) => handleDeepLink(url)));
+      });
+      if (import.meta.env.DEV) {
+        console.debug("Deep link listener setup successfully");
+      }
+    } catch (err) {
+      console.error(
+        "Failed to setup deep link listener",
+        sanitizeErrorForAudit(err),
+      );
+    }
+
+    // Listen for deep-link events from single-instance plugin
+    try {
+      unlistenDeepLinkEvent = await listen<string>(
+        "deep-link",
+        async (event) => {
+          // Never log payload (may contain OAuth code/state)
+          if (import.meta.env.DEV) {
+            console.debug("Deep link event received", {
+              length: event.payload?.length ?? 0,
+            });
+          }
+
+          if (typeof event.payload !== "string" || event.payload.length === 0) {
+            resetOAuthState(
+              "Authentication callback was invalid. Please try again.",
+            );
+            return;
+          }
+
+          await handleDeepLink(event.payload);
+        },
+      );
+      if (import.meta.env.DEV) {
+        console.debug("Deep link event listener setup successfully");
+      }
+    } catch (err) {
+      console.error(
+        "Failed to setup deep link event listener",
+        sanitizeErrorForAudit(err),
+      );
+    }
+  });
+
+  onDestroy(() => {
+    destroyed = true;
+    // Idempotent cleanup: capture and nullify reference before calling
+    const unlisten = unlistenDeepLink;
+    unlistenDeepLink = null;
+    if (unlisten) {
+      unlisten();
+    }
+
+    const unlistenEvent = unlistenDeepLinkEvent;
+    unlistenDeepLinkEvent = null;
+    if (unlistenEvent) {
+      unlistenEvent();
+    }
+
+    if (oauthTimeout) {
+      clearTimeout(oauthTimeout);
+      oauthTimeout = null;
+    }
+
+    // Only clear loading state, NOT localStorage - allow OAuth callback
+    // to complete after component remount (e.g., during hot reload or navigation)
+    if (oauthLoading !== null) {
+      oauthLoading = null;
     }
   });
 
@@ -109,6 +281,64 @@
 
   function dismissError() {
     error = "";
+  }
+
+  /**
+   * Start an OAuth login flow with the specified provider.
+   */
+  async function handleOAuthLogin(provider: OAuthProvider): Promise<void> {
+    if (oauthLoading) return; // Prevent multiple clicks
+
+    if (!oauthAvailability || !oauthAvailability[provider]) {
+      error = "This sign-in method is not available.";
+      return;
+    }
+
+    oauthLoading = provider;
+    error = "";
+
+    // Save provider to localStorage for cold start recovery
+    try {
+      localStorage.setItem("oauth_pending_provider", provider);
+      localStorage.setItem("oauth_pending_started_at", String(Date.now()));
+    } catch {
+      // Ignore storage errors
+    }
+
+    // Prevent the UI from getting stuck if the callback never arrives
+    if (oauthTimeout) clearTimeout(oauthTimeout);
+    oauthTimeout = setTimeout(
+      () => {
+        if (oauthLoading === provider) {
+          resetOAuthState("Authentication timed out. Please try again.");
+        }
+        oauthTimeout = null;
+      },
+      2 * 60 * 1000,
+    );
+
+    try {
+      const { auth_url, state } = await startOAuthFlow(provider);
+      if (destroyed) return;
+      try {
+        localStorage.setItem("oauth_pending_state", state);
+      } catch {
+        // Ignore storage errors
+      }
+      await openOAuthAuthUrl(provider, auth_url);
+      // The browser will open and redirect back via deep link
+      // The callback is handled by processOAuthCallback
+    } catch (err: unknown) {
+      if (destroyed) return;
+
+      const msg = handleError(err, `${provider} authentication`);
+      logAuditEvent("oauth_start", false, {
+        provider,
+        error: sanitizeErrorForAudit(err),
+      });
+
+      resetOAuthState(msg);
+    }
   }
 </script>
 
@@ -280,15 +510,82 @@
           <Button
             type="submit"
             class="w-full font-semibold shadow-md"
-            disabled={loading}
+            disabled={loading || oauthLoading !== null}
           >
             {#if loading}
-              <span class="mr-2 animate-spin">⟳</span> Processing...
+              <Loader2 class="mr-2 h-4 w-4 animate-spin" /> Processing...
             {:else}
               {isLogin ? "Sign In" : "Create Account"}
             {/if}
           </Button>
         </form>
+
+        {#if isLogin && oauthAvailability && (oauthAvailability.google || oauthAvailability.github)}
+          <!-- OAuth Divider -->
+          <div class="relative my-4">
+            <div class="absolute inset-0 flex items-center">
+              <span class="w-full border-t border-slate-200"></span>
+            </div>
+            <div class="relative flex justify-center text-xs uppercase">
+              <span class="bg-white px-2 text-slate-500">Or continue with</span>
+            </div>
+          </div>
+
+          <!-- OAuth Buttons -->
+          <div class="grid grid-cols-2 gap-3">
+            {#if oauthAvailability.google}
+              <Button
+                type="button"
+                variant="outline"
+                class="w-full"
+                disabled={oauthLoading !== null || loading}
+                onclick={() => handleOAuthLogin("google")}
+              >
+                {#if oauthLoading === "google"}
+                  <Loader2 class="mr-2 h-4 w-4 animate-spin" />
+                {:else}
+                  <svg
+                    class="mr-2 h-4 w-4"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <path
+                      fill="currentColor"
+                      d="M21.35 11.1H12v2.95h5.35c-.23 1.5-1.74 4.4-5.35 4.4-3.22 0-5.85-2.66-5.85-5.95S8.78 6.55 12 6.55c1.84 0 3.07.78 3.78 1.45l2.58-2.48C16.9 4.15 14.75 3 12 3 7.03 3 3 7.03 3 12s4.03 9 9 9c5.2 0 8.65-3.65 8.65-8.8 0-.6-.07-1.05-.15-1.1Z"
+                    />
+                  </svg>
+                {/if}
+                Google
+              </Button>
+            {/if}
+
+            {#if oauthAvailability.github}
+              <Button
+                type="button"
+                variant="outline"
+                class="w-full"
+                disabled={oauthLoading !== null || loading}
+                onclick={() => handleOAuthLogin("github")}
+              >
+                {#if oauthLoading === "github"}
+                  <Loader2 class="mr-2 h-4 w-4 animate-spin" />
+                {:else}
+                  <svg
+                    class="mr-2 h-4 w-4"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <path
+                      fill="currentColor"
+                      d="M12 2C6.48 2 2 6.58 2 12.26c0 4.54 2.87 8.39 6.84 9.75.5.1.68-.22.68-.48 0-.24-.01-.87-.01-1.71-2.78.62-3.37-1.38-3.37-1.38-.45-1.2-1.11-1.52-1.11-1.52-.9-.64.07-.63.07-.63 1 .07 1.53 1.06 1.53 1.06.9 1.56 2.36 1.11 2.94.85.09-.67.35-1.11.63-1.36-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.38-2.03 1-2.74-.1-.26-.44-1.3.1-2.7 0 0 .82-.27 2.7 1.03.78-.22 1.62-.33 2.46-.33.84 0 1.68.11 2.46.33 1.88-1.3 2.7-1.03 2.7-1.03.54 1.4.2 2.44.1 2.7.62.71 1 1.62 1 2.74 0 3.93-2.34 4.8-4.58 5.05.36.32.68.95.68 1.92 0 1.38-.01 2.49-.01 2.83 0 .27.18.59.69.48A10.06 10.06 0 0 0 22 12.26C22 6.58 17.52 2 12 2Z"
+                    />
+                  </svg>
+                {/if}
+                GitHub
+              </Button>
+            {/if}
+          </div>
+        {/if}
       </Card.Content>
       <Card.Footer
         class="flex flex-col gap-2 rounded-b-lg border-t border-slate-100 bg-slate-50/50 p-3"

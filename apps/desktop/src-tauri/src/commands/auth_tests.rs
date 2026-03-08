@@ -583,9 +583,11 @@ fn test_hash_email_for_logging_success() {
 #[test]
 fn test_hash_email_for_logging_invalid_key() {
     let email = "test@example.com";
-    let key = b"too_short"; // Too short for HMAC-SHA256
-
-    let result = hash_email_for_logging(email, key);
+    // Using a random short byte array to validate handling of too-short keys.
+    // Key length of 3 is intentionally invalid (too short).
+    let mut key = vec![0u8; 3];
+    getrandom::getrandom(&mut key).expect("Failed to generate random bytes for test key");
+    let result = hash_email_for_logging(email, &key);
     assert!(result.is_err());
 }
 

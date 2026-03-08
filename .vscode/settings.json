@@ -42,15 +42,15 @@
 
   "rust-analyzer.checkOnSave": true,
   "rust-analyzer.check.command": "clippy",
-  "rust-analyzer.check.extraArgs": [
-    "--workspace",
-    "--all-targets",
-    "--",
-    "-D",
-    "warnings",
-    "-W",
-    "clippy::pedantic"
-  ],
+    "rust-analyzer.check.extraArgs": [
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings",
+        "-W",
+        "clippy::pedantic"
+    ],
   "rust-analyzer.cargo.features": "all",
   "rust-analyzer.diagnostics.enable": true,
   "rust-analyzer.diagnostics.experimental.enable": true,

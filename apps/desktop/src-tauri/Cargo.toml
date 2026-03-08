@@ -4,6 +4,7 @@ version = "0.1.0-alpha"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
+license = "MIT"
 
 [lib]
 name = "appsdesktop"
@@ -24,10 +25,11 @@ migration = { workspace = true }
 tauri = { workspace = true }
 tauri-plugin-opener = { workspace = true }
 tauri-plugin-secure-storage = { workspace = true }
+tauri-plugin-deep-link = { workspace = true }
+tauri-plugin-single-instance = { workspace = true }
 
 # Async Runtime
 tokio = { workspace = true }
-async-trait = { workspace = true }
 
 # Logging & Tracing
 tracing = { workspace = true }
@@ -52,13 +54,13 @@ secrecy = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 percent-encoding = { workspace = true }
-hex = { workspace = true }
-time = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
 futures = { workspace = true }
-tauri-plugin-os = "2"
-window-vibrancy = "0.7.1"
+url = { workspace = true }
+tauri-plugin-os = "2.1.0"
+dotenvy = { workspace = true }
+getrandom = { version = "0.2", features = ["js"] }
 
 [features]
 default = ["custom-protocol"]
@@ -68,3 +70,4 @@ custom-protocol = ["tauri/custom-protocol"]
   infra = { workspace = true, features = ["testing"] }
   tempfile.workspace = true
   temp-env = "0.3"
+  dirs = { workspace = true }

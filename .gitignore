@@ -213,3 +213,4 @@ apps/desktop/apps/
 **/*.gemspec
 **/*.nupkg
 .eslintcache
+.sisyphus/

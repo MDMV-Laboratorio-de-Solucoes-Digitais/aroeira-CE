@@ -1,0 +1,201 @@
+#![allow(unreachable_pub)]
+#![allow(clippy::missing_docs_in_private_items)]
+#![allow(clippy::implicit_return)]
+#![allow(clippy::std_instead_of_core)]
+#![allow(clippy::std_instead_of_alloc)]
+#![allow(clippy::shadow_reuse)]
+#![allow(clippy::shadow_same)]
+#![allow(clippy::shadow_unrelated)]
+#![allow(clippy::multiple_crate_versions)]
+#![allow(clippy::question_mark_used)]
+#![allow(clippy::expect_used)]
+#![allow(clippy::type_complexity)]
+#![allow(clippy::redundant_pub_crate)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::pattern_type_mismatch)]
+
+use axum::{extract::DefaultBodyLimit, http::StatusCode, response::IntoResponse, Router};
+use core::net::SocketAddr;
+use std::sync::Arc;
+use tower::ServiceBuilder;
+use tower_governor::{
+    governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor, GovernorLayer,
+};
+use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::trace::TraceLayer;
+use tracing::info;
+
+pub(crate) mod config;
+pub(crate) mod error;
+pub(crate) mod models;
+pub(crate) mod routes;
+
+use config::Config;
+
+#[derive(Clone, Debug)]
+pub struct AppState {
+    pub config: Arc<Config>,
+    pub http_client: reqwest::Client,
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    dotenvy::dotenv().ok();
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_err| "aroeira_oauth_proxy=info,tower_http=info".into()),
+        )
+        .init();
+
+    let config = Arc::new(Config::from_env()?);
+
+    info!(
+        "Starting Aroeira OAuth Proxy on {}",
+        config.server_bind_address
+    );
+
+    info!(
+        "Rate limit: {} requests per {} seconds per IP",
+        config.rate_limit_requests, config.rate_limit_window_secs
+    );
+
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+
+    let state = AppState {
+        config,
+        http_client,
+    };
+
+    let cors = build_cors_layer(&state);
+    let app = build_app(state.clone(), cors);
+
+    let addr: SocketAddr = state.config.server_bind_address.parse()?;
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+
+    info!("Server listening on {}", addr);
+
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
+
+    Ok(())
+}
+
+fn build_cors_layer(state: &AppState) -> CorsLayer {
+    let allowed = state.config.allowed_origins.clone();
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::predicate(
+            move |origin: &axum::http::HeaderValue, _req: &axum::http::request::Parts| {
+                validate_origin(origin, &allowed)
+            },
+        ))
+        .allow_methods([axum::http::Method::POST])
+        .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::ACCEPT])
+}
+
+fn validate_origin(origin: &axum::http::HeaderValue, allowed: &[String]) -> bool {
+    let Ok(origin_str) = origin.to_str() else {
+        return false;
+    };
+    let Ok(origin_url) = url::Url::parse(origin_str) else {
+        return false;
+    };
+
+    let has_userinfo = !origin_url.username().is_empty() || origin_url.password().is_some();
+    if has_userinfo {
+        return false;
+    }
+
+    let Some(host_str) = origin_url.host_str() else {
+        return false;
+    };
+
+    if origin_url.path() != "/" || origin_url.query().is_some() || origin_url.fragment().is_some() {
+        return false;
+    }
+
+    let scheme = origin_url.scheme();
+    let host = host_str.to_ascii_lowercase();
+    let port = origin_url.port_or_known_default();
+
+    if scheme != "http" && scheme != "https" {
+        return false;
+    }
+
+    allowed.iter().any(|rule| {
+        let rule = rule.trim();
+
+        if let Ok(rule_url) = url::Url::parse(rule) {
+            let rule_has_userinfo =
+                !rule_url.username().is_empty() || rule_url.password().is_some();
+            if rule_has_userinfo {
+                return false;
+            }
+
+            if rule_url.path() != "/" || rule_url.query().is_some() || rule_url.fragment().is_some()
+            {
+                return false;
+            }
+
+            return scheme.eq_ignore_ascii_case(rule_url.scheme())
+                && host.eq_ignore_ascii_case(rule_url.host_str().unwrap_or_default())
+                && port == rule_url.port_or_known_default();
+        }
+
+        if let Some(suffix) = rule.strip_prefix("https://*.") {
+            let suffix = suffix.trim().trim_start_matches('.').to_ascii_lowercase();
+            return scheme == "https"
+                && port == Some(443)
+                && host != suffix
+                && host.ends_with(&format!(".{suffix}"));
+        }
+
+        if let Some(suffix) = rule.strip_prefix("http://*.") {
+            let suffix = suffix.trim().trim_start_matches('.').to_ascii_lowercase();
+            return scheme == "http"
+                && port == Some(80)
+                && host != suffix
+                && host.ends_with(&format!(".{suffix}"));
+        }
+
+        false
+    })
+}
+
+fn build_app(state: AppState, cors: CorsLayer) -> Router {
+    let requests_per_second =
+        u64::from(state.config.rate_limit_requests) / state.config.rate_limit_window_secs;
+    let burst_size = state.config.rate_limit_requests;
+
+    let governor_config = GovernorConfigBuilder::default()
+        .per_second(requests_per_second)
+        .burst_size(burst_size)
+        .key_extractor(SmartIpKeyExtractor)
+        .finish()
+        .expect("governor config requires burst_size > 0");
+
+    let governor_config = Arc::new(governor_config);
+
+    Router::new()
+        .route("/health", axum::routing::get(health_check))
+        .nest("/oauth", routes::router())
+        .layer(
+            ServiceBuilder::new()
+                .layer(TraceLayer::new_for_http())
+                .layer(cors)
+                .layer(DefaultBodyLimit::max(16 * 1024))
+                .layer(GovernorLayer::new(governor_config)),
+        )
+        .with_state(state)
+}
+
+async fn health_check() -> impl IntoResponse {
+    (StatusCode::OK, "{\"status\":\"healthy\"}")
+}

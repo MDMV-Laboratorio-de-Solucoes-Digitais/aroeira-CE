@@ -1,19 +1,25 @@
+#![allow(clippy::items_after_statements)]
+#![allow(clippy::ignored_unit_patterns)]
+#![allow(clippy::too_many_lines)]
+
+use crate::services::secure_storage::{SecureStorageEnum, TauriSecureStorage};
 use crate::state::AppState;
-use domain::modules::auth::UserRepository;
-use domain::modules::notes::NoteRepository;
+use infra::constants::OAUTH_CALLBACK_SCHEME;
 use infra::database::establish_connection;
-use infra::database::repositories::{note_repo::NoteRepositoryImpl, user_repo::UserRepositoryImpl};
 use infra::security::{PathValidator, SecureFileCreator};
+use infra::{EmailServiceEnum, NoteRepositoryEnum, UserRepositoryEnum};
 use secrecy::SecretBox;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tauri::{Manager, Runtime};
-use tracing::{error, info};
+use tauri::{Emitter, Manager, Runtime};
+use tracing::{error, info, warn};
 
 pub mod auth_utils;
 pub mod commands;
 pub mod constants;
 pub mod error_codes;
+pub mod oauth;
+pub mod oauth_utils;
 #[cfg(test)]
 mod security_tests;
 pub mod services;
@@ -31,6 +37,14 @@ pub struct AppConfig {
     pub jwt_audience: String,
     pub rate_limit_key: String,
     pub password_security_level: PasswordSecurityLevel,
+    /// Google `OAuth2` client ID (optional)
+    pub google_client_id: Option<String>,
+    /// GitHub `OAuth2` client ID (optional)
+    pub github_client_id: Option<String>,
+    /// GitHub `OAuth2` client secret (required for token exchange)
+    pub github_client_secret: Option<secrecy::SecretString>,
+    /// Configurable GitHub token URL (e.g. for Proxy)
+    pub github_token_url: Option<String>,
 }
 
 impl AppConfig {
@@ -80,6 +94,64 @@ impl AppConfig {
             get_or_create_secret_sync(app_handle, "rate_limit_key", "RATE_LIMIT_KEY")?;
         Self::validate_secret(&rate_limit_key, "RATE_LIMIT_KEY")?;
 
+        // Load OAuth client IDs from environment (optional)
+        let get_optional_env = |key: &str| -> Option<String> {
+            std::env::var(key)
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        };
+        let google_client_id = get_optional_env("GOOGLE_CLIENT_ID");
+        let github_client_id = get_optional_env("GITHUB_CLIENT_ID");
+        let github_client_secret = if cfg!(debug_assertions) {
+            get_optional_env("GITHUB_CLIENT_SECRET").map(Into::into)
+        } else {
+            None
+        };
+
+        // Proxy configuration for secret-less OAuth
+        let auth_proxy_url = get_optional_env("AUTH_PROXY_URL")
+            .or_else(|| get_optional_env("AROEIRA_AUTH_PROXY_URL"));
+
+        // Support both GITHUB_TOKEN_URL (direct) and AUTH_PROXY_URL (derived)
+        let mut github_token_url = get_optional_env("GITHUB_TOKEN_URL");
+
+        // If GITHUB_TOKEN_URL not set but AUTH_PROXY_URL is, derive the token URL
+        if github_token_url.is_none()
+            && let Some(ref proxy_url) = auth_proxy_url
+        {
+            let base = proxy_url.trim_end_matches('/');
+            github_token_url = Some(format!("{base}/oauth/github/token"));
+        }
+
+        if google_client_id.is_none() && github_client_id.is_none() {
+            info!(
+                "No OAuth providers configured. Set GOOGLE_CLIENT_ID or GITHUB_CLIENT_ID to enable OAuth."
+            );
+        }
+
+        // Log OAuth configuration status (without exposing secrets)
+        if github_client_id.is_some() {
+            if github_client_secret.is_some() {
+                info!("GitHub OAuth configured with client secret (Direct Mode).");
+            } else if github_token_url.is_some() {
+                let token_host = github_token_url
+                    .as_ref()
+                    .and_then(|u| url::Url::parse(u).ok())
+                    .and_then(|u| u.host_str().map(ToString::to_string))
+                    .unwrap_or_else(|| "unknown host".to_string());
+                info!("GitHub OAuth configured with Proxy Mode via {token_host}.");
+            } else {
+                #[cfg(not(debug_assertions))]
+                tracing::info!(
+                    "In release builds, GITHUB_CLIENT_SECRET is ignored for security. Use AUTH_PROXY_URL or GITHUB_TOKEN_URL for GitHub OAuth."
+                );
+                warn!(
+                    "GitHub OAuth client ID is set, but no client secret, proxy URL, or token URL is configured. GitHub OAuth will be disabled."
+                );
+            }
+        }
+
         Ok(Self {
             db_url,
             jwt_secret,
@@ -93,6 +165,10 @@ impl AppConfig {
                 PasswordSecurityLevel::Secure,
                 str::parse,
             ),
+            google_client_id,
+            github_client_id,
+            github_client_secret,
+            github_token_url,
         })
     }
 
@@ -342,6 +418,18 @@ fn greet(name: &str) -> String {
     format!("Hello, {name}! You've been greeted from Rust!")
 }
 
+#[cfg(target_os = "linux")]
+fn register_deep_links_for_linux(app: &mut tauri::App) {
+    use tauri_plugin_deep_link::DeepLinkExt;
+    match app.deep_link().register_all() {
+        Ok(()) => tracing::info!("Deep links registered for Linux development"),
+        Err(e) => tracing::warn!("Deep link registration failed: {}", e),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn register_deep_links_for_linux(_app: &mut tauri::App) {}
+
 async fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     use migration::{Migrator, MigratorTrait};
 
@@ -364,21 +452,52 @@ async fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
     // Wrap connection in Arc for sharing
     let db = Arc::new(db);
 
-    let user_repo: Arc<dyn UserRepository + Send + Sync> =
-        Arc::new(UserRepositoryImpl::new(db.clone()));
-    let note_repo: Arc<dyn NoteRepository + Send + Sync> = Arc::new(NoteRepositoryImpl::new(db));
-    let email_service: Arc<dyn domain::modules::auth::EmailService + Send + Sync> =
-        if cfg!(debug_assertions) {
-            info!("Using MockEmailService for development (verification disabled in mock mode)");
-            Arc::new(infra::MockEmailService::new())
-        } else {
-            info!("Using SmtpEmailService for production");
-            Arc::new(infra::SmtpEmailService::new())
-        };
+    let user_repo = Arc::new(UserRepositoryEnum::new_production(db.clone()));
+    let note_repo = Arc::new(NoteRepositoryEnum::new_production(db));
+    let email_service = Arc::new(if cfg!(debug_assertions) {
+        info!("Using MockEmailService for development (verification disabled in mock mode)");
+        EmailServiceEnum::new_mock()
+    } else {
+        info!("Using SmtpEmailService for production");
+        EmailServiceEnum::new_smtp()
+    });
 
-    let secure_storage = Arc::new(crate::services::secure_storage::TauriSecureStorage::new(
+    let secure_storage = Arc::new(SecureStorageEnum::Tauri(TauriSecureStorage::new(
         app.handle().clone(),
-    ));
+    )));
+
+    // Set up OAuth state first to consume config fields without cloning.
+    // Use the deep-link scheme in both dev and release; opening the flow in the system browser
+    // requires a custom-scheme callback (or an explicit loopback HTTP listener).
+    let redirect_uri = infra::constants::OAUTH_REDIRECT_URI.to_string();
+    let oauth_config = infra::services::oauth::OAuthConfig {
+        google_client_id: config.google_client_id.clone(),
+        github_client_id: config.github_client_id.clone(),
+        github_client_secret: config.github_client_secret.clone(),
+        redirect_uri,
+        google_auth_url: None,
+        google_token_url: None,
+        google_userinfo_url: None,
+        github_auth_url: None,
+        github_token_url: config.github_token_url.clone(),
+        github_user_url: None,
+        github_emails_url: None,
+    };
+    let oauth_state = crate::commands::oauth::OAuthState::new(oauth_config);
+
+    // Perform background cleanup of stale sessions
+    // TODO: Implement stale session cleanup when keyring crate supports listing entries.
+    let cleanup_store = oauth_state.session_store.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) =
+            tauri::async_runtime::spawn_blocking(move || cleanup_store.cleanup_stale_sessions())
+                .await
+        {
+            tracing::warn!("OAuth stale-session cleanup task panicked/cancelled: {}", e);
+        }
+    });
+
+    app.manage(oauth_state);
 
     app.manage(AppState {
         user_repo,
@@ -422,7 +541,66 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_secure_storage::init())
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // Handle deep link when a second instance is launched
+            if let Some(url) = argv.iter().find(|arg| {
+                arg.len() <= 8192 && {
+                    let lower = arg.to_ascii_lowercase();
+                    lower.starts_with(&format!("{OAUTH_CALLBACK_SCHEME}://"))
+                        || lower.starts_with(&format!("{OAUTH_CALLBACK_SCHEME}:"))
+                }
+            }) {
+                // Strictly validate scheme/host/path to prevent prefix bypasses
+                let Ok(parsed) = url::Url::parse(url) else {
+                    tracing::warn!("Ignoring malformed deep link argv");
+                    return;
+                };
+
+                if let Err(e) = crate::oauth_utils::validate_callback_url_base(&parsed) {
+                    // Avoid logging full URL (may contain OAuth code/state)
+                    tracing::warn!(error = %e, "Ignoring unexpected deep link argv (validation failed)");
+                    return;
+                }
+
+                // Avoid logging full URL (may contain OAuth code/state)
+                let redacted = if parsed.query().is_some() {
+                    if parsed.cannot_be_a_base() || parsed.host_str().is_none() {
+                        // Hostless custom-scheme (e.g., aroeira:auth/callback)
+                        format!("{}:{}?<redacted>", parsed.scheme(), parsed.path())
+                    } else {
+                        // Canonical authority form (e.g., aroeira://auth/callback)
+                        format!(
+                            "{}://{}{}?<redacted>",
+                            parsed.scheme(),
+                            parsed.host_str().unwrap_or(""),
+                            parsed.path()
+                        )
+                    }
+                } else if parsed.cannot_be_a_base() || parsed.host_str().is_none() {
+                    format!("{}:{}", parsed.scheme(), parsed.path())
+                } else {
+                    format!(
+                        "{}://{}{}",
+                        parsed.scheme(),
+                        parsed.host_str().unwrap_or(""),
+                        parsed.path()
+                    )
+                };
+                tracing::info!(
+                    "Received deep link in single-instance handler: {}",
+                    redacted
+                );
+                if let Err(e) = app.emit("deep-link", url.clone()) {
+                    tracing::warn!("Failed to emit deep-link event: {}", e);
+                }
+            } else if argv.iter().any(|arg| arg.len() > 8192) {
+                tracing::warn!("Ignoring deep link argv: payload too large");
+            }
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
+            register_deep_links_for_linux(app);
+
             // Use block_on to await async setup within the synchronous setup hook.
             // Added timeout to prevent indefinite blocking during startup.
             // This is acceptable in the setup phase since it happens once during app initialization
@@ -460,6 +638,9 @@ pub fn run() {
             commands::notes::delete_note,
             commands::secure_storage::has_auth_token,
             commands::secure_storage::get_user_id_from_token,
+            commands::oauth::start_oauth_flow,
+            commands::oauth::handle_oauth_callback,
+            commands::oauth::get_oauth_availability,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

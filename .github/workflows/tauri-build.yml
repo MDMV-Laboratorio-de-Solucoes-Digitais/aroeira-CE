@@ -13,14 +13,8 @@ on:
       - "docs/**"
   workflow_dispatch:
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
-
-env:
-  CARGO_TERM_COLOR: always
-  RUSTC_WRAPPER: sccache
-  SCCACHE_GHA_ENABLED: "true"
+permissions:
+  contents: read
 
 jobs:
   # ==============================================================
@@ -29,6 +23,8 @@ jobs:
   build-frontend:
     name: Build Frontend
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -62,6 +58,8 @@ jobs:
     name: Build Tauri (${{ matrix.platform }})
     needs: build-frontend
     timeout-minutes: 45
+    permissions:
+      contents: read
     strategy:
       fail-fast: true
       matrix:

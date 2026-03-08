@@ -5,7 +5,7 @@ use crate::{
     validation::ValidatedNoteInput,
 };
 use chrono::Utc;
-use domain::modules::notes::{Note, NoteError};
+use domain::modules::notes::{Note, NoteError, NoteRepository};
 use tauri::State;
 use tracing::{error, info};
 use uuid::Uuid;
@@ -29,22 +29,36 @@ async fn get_user_id_from_token(state: &State<'_, AppState>, action: &str) -> Re
 }
 
 /// Helper function to map note errors to user-friendly messages with error codes
-fn map_note_error(e: NoteError, uid: Uuid, note_id: Uuid, action: &str) -> String {
+fn map_note_error(e: NoteError, uid: Uuid, note_id: Option<Uuid>, action: &str) -> String {
     match e {
         NoteError::NotFound | NoteError::Forbidden | NoteError::Unauthorized => {
             info!(
                 user_id = %uid,
-                note_id = %note_id,
+                note_id = ?note_id,
                 action = action,
                 outcome = "failure",
                 reason = "not_found_or_forbidden"
             );
             String::from(ErrorResponse::from_code(ErrorCode::NoteNotFound))
         }
-        other => {
+        NoteError::UserNotFound(_) => {
             error!(
                 user_id = %uid,
-                note_id = %note_id,
+                action = action,
+                outcome = "failure",
+                reason = "user_not_found_in_db",
+                "OAuth session is valid but user not found in local database. Re-authentication required."
+            );
+            String::from(ErrorResponse::new(
+                ErrorCode::UserNotFound,
+                "Authentication session is invalid. Please log out and log in again.",
+            ))
+        }
+        other => {
+            // SECURITY: Log only error type, not full error details to avoid leaking sensitive info
+            error!(
+                user_id = %uid,
+                note_id = ?note_id,
                 action = action,
                 outcome = "failure",
                 error_type = std::any::type_name_of_val(&other),
@@ -69,19 +83,11 @@ fn map_note_error(e: NoteError, uid: Uuid, note_id: Uuid, action: &str) -> Strin
 #[tauri::command]
 pub async fn get_notes(state: State<'_, AppState>) -> Result<Vec<Note>, String> {
     let uid = get_user_id_from_token(&state, "get_notes").await?;
-    let notes = state.note_repo.find_all_by_user(uid).await.map_err(|e| {
-        error!(
-            user_id = %uid,
-            action = "fetch_notes",
-            outcome = "failure",
-            error_type = std::any::type_name_of_val(&e),  // Log error type without exposing sensitive details
-            message = "Failed to fetch notes from repository"
-        );
-        String::from(ErrorResponse::new(
-            ErrorCode::InternalError,
-            "Failed to fetch notes",
-        ))
-    })?;
+    let notes = state
+        .note_repo
+        .find_all_by_user(uid)
+        .await
+        .map_err(|e| map_note_error(e, uid, None, "fetch"))?;
     info!(user_id = %uid, action = "fetch_notes", outcome = "success");
     Ok(notes)
 }
@@ -114,20 +120,11 @@ pub async fn create_note(
         updated_at: now,
     };
 
-    let saved_note = state.note_repo.create(&note).await.map_err(|e| {
-        error!(
-            user_id = %uid,
-            note_id = %note.id,
-            action = "create_note",
-            outcome = "failure",
-            error_type = std::any::type_name_of_val(&e),  // Log error type without exposing sensitive details
-            message = "Failed to create note in repository"
-        );
-        String::from(ErrorResponse::new(
-            ErrorCode::InternalError,
-            "Failed to create note",
-        ))
-    })?;
+    let saved_note = state
+        .note_repo
+        .create(&note)
+        .await
+        .map_err(|e| map_note_error(e, uid, Some(note.id), "create"))?;
     info!(user_id = %uid, note_id = %saved_note.id, action = "create_note", outcome = "success");
     Ok(saved_note)
 }
@@ -153,7 +150,7 @@ pub async fn delete_note(state: State<'_, AppState>, id: String) -> Result<(), S
         .note_repo
         .delete(note_id, uid)
         .await
-        .map_err(|e| map_note_error(e, uid, note_id, "delete"))?;
+        .map_err(|e| map_note_error(e, uid, Some(note_id), "delete"))?;
     info!(user_id = %uid, note_id = %note_id, action = "delete_note", outcome = "success");
     Ok(())
 }
@@ -189,7 +186,7 @@ pub async fn update_note(
         .note_repo
         .find_by_id_and_user(note_id, uid)
         .await
-        .map_err(|e| map_note_error(e, uid, note_id, "find"))?;
+        .map_err(|e| map_note_error(e, uid, Some(note_id), "find"))?;
 
     let original_created_at = if let Some(note) = existing_note {
         note.created_at
@@ -221,7 +218,7 @@ pub async fn update_note(
         .note_repo
         .update(&updated_note)
         .await
-        .map_err(|e| map_note_error(e, uid, updated_note.id, "update"))?;
+        .map_err(|e| map_note_error(e, uid, Some(updated_note.id), "update"))?;
     info!(
         user_id = %uid,
         note_id = %saved_note.id,

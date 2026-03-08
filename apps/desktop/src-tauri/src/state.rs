@@ -1,5 +1,5 @@
-use domain::modules::auth::{EmailService, UserRepository};
-use domain::modules::notes::NoteRepository;
+use crate::services::secure_storage::SecureStorageEnum;
+use infra::{EmailServiceEnum, NoteRepositoryEnum, UserRepositoryEnum};
 use secrecy::SecretBox;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -87,10 +87,10 @@ impl Default for RateLimitEntry {
 }
 
 pub struct AppState {
-    pub user_repo: Arc<dyn UserRepository>,
-    pub note_repo: Arc<dyn NoteRepository>,
-    pub email_service: Arc<dyn EmailService>,
-    pub secure_storage: Arc<dyn crate::services::secure_storage::SecureStorage>,
+    pub user_repo: Arc<UserRepositoryEnum>,
+    pub note_repo: Arc<NoteRepositoryEnum>,
+    pub email_service: Arc<EmailServiceEnum>,
+    pub secure_storage: Arc<SecureStorageEnum>,
     pub jwt_secret: SecretBox<str>,
     pub password_min_length: usize,
     pub jwt_expiration_hours: u64,
@@ -99,10 +99,8 @@ pub struct AppState {
     pub rate_limit_key: SecretBox<str>,
     pub login_attempts: Arc<Mutex<HashMap<String, RateLimitEntry>>>,
     pub register_attempts: Arc<Mutex<HashMap<String, RateLimitEntry>>>,
-    // Global rate limiters (across all users)
     pub global_login_attempts: Arc<Mutex<RateLimitEntry>>,
     pub global_register_attempts: Arc<Mutex<RateLimitEntry>>,
-    // Device-level rate limiters (per device)
     pub device_login_attempts: Arc<Mutex<HashMap<String, RateLimitEntry>>>,
     pub device_register_attempts: Arc<Mutex<HashMap<String, RateLimitEntry>>>,
     pub password_security_level: crate::PasswordSecurityLevel,

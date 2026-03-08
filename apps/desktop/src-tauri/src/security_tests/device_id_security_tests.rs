@@ -34,8 +34,9 @@ fn test_device_id_persistence_across_application_restarts() {
     let device_id1 = get_or_create_device_id().expect("Should generate device ID");
 
     // Simulate app restart by calling again
-    let device_id2 = get_or_create_device_id().expect("Should get same device ID");
-
+    let device_id2 = get_or_create_device_id().unwrap_or_else(|e| {
+        panic!("Failed to get device ID: {e}");
+    });
     assert_eq!(device_id1, device_id2);
 }
 
@@ -81,34 +82,49 @@ fn test_device_id_has_sufficient_entropy_256bit() {
 fn test_device_id_file_has_restrictive_permissions() {
     let _guard = DEVICE_ID_TEST_MUTEX.lock().unwrap();
 
+    // Create a real temporary directory for testing (platform-independent)
     let temp_dir = TempDir::new().expect("Should create temp dir");
 
-    let _device_id = with_var(
+    // Run the test inside the environment variable scope to ensure paths match
+    with_var(
         "XDG_DATA_HOME",
         Some(temp_dir.path().to_string_lossy().to_string()),
-        || get_or_create_device_id().expect("Should generate device ID"),
+        || {
+            // Get device ID to ensure it exists for testing
+            let _device_id = get_or_create_device_id().expect("Should generate device ID");
+
+            // Resolve path using the same logic as implementation
+            let config_dir = dirs::data_dir()
+                .expect("Should get data dir")
+                .join("Aroeira")
+                .join("device");
+            let device_file = config_dir.join("device.id");
+
+            // Check file permissions on all platforms
+            let metadata = fs::metadata(&device_file).expect("Should get file metadata");
+            let permissions = metadata.permissions();
+
+            // On Unix systems, verify restrictive permissions (0o600: owner read/write only)
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    permissions.mode() & 0o777,
+                    0o600,
+                    "Device ID file should have restrictive permissions (Unix)"
+                );
+            }
+
+            // On Windows, verify file exists
+            #[cfg(windows)]
+            {
+                assert!(
+                    device_file.exists(),
+                    "Device ID file should exist (Windows)"
+                );
+            }
+        },
     );
-
-    // The path structure created by device identifier: $XDG_DATA_HOME/Aroeira/device/device.id
-    let device_file = temp_dir
-        .path()
-        .join("Aroeira")
-        .join("device")
-        .join("device.id");
-
-    // On Unix systems, check file permissions
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let metadata = fs::metadata(&device_file).expect("Should get file metadata");
-        let permissions = metadata.permissions();
-        // Check that permissions are 0o600 (owner read/write only)
-        assert_eq!(
-            permissions.mode() & 0o777,
-            0o600,
-            "Device ID file should have restrictive permissions"
-        );
-    }
 }
 
 #[test]
@@ -148,7 +164,7 @@ fn test_old_keys_continue_to_validate_during_grace_period() {
     // Manually sign with original key to ensure it's tied to that key
     let mut mac = Hmac::<Sha256>::new_from_slice(original_key.as_bytes()).unwrap();
     mac.update(device_id.id().as_bytes());
-    let original_signature = hex::encode(mac.finalize().into_bytes());
+    let original_signature = infra::utils::encode_hex(mac.finalize().into_bytes());
     device_id.set_signature_for_tests(original_signature);
 
     // Verify it validates with original key

@@ -1,5 +1,5 @@
 use crate::error_codes::{ErrorCode, ErrorResponse};
-use crate::services::secure_storage::AUTH_TOKEN_KEY;
+use crate::services::secure_storage::{AUTH_TOKEN_KEY, SecureStorage};
 use tauri::State;
 use tracing::{debug, error, info};
 

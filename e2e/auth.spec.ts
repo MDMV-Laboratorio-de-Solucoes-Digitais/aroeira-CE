@@ -1,32 +1,16 @@
-import { test, expect } from "@playwright/test";
-
-// Define strict types for the window object to fix lints
-/* eslint-disable no-unused-vars */
-declare global {
-  interface Window {
-    __TAURI_INTERNALS__: {
-      invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
-    };
-    __TAURI__: {
-      core: {
-        invoke: (
-          cmd: string,
-          args?: Record<string, unknown>,
-        ) => Promise<unknown>;
-      };
-    };
-  }
-}
+import { expect, test } from "@playwright/test";
 
 test.describe("Authentication Flow", () => {
   test.beforeEach(async ({ page }) => {
     // Mock Tauri invoke mechanism
     await page.addInitScript(() => {
       // Mock for Tauri v2
-      // eslint-disable-next-line no-undef
-      window.__TAURI_INTERNALS__ = window.__TAURI_INTERNALS__ || ({} as any);
-      // eslint-disable-next-line no-undef
-      window.__TAURI_INTERNALS__.invoke = async (
+      const w = globalThis as any;
+
+      // Initialize if undefined
+      w.__TAURI_INTERNALS__ = w.__TAURI_INTERNALS__ || {};
+
+      w.__TAURI_INTERNALS__.invoke = async (
         cmd: string,
         args?: Record<string, unknown>,
       ) => {
@@ -69,11 +53,9 @@ test.describe("Authentication Flow", () => {
       };
 
       // Some versions of Tauri api might look for this or use the internals directly
-      // eslint-disable-next-line no-undef
-      window.__TAURI__ = {
+      w.__TAURI__ = {
         core: {
-          // eslint-disable-next-line no-undef
-          invoke: window.__TAURI_INTERNALS__.invoke,
+          invoke: w.__TAURI_INTERNALS__.invoke,
         },
       };
     });
@@ -147,12 +129,19 @@ test.describe("Authentication Flow", () => {
   }) => {
     // Override mock to simulate failure
     await page.addInitScript(() => {
-      // eslint-disable-next-line no-undef
-      window.__TAURI_INTERNALS__.invoke = async (cmd: string) => {
+      const w = globalThis as any;
+      // Initialize if undefined
+      w.__TAURI_INTERNALS__ = w.__TAURI_INTERNALS__ || {};
+
+      w.__TAURI_INTERNALS__.invoke = async (cmd: string) => {
         if (cmd === "get_password_policy")
           return { level: "secure", min_length: 8 };
         throw new Error("Network Error");
       };
+
+      // Keep the public API in sync with internals
+      w.__TAURI__ = w.__TAURI__ || { core: { invoke: async () => null } };
+      w.__TAURI__.core.invoke = w.__TAURI_INTERNALS__.invoke;
     });
 
     await page.goto("/login");

@@ -1,9 +1,31 @@
 use anyhow::Result;
 use bcrypt::{hash, verify};
+use sha2::{Digest, Sha256};
 
 const DEFAULT_COST: u32 = 12;
 const MIN_COST: u32 = 10;
 const MAX_COST: u32 = 16;
+
+/// Encodes bytes as a lowercase hexadecimal string.
+#[must_use]
+pub fn encode_hex<B: AsRef<[u8]>>(bytes: B) -> String {
+    const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
+    let bytes = bytes.as_ref();
+    let mut result = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        result.push(HEX_CHARS[(byte >> 4) as usize] as char);
+        result.push(HEX_CHARS[(byte & 0x0f) as usize] as char);
+    }
+    result
+}
+
+#[must_use]
+pub fn hash_string_sha256_hex(input: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    let result = hasher.finalize();
+    encode_hex(result)
+}
 
 // Get bcrypt cost from environment or use default
 fn get_bcrypt_cost() -> u32 {
@@ -95,12 +117,13 @@ mod tests {
         // Use a low cost for testing.
         let _guard = EnvGuard::set("BCRYPT_COST", "4"); // Min valid bcrypt cost is 4
 
-        let password = "secure_password_123";
-        let hash = hash_password(password).unwrap();
+        let password = uuid::Uuid::new_v4().to_string();
+        let hash = hash_password(&password).unwrap();
 
         assert_ne!(password, hash);
-        assert!(verify_password(password, &hash).unwrap());
-        assert!(!verify_password("wrong_password", &hash).unwrap());
+        assert!(verify_password(&password, &hash).unwrap());
+        let wrong_password = uuid::Uuid::new_v4().to_string();
+        assert!(!verify_password(&wrong_password, &hash).unwrap());
     }
 
     #[test]
@@ -126,5 +149,42 @@ mod tests {
             let _g = EnvGuard::unset("BCRYPT_COST");
             assert_eq!(get_bcrypt_cost(), DEFAULT_COST);
         }
+    }
+
+    #[test]
+    fn test_encode_hex() {
+        assert_eq!(super::encode_hex([]), "");
+        assert_eq!(super::encode_hex([0x00]), "00");
+        assert_eq!(super::encode_hex([0xff]), "ff");
+        assert_eq!(
+            super::encode_hex([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]),
+            "0123456789abcdef"
+        );
+        assert_eq!(super::encode_hex([0xde, 0xad, 0xbe, 0xef]), "deadbeef");
+    }
+
+    #[test]
+    fn test_hash_string_sha256_hex() {
+        assert_eq!(
+            hash_string_sha256_hex("hello"),
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+
+        assert_eq!(
+            hash_string_sha256_hex("test"),
+            hash_string_sha256_hex("test")
+        );
+
+        assert_ne!(
+            hash_string_sha256_hex("test1"),
+            hash_string_sha256_hex("test2")
+        );
+
+        assert_eq!(
+            hash_string_sha256_hex(""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+
+        assert_eq!(hash_string_sha256_hex("anything").len(), 64);
     }
 }
