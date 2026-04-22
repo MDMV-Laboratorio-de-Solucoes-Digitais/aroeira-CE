@@ -66,7 +66,7 @@ tauri-plugin-secure-storage = "1.4"
 bcrypt = "0.18.0"
 hmac = "0.12"
 sha2 = "0.10"
-jsonwebtoken = { version = "10.2.0", features = ["rust_crypto"] }
+jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 secrecy = { version = "0.10", features = ["serde"] }
 
 # Utilities
