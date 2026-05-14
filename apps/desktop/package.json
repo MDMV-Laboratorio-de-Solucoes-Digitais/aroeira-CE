@@ -47,7 +47,7 @@
     "jsdom": "^27.4.0",
     "mdsvex": "^0.12.6",
     "postcss": "^8.5.6",
-    "svelte": "^5.53.6",
+    "svelte": "^5.55.7",
     "svelte-check": "^4.0.0",
     "tailwindcss": "^4.1.18",
     "typescript": "~5.6.2",
